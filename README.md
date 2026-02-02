@@ -86,7 +86,7 @@ Feel free to try all our [demos](/demo/).
 ![Teaser](assets/examples.PNG)
 ![Teaser](assets/examples2.PNG)
 
-You can import our provided example assets [ (1,Neural Avater + 4DGS)](https://drive.google.com/drive/folders/1nk5slXl-_-jRyDggXoBpRwz2VajmQizQ?usp=drive_link), [ (2,LHM Example)](https://drive.google.com/file/d/1qRYffgZxNyiJrh9mwwjEOr3uoxcbll0Q/view?usp=share_link), [ (3,LHM Example2)](https://drive.google.com/file/d/1F4XGS1W4c3Kc13n4YaoDNxnWZqOfvlBJ/view?usp=share_link) or your own 3DGS/4DGS/Avater assets in the page. For details on creating 4DGS/Avater/Custom assets, see [Convert to ONNX](#convert-to-onnx). 
+You can import our provided example assets [ (1,Neural Avater + 4DGS)](https://drive.google.com/drive/folders/1nk5slXl-_-jRyDggXoBpRwz2VajmQizQ?usp=drive_link), [ (2,LHM Example)](https://drive.google.com/drive/folders/13GwSHV1N8Alzjx7VhIJCcSKchRBIPB09?usp=sharing), [ (3,LHM Example2)](https://drive.google.com/file/d/1F4XGS1W4c3Kc13n4YaoDNxnWZqOfvlBJ/view?usp=share_link) or your own 3DGS/4DGS/Avater assets in the page. For details on creating 4DGS/Avater/Custom assets, see [Convert to ONNX](#convert-to-onnx). 
 
 <a id="export-your-algorithm-to-onnx"></a>
 ## 🛠️ Export your algorithm to ONNX
