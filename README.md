@@ -98,8 +98,8 @@ This project supports rendering of various 3DGS/4DGS/Avater/Custom representatio
 This project is deeply inspired and supported by the following open source projects:
 
 - **[3D Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/)**
-- **[Three.js](https://threejs.org/)**
 - **[ONNX Runtime Web](https://onnxruntime.ai/)**
+- **[Three.js](https://threejs.org/)**
 - **[web-splat](https://github.com/KeKsBoTer/web-splat/)**
 - **[image-to-line-drawing](https://github.com/luckycucu/image-to-line-drawing/)**
 
