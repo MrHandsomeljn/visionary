@@ -382,6 +382,24 @@ export class CameraManager {
   }
 
   /**
+   * Sync orbit controller state after external camera pose edits (e.g. focus/lookAt).
+   * This prevents next-frame controller update from overriding the externally set pose.
+   */
+  syncOrbitAfterExternalLookAt(center: vec3, up: vec3 = vec3.fromValues(0, 1, 0)): void {
+    if (this.controllerType !== 'orbit' || !(this.controller instanceof CameraController)) {
+      return;
+    }
+
+    vec3.copy(this.controller.center, center);
+    this.controller.resetUp(up);
+    vec3.set(this.controller.rotation, 0, 0, 0);
+    vec2.set(this.controller.shift, 0, 0);
+    this.controller.scroll = 0;
+    this.controller.leftMousePressed = false;
+    this.controller.rightMousePressed = false;
+  }
+
+  /**
    * Get orbit controller center point
    */
   getOrbitCenter(): vec3 | null {

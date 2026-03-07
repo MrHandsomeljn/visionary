@@ -371,35 +371,21 @@ export class ShowcaseScene {
 
     async loadScene2() {
         this.clearModels();
-        
-        // Load ONNX 4DGS
-        const onnxUrl = '/models/qiewu/gaussianA.onnx';
-        
-        try {
-            const result = await loadUnifiedModel(this.renderer!, this.scene, onnxUrl, {
-                type: 'onnx',
-                name: '4DGS Demo',
-            });
-            this.handleLoadResult(result);
-        } catch (e) {
-            console.warn('Failed to load ONNX, falling back to PLY', e);
-             try {
-                const result = await loadUnifiedModel(this.renderer!, this.scene, '/models/test.ply', {
-                    isGaussian: true
-                });
-                this.handleLoadResult(result);
-             } catch(e2) {
-                 console.error("Fallback failed", e2);
-             }
-        }
-        
+
+        // Create a simple torus knot for demo (replacing missing ONNX model)
+        const geometry = new THREE.TorusKnotGeometry(1, 0.3, 100, 16);
+        const material = new THREE.MeshBasicMaterial({ color: 0xff6666, wireframe: true });
+        const mesh = new THREE.Mesh(geometry, material);
+        this.scene.add(mesh);
+        this.models.push(mesh);
+
         const viewConfigs = getScene2CameraViews();
         this.generateSegments(viewConfigs);
-        
+
         // Initialize Sequence State
         this.currentSegmentIndex = 0;
         this.segmentStartTime = this.clock.getElapsedTime();
-        
+
         // Set Initial Position
         if (this.animationSegments.length > 0) {
             const firstSeg = this.animationSegments[0];
@@ -429,30 +415,45 @@ export class ShowcaseScene {
 
         for (let i = 0; i < multiOnnxConfigs.length; i++) {
             const config = multiOnnxConfigs[i];
-            try {
-                const result = await loadUnifiedModel(this.renderer!, this.scene, config.url!, config.loadOptions);
-                this.handleLoadResult(result);
 
-                const loadedModel = this.models[this.models.length - 1];
-                if (!loadedModel) continue;
+            if (config.type === 'mesh') {
+                const mesh = new THREE.Mesh(config.geometry, config.material);
+                this.scene.add(mesh);
+                this.models.push(mesh);
 
                 if (config.scale) {
-                    loadedModel.scale.setScalar(config.scale);
+                    mesh.scale.setScalar(config.scale);
                 }
 
-                loadedModel.position.set(startX + i * spacing, 0, 0);
-                this.applyImmediateTransform(loadedModel, config.transform);
-            } catch (err) {
-                console.error(`Failed to load Scene 3 ONNX: ${config.url}`, err);
+                mesh.position.set(startX + i * spacing, 0, 0);
+                this.applyImmediateTransform(mesh, config.transform);
+            } else if (config.type === 'file') {
+                // Original file loading logic
+                try {
+                    const result = await loadUnifiedModel(this.renderer!, this.scene, config.url!, config.loadOptions);
+                    this.handleLoadResult(result);
 
-                const fallback = new THREE.Mesh(
-                    new THREE.BoxGeometry(1, 1, 1),
-                    new THREE.MeshBasicMaterial({ color: 0x555555, wireframe: true })
-                );
-                fallback.position.set(startX + i * spacing, 0, 0);
-                this.applyImmediateTransform(fallback, config.transform);
-                this.scene.add(fallback);
-                this.models.push(fallback);
+                    const loadedModel = this.models[this.models.length - 1];
+                    if (!loadedModel) continue;
+
+                    if (config.scale) {
+                        loadedModel.scale.setScalar(config.scale);
+                    }
+
+                    loadedModel.position.set(startX + i * spacing, 0, 0);
+                    this.applyImmediateTransform(loadedModel, config.transform);
+                } catch (err) {
+                    console.error(`Failed to load Scene 3 item: ${config.url}`, err);
+
+                    const fallback = new THREE.Mesh(
+                        new THREE.BoxGeometry(1, 1, 1),
+                        new THREE.MeshBasicMaterial({ color: 0x555555, wireframe: true })
+                    );
+                    fallback.position.set(startX + i * spacing, 0, 0);
+                    this.applyImmediateTransform(fallback, config.transform);
+                    this.scene.add(fallback);
+                    this.models.push(fallback);
+                }
             }
         }
     }

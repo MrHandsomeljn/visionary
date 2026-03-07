@@ -2,61 +2,10 @@ import * as THREE from 'three/webgpu';
 import { CarouselItemConfig, CameraViewConfig } from './types';
 
 export const SCENE1_CAROUSEL_ITEMS: CarouselItemConfig[] = [
-    { 
-        type: 'file', 
-        url: '/models/册方彝.glb', 
-        loadOptions: { type: 'glb' as const, name: '册方彝' },
-        scale: 2.5,
-        transform: {
-            position: new THREE.Vector3(0, -1, 0)
-        }
-    },
-    { 
-        type: 'file', 
-        url: '/models/fox.ply', 
-        loadOptions: { type: 'ply' as const, name: 'fox' },
-        scale: 2.5
-    },
-    { 
-        type: 'file', 
-        url: '/models/dyn/mutant.onnx', 
-        loadOptions: { type: 'onnx' as const, name: '0007_07' },
-        scale: 2.5,
-        transform: {
-            rotation: new THREE.Euler(Math.PI / 2, 0, 0)
-        }
-    },
-    { 
-        type: 'file', 
-        url: '/models/谷纹青玉璧.glb', 
-        loadOptions: { type: 'glb' as const, name: '谷纹青玉璧' },
-        scale: 2.5,
-        transform: {
-            position: new THREE.Vector3(0, -1, 0)
-        }
-    },
-    { 
-        type: 'file', 
-        url: '/models/dyn/hellwarrior.onnx', 
-        loadOptions: { type: 'onnx' as const, name: '0172_05' },
-        scale: 2.5,
-        transform: {
-            rotation: new THREE.Euler(Math.PI / 2, 0, 0)
-        }
-    },
-    { 
-        type: 'file', 
-        url: '/models/白玉卧鹿.glb', 
-        loadOptions: { type: 'glb' as const, name: '白玉卧鹿' },
-        scale: 2.5,
-        transform: {
-            position: new THREE.Vector3(0, -1, 0)
-        }
-    },
-    { 
-        type: 'file', 
-        url: '/models/dyn/trex.onnx', 
-        loadOptions: { type: 'onnx' as const, name: '0007_07' },
+    {
+        type: 'file',
+        url: '/models/hook.onnx',
+        loadOptions: { type: 'onnx' as const, name: 'hook' },
         scale: 2.5,
         transform: {
             rotation: new THREE.Euler(Math.PI / 2, 0, 0)
@@ -121,16 +70,35 @@ export function getScene2CameraViews(): CameraViewConfig[] {
 
 const SCENE3_GAUSSIAN_IDS = ['gaussianA', 'gaussianB', 'gaussianC', 'gaussianD', 'gaussianE', 'gaussianF', 'gaussianG'];
 
-export const SCENE3_MULTI_ONNX_CONFIGS: CarouselItemConfig[] = SCENE3_GAUSSIAN_IDS.map((id) => ({
-    type: 'file',
-    url: `/models/qiewu/${id}.onnx`,
-    loadOptions: { type: 'onnx' as const, name: id },
-    scale: 2.5,
-    transform: {
-        position: new THREE.Vector3(0, 0, 0),
-        rotation: new THREE.Euler(0, 0, 0)
+export const SCENE3_MULTI_ONNX_CONFIGS: CarouselItemConfig[] = [
+    {
+        type: 'mesh',
+        geometry: new THREE.TorusKnotGeometry(0.5, 0.2, 100, 16),
+        material: new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true }),
+        transform: {
+            position: new THREE.Vector3(0, 0, 0),
+            rotation: new THREE.Euler(0, 0, 0)
+        }
+    },
+    {
+        type: 'mesh',
+        geometry: new THREE.TorusKnotGeometry(0.5, 0.2, 100, 16),
+        material: new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true }),
+        transform: {
+            position: new THREE.Vector3(0, 0, 0),
+            rotation: new THREE.Euler(0, 0, 0)
+        }
+    },
+    {
+        type: 'mesh',
+        geometry: new THREE.TorusKnotGeometry(0.5, 0.2, 100, 16),
+        material: new THREE.MeshBasicMaterial({ color: 0x0000ff, wireframe: true }),
+        transform: {
+            position: new THREE.Vector3(0, 0, 0),
+            rotation: new THREE.Euler(0, 0, 0)
+        }
     }
-}));
+];
 
 export const SCENE3_CAMERA_BASE = {
     position: new THREE.Vector3(0, 3, 12),

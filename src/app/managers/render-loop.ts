@@ -175,13 +175,30 @@ export class RenderLoop {
     if (!camera) return;
     
     const visibleModels = this.modelManager.getVisibleModels();
-    if (visibleModels.length === 0) return;
-
     const encoder = this.gpu.device.createCommandEncoder({ label: "frame" });
     const colorView = this.gpu.context.getCurrentTexture().createView();
 
+    // Keep clearing frames even when no model is visible to avoid stale image artifacts.
+    if (visibleModels.length === 0) {
+      const clearOnlyPass = encoder.beginRenderPass({
+        colorAttachments: [{
+          view: colorView,
+          clearValue: {
+            r: this.state.background[0],
+            g: this.state.background[1],
+            b: this.state.background[2],
+            a: this.state.background[3]
+          },
+          loadOp: "clear",
+          storeOp: "store",
+        }],
+      });
+      clearOnlyPass.end();
+      this.gpu.device.queue.submit([encoder.finish()]);
+      return;
+    }
 
-    // core render part
+    // 1) Compute/preprocess first
     const pcs = visibleModels.map(m => m.pointCloud as PointCloud);
     this.renderer.prepareMulti(encoder, this.gpu.device.queue, pcs, {
       camera: camera,
@@ -189,6 +206,7 @@ export class RenderLoop {
       gaussianScaling: this.state.gaussianScale,
     } as any);
 
+    // 2) Then open render pass and draw
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
         view: colorView,
@@ -202,9 +220,6 @@ export class RenderLoop {
         storeOp: "store",
       }],
     });
-
-
-
     this.renderer.renderMulti(pass, pcs);
     pass.end();
   

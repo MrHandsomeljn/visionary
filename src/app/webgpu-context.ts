@@ -136,6 +136,7 @@ async function createOrtDummySession(dummyModelUrl: string): Promise<void> {
   } else {
     console.log('[WebGPU] Using existing WASM paths:', ort.env.wasm.wasmPaths);
   }
+  ort.env.wasm.numThreads = 1;
 
   const resp = await fetch(dummyModelUrl);
   if (!resp.ok) throw new Error(`[ORT] Failed to fetch dummy model: ${dummyModelUrl}`);
