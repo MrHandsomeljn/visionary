@@ -92,7 +92,14 @@ export class CameraController implements IController {
     const dtSec = dt;
 
     // === 1) Orbit basis (from pos/center), and stabilize orbitUp ===
-    const upRef = this.up ? vec3.normalize(vec3.create(), this.up) : WORLD_UP; // 固定全局up
+    // Use persistent orbit-up as default to avoid singular flips near poles.
+    // If external up is provided, use it as reference and sync orbit-up to it.
+    const upRef = this.up
+      ? vec3.normalize(vec3.create(), this.up)
+      : vec3.normalize(vec3.create(), this.orbitUp);
+    if (this.up) {
+      vec3.copy(this.orbitUp, upRef);
+    }
     let { forward, right, yawAxis } = calculateOrbitBasis(cam.positionV, this.center, upRef);
 
     // === 2) Logarithmic scaling (along view line) ===

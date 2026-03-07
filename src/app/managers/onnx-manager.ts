@@ -101,6 +101,7 @@ export class ONNXManager {
     // CRITICAL: Wire up generator for dynamic mode
     if (!staticInference) {
       dpc.setOnnxGenerator(gen);
+      dpc.startAnimation(1.0);
       if (debugLogging) console.log('🎬 Dynamic mode enabled - will update per frame');
     }
     

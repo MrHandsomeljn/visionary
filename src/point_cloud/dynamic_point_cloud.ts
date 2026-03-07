@@ -77,6 +77,7 @@ export class DynamicPointCloud extends PointCloud {
       timeUpdateMode: 'fixed_delta',
       animationSpeed: 1.0
     });
+    this.timeline.setTime(0.0);
     
     console.log('🌟 DynamicPointCloud created with direct GPU buffers (no CPU upload)');
   }
@@ -155,18 +156,15 @@ export class DynamicPointCloud extends PointCloud {
       return;
     }
     
-    // Use timeline controller to calculate adjusted time
-    var adjustedFrameTime = 0.0;
-    
-    adjustedFrameTime = this.timeline.getCurrentTime();
-    
-    adjustedFrameTime = adjustedFrameTime * 0.4 % 1.0
-    // Check if in fallback preview mode
-    if (this.timeline.isFallbackPreviewMode()) {
+    // Drive timeline every frame so play/pause state can truly control time.
+    let adjustedFrameTime = this.timeline.update(rafNow ?? performance.now());
+
+    // Fallback preview: if timeline is explicitly stopped, allow external preview time.
+    if (this.timeline.isStopped() && this.timeline.isFallbackPreviewMode()) {
       adjustedFrameTime = time ?? 0;
-      adjustedFrameTime = adjustedFrameTime * 0.4 
-      adjustedFrameTime = adjustedFrameTime % 1.0
     }
+
+    adjustedFrameTime *= 0.4;
     // console.log(adjustedFrameTime)
     try {
       // Get model's expected input names
@@ -179,11 +177,9 @@ export class DynamicPointCloud extends PointCloud {
       mat4.multiply(combinedMatrix, cameraMatrix, modelTransform as any);
       
 
-      if(this.is_loop)
-      {
-        adjustedFrameTime = adjustedFrameTime % 1.0;
-      }else
-      {
+      if (this.is_loop) {
+        adjustedFrameTime = ((adjustedFrameTime % 1.0) + 1.0) % 1.0;
+      } else {
         adjustedFrameTime = Math.max(0.0, Math.min(adjustedFrameTime, 1.0));
       }
 
@@ -281,6 +277,10 @@ export class DynamicPointCloud extends PointCloud {
   
   public setAnimationIsLoop(Is_loop: boolean): void {
     this.is_loop = Is_loop;
+  }
+
+  public getAnimationIsLoop(): boolean {
+    return this.is_loop;
   }
   
 
