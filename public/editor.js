@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.05
+ * Visionary Editor UI Controller 0.0.6
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -41,6 +41,8 @@ const dom = {
     sceneBgColorPicker: document.getElementById('sceneBgColorPicker'),
     sceneBgColorHex: document.getElementById('sceneBgColorHex'),
     skyPresetGrid: document.getElementById('skyPresetGrid'),
+    sceneDepthScale: document.getElementById('sceneDepthScale'),
+    sceneDepthScaleNumber: document.getElementById('sceneDepthScaleNumber'),
 
     // 变换控件
     btnResetTransform: document.getElementById('btnResetTransform'),
@@ -58,8 +60,7 @@ const dom = {
     // 缩放
     scaleS: document.getElementById('scaleS'),
 
-    // 可见性
-    btnToggleVisible: document.getElementById('btnToggleVisible'),
+    // 模型动画
     onnxAnimSection: document.getElementById('onnxAnimSection'),
     btnModelAnimPlayPause: document.getElementById('btnModelAnimPlayPause'),
     btnModelAnimLoop: document.getElementById('btnModelAnimLoop'),
@@ -94,7 +95,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.05',
+    VERSION: '0.0.6',
     renderMode: 'video', // 'video' | 'image'
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
@@ -105,11 +106,14 @@ const state = {
     currentKeyframeIndex: -1,
     sceneBackgroundHex: '#050814',
     sceneSkyPresetId: 'night',
+    sceneDepthRangeScale: 1.0,
 };
 
 // EditorApp 实例 (会在 init 后设置)
 let app = null;
 let animationUiSyncTimer = null;
+let labelDragState = null;
+let isInputLabelDragging = false;
 const THEME_STORAGE_KEY = 'visionary_editor_theme';
 
 const FALLBACK_SKY_PRESETS = [
@@ -142,6 +146,38 @@ function renderSkyPresetGrid() {
 function syncSceneBackgroundInputs() {
     if (dom.sceneBgColorPicker) dom.sceneBgColorPicker.value = state.sceneBackgroundHex;
     if (dom.sceneBgColorHex) dom.sceneBgColorHex.value = state.sceneBackgroundHex;
+}
+
+function clampDepthRangeScale(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return Math.max(0.01, Math.min(100, n));
+}
+
+function syncSceneDepthRangeInputs() {
+    const fixed = Number(state.sceneDepthRangeScale || 1).toFixed(3);
+    if (dom.sceneDepthScale) dom.sceneDepthScale.value = fixed;
+    if (dom.sceneDepthScaleNumber) dom.sceneDepthScaleNumber.value = fixed;
+}
+
+function applySceneDepthRangeScale(value, silent = false) {
+    const safe = clampDepthRangeScale(value);
+    if (safe === null) {
+        showError('深度倍率格式错误');
+        return;
+    }
+
+    const ok = app?.setSceneDepthRangeScale?.(safe);
+    if (!ok) {
+        showError('设置深度倍率失败');
+        return;
+    }
+
+    state.sceneDepthRangeScale = safe;
+    syncSceneDepthRangeInputs();
+    if (!silent) {
+        showInfo(`深度倍率: ${safe.toFixed(3)}x`);
+    }
 }
 
 function applySceneBackgroundHex(hex, skyPresetId = 'custom') {
@@ -183,8 +219,10 @@ function initSceneSettingsUI() {
 
     state.sceneBackgroundHex = normalizeHexColor(app.getSceneBackgroundColorHex?.()) || state.sceneBackgroundHex;
     state.sceneSkyPresetId = app.getSceneSkyPresetId?.() || state.sceneSkyPresetId;
+    state.sceneDepthRangeScale = Number(app.getSceneDepthRangeScale?.() || state.sceneDepthRangeScale || 1.0);
 
     syncSceneBackgroundInputs();
+    syncSceneDepthRangeInputs();
     renderSkyPresetGrid();
 }
 
@@ -230,6 +268,123 @@ function initTheme() {
 function toggleTheme() {
     const isLight = document.body.classList.contains('theme-light');
     applyTheme(isLight ? 'dark' : 'light', true);
+}
+
+function getInputStep(input) {
+    const parsed = Number.parseFloat(input?.step || '');
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0.001;
+}
+
+function getStepPrecision(step) {
+    const text = String(step);
+    const dot = text.indexOf('.');
+    if (dot < 0) return 0;
+    return text.length - dot - 1;
+}
+
+function setNumberInputValue(input, value, emitInput = false) {
+    if (!(input instanceof HTMLInputElement)) return;
+
+    const step = getInputStep(input);
+    let next = Number.isFinite(value) ? value : 0;
+
+    const min = Number.parseFloat(input.min || '');
+    const max = Number.parseFloat(input.max || '');
+    if (Number.isFinite(min)) next = Math.max(min, next);
+    if (Number.isFinite(max)) next = Math.min(max, next);
+
+    next = Math.round(next / step) * step;
+    const precision = Math.max(3, getStepPrecision(step));
+    input.value = next.toFixed(precision);
+
+    if (emitInput) {
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+}
+
+function stopInputLabelDrag() {
+    if (!labelDragState) return;
+    if (labelDragState.label instanceof HTMLElement) {
+        labelDragState.label.classList.remove('is-dragging');
+    }
+    labelDragState = null;
+    isInputLabelDragging = false;
+    document.body.classList.remove('value-dragging');
+}
+
+function handleInputLabelDragMove(event) {
+    if (!labelDragState) return;
+    const { input, startX, startValue, dragStep } = labelDragState;
+    if (!(input instanceof HTMLInputElement)) return;
+
+    const deltaX = event.clientX - startX;
+    const modifier = event.altKey ? 10 : (event.shiftKey ? 0.1 : 1);
+    const nextValue = startValue + deltaX * dragStep * modifier;
+    setNumberInputValue(input, nextValue, true);
+    event.preventDefault();
+}
+
+function setupInputLabelDrag() {
+    const labels = document.querySelectorAll('.input-drag-label[data-drag-target]');
+
+    labels.forEach((label) => {
+        label.addEventListener('mousedown', (event) => {
+            if (event.button !== 0) return;
+            const targetId = label.getAttribute('data-drag-target');
+            if (!targetId) return;
+
+            const input = document.getElementById(targetId);
+            if (!(input instanceof HTMLInputElement) || input.disabled) return;
+
+            const startValue = Number.parseFloat(input.value || '0');
+            if (!Number.isFinite(startValue)) return;
+
+            const dragStepRaw = Number.parseFloat(label.getAttribute('data-drag-step') || '');
+            const dragStep = Number.isFinite(dragStepRaw) && dragStepRaw > 0
+                ? dragStepRaw
+                : getInputStep(input);
+
+            labelDragState = {
+                label,
+                input,
+                startX: event.clientX,
+                startValue,
+                dragStep,
+            };
+            isInputLabelDragging = true;
+            label.classList.add('is-dragging');
+            document.body.classList.add('value-dragging');
+            event.preventDefault();
+        });
+    });
+
+    window.addEventListener('mousemove', handleInputLabelDragMove);
+    window.addEventListener('mouseup', stopInputLabelDrag);
+    window.addEventListener('blur', stopInputLabelDrag);
+}
+
+function registerDebugHooks() {
+    const hooks = {
+        getPreviewMode: () => state.exportMode,
+        setPreviewMode: (mode) => setExportMode(mode),
+        getDepthScale: () => state.sceneDepthRangeScale,
+        setDepthScale: (value) => applySceneDepthRangeScale(value),
+        dumpRenderModes: () => {
+            const models = app?.getModels?.() || [];
+            const rows = models.map((model) => ({
+                id: model.id,
+                name: model.name,
+                type: model.modelType,
+                visible: model.visible,
+                uiMode: state.exportMode,
+                pointCloudMode: model?.modelEntry?.pointCloud?.getRenderMode?.(),
+            }));
+            console.table(rows);
+            return rows;
+        },
+    };
+
+    window.__visionaryEditorDebug = hooks;
 }
 
 /**
@@ -292,7 +447,9 @@ function updateModelList() {
             <div class="model-item ${state.selectedModelId === model.id ? 'selected' : ''}" data-id="${model.id}">
                 <span class="model-name">${model.name}</span>
                 <span class="model-points">${model.pointCount.toLocaleString()} 点</span>
-                <span class="model-visibility">${model.visible ? '可见' : '隐藏'}</span>
+                <button class="model-visibility-btn ${model.visible ? 'active' : ''}" data-id="${model.id}" title="切换可见性">
+                    ${model.visible ? '可见' : '隐藏'}
+                </button>
                 <span class="model-remove" data-id="${model.id}" title="删除">删除</span>
             </div>
         `).join('');
@@ -306,6 +463,19 @@ function updateModelList() {
                 if (state.selectedModelId === id) {
                     closeEditor();
                 }
+            });
+        });
+
+        dom.modelList.querySelectorAll('.model-visibility-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = btn.dataset.id;
+                const model = app.getModel(id);
+                if (!model) return;
+                const nextVisible = !model.visible;
+                app.setModelVisibility(id, nextVisible);
+                updateModelList();
+                showInfo(`模型可见性: ${nextVisible ? '可见' : '隐藏'}`);
             });
         });
 
@@ -353,37 +523,17 @@ function selectModel(id) {
  */
 function updateEditorValues(model) {
     // 位置
-    if (dom.posX) dom.posX.value = model.position.x.toFixed(2);
-    if (dom.posY) dom.posY.value = model.position.y.toFixed(2);
-    if (dom.posZ) dom.posZ.value = model.position.z.toFixed(2);
+    if (dom.posX) dom.posX.value = model.position.x.toFixed(3);
+    if (dom.posY) dom.posY.value = model.position.y.toFixed(3);
+    if (dom.posZ) dom.posZ.value = model.position.z.toFixed(3);
 
     // 旋转（转换为角度）
-    if (dom.rotX) dom.rotX.value = (model.rotation.x * 180 / Math.PI).toFixed(2);
-    if (dom.rotY) dom.rotY.value = (model.rotation.y * 180 / Math.PI).toFixed(2);
-    if (dom.rotZ) dom.rotZ.value = (model.rotation.z * 180 / Math.PI).toFixed(2);
+    if (dom.rotX) dom.rotX.value = (model.rotation.x * 180 / Math.PI).toFixed(3);
+    if (dom.rotY) dom.rotY.value = (model.rotation.y * 180 / Math.PI).toFixed(3);
+    if (dom.rotZ) dom.rotZ.value = (model.rotation.z * 180 / Math.PI).toFixed(3);
 
     // 缩放
-    if (dom.scaleS) dom.scaleS.value = model.scale.toFixed(2);
-
-    // 可见性
-    updateVisibilityToggle(model.visible);
-}
-
-/**
- * 更新可见性按钮状态
- */
-function updateVisibilityToggle(isVisible) {
-    const toggleLabel = dom.btnToggleVisible?.querySelector('.toggle-label');
-
-    if (dom.btnToggleVisible) {
-        if (isVisible) {
-            dom.btnToggleVisible.classList.add('active');
-            if (toggleLabel) toggleLabel.textContent = '可见';
-        } else {
-            dom.btnToggleVisible.classList.remove('active');
-            if (toggleLabel) toggleLabel.textContent = '隐藏';
-        }
-    }
+    if (dom.scaleS) dom.scaleS.value = model.scale.toFixed(3);
 }
 
 /**
@@ -408,7 +558,9 @@ function updateModelFromEditor() {
     const scale = parseFloat(dom.scaleS?.value || 1);
     app.setModelScale(id, scale);
 
-    showInfo('模型已更新');
+    if (!isInputLabelDragging) {
+        showInfo('模型已更新');
+    }
 }
 
 /**
@@ -422,21 +574,6 @@ function resetTransform() {
         updateEditorValues(model);
     }
     showInfo('变换已重置');
-}
-
-/**
- * 切换模型可见性
- */
-function toggleModelVisibility() {
-    if (!state.selectedModelId || !app) return;
-    const model = app.getModel(state.selectedModelId);
-    if (model) {
-        const newVisible = !model.visible;
-        app.setModelVisibility(state.selectedModelId, newVisible);
-        updateVisibilityToggle(newVisible);
-        updateModelList();
-        showInfo(`模型可见性: ${newVisible ? '可见' : '隐藏'}`);
-    }
 }
 
 /**
@@ -486,10 +623,10 @@ function updateModelAnimationControls(id = state.selectedModelId) {
     }
 
     if (dom.modelAnimSpeed) {
-        dom.modelAnimSpeed.value = Number(anim.speed || 1).toFixed(1);
+        dom.modelAnimSpeed.value = Number(anim.speed || 1).toFixed(3);
     }
     if (dom.modelAnimSpeedValue) {
-        dom.modelAnimSpeedValue.textContent = `${Number(anim.speed || 1).toFixed(1)}x`;
+        dom.modelAnimSpeedValue.textContent = `${Number(anim.speed || 1).toFixed(3)}x`;
     }
 }
 
@@ -517,10 +654,10 @@ function toggleSelectedModelAnimationLoop() {
 
 function updateSelectedModelAnimationSpeed() {
     if (!app || !state.selectedModelId || !dom.modelAnimSpeed) return;
-    const speed = parseFloat(dom.modelAnimSpeed.value || '1');
+    const speed = Math.max(0.001, parseFloat(dom.modelAnimSpeed.value || '1'));
     app.setModelAnimationSpeed(state.selectedModelId, speed);
     if (dom.modelAnimSpeedValue) {
-        dom.modelAnimSpeedValue.textContent = `${speed.toFixed(1)}x`;
+        dom.modelAnimSpeedValue.textContent = `${speed.toFixed(3)}x`;
     }
 }
 
@@ -534,6 +671,32 @@ function setRenderMode(mode) {
     showInfo(`渲染模式: ${mode}`);
 }
 
+function applyPreviewModeToAllModels(mode) {
+    const modeMap = { color: 0, normal: 1, depth: 2 };
+    const modeValue = modeMap[mode];
+    if (typeof modeValue !== 'number') {
+        return false;
+    }
+
+    const bridged = app?.setRenderMode?.(mode);
+    if (bridged !== undefined) {
+        return bridged !== false;
+    }
+
+    const models = app?.getModels?.() || [];
+    let updated = 0;
+    for (const model of models) {
+        const fn = model?.modelEntry?.pointCloud?.setRenderMode;
+        if (typeof fn === 'function') {
+            fn.call(model.modelEntry.pointCloud, modeValue);
+            updated += 1;
+        }
+    }
+
+    console.log(`[Editor ${state.VERSION}] Preview mode fallback applied: ${mode} (${updated} model(s))`);
+    return true;
+}
+
 /**
  * 设置导出模式
  */
@@ -542,7 +705,15 @@ function setExportMode(mode) {
     if (dom.modeColor) dom.modeColor.classList.toggle('menu-btn-active', mode === 'color');
     if (dom.modeDepth) dom.modeDepth.classList.toggle('menu-btn-active', mode === 'depth');
     if (dom.modeNormal) dom.modeNormal.classList.toggle('menu-btn-active', mode === 'normal');
-    showInfo(`导出模式: ${mode}`);
+
+    const ok = applyPreviewModeToAllModels(mode);
+    if (app && ok === false) {
+        showError(`切换渲染模式失败: ${mode}`);
+        return;
+    }
+
+    const labelMap = { color: '颜色', depth: '深度图', normal: '法向图' };
+    showInfo(`显示模式: ${labelMap[mode] || mode}`);
 }
 
 function isHttpUrl(value) {
@@ -736,6 +907,7 @@ async function saveScene() {
             env: {
                 bgColor: [r, g, b, 1],
                 gaussianScale: 1,
+                depthRangeScale: Number(state.sceneDepthRangeScale || 1.0),
             },
             assets,
         };
@@ -796,6 +968,9 @@ async function loadScene() {
         if (envBgHex) {
             applySceneBackgroundHex(envBgHex, 'custom');
         }
+        if (Number.isFinite(raw?.env?.depthRangeScale)) {
+            applySceneDepthRangeScale(raw.env.depthRangeScale, true);
+        }
 
         let loaded = 0;
         let failed = 0;
@@ -834,6 +1009,7 @@ async function loadScene() {
                 if (!loadedModel) {
                     throw new Error(`加载模型失败: ${targetName}`);
                 }
+                applyPreviewModeToAllModels(state.exportMode);
 
                 const t = asset.transform;
                 if (t?.position && Array.isArray(t.position)) {
@@ -981,7 +1157,7 @@ function toggleCameraLoop() {
  * 更新时间显示
  */
 function updateTimeDisplay() {
-    if (dom.timeValue) dom.timeValue.textContent = `${state.currentTime.toFixed(2)}s`;
+    if (dom.timeValue) dom.timeValue.textContent = `${state.currentTime.toFixed(3)}s`;
 }
 
 /**
@@ -1034,6 +1210,7 @@ function handleGlobalShortcuts(e) {
  */
 function initEventListeners() {
     console.log(`[Editor ${state.VERSION}] Initializing event listeners...`);
+    setupInputLabelDrag();
 
     // 场景菜单
     dom.btnSaveScene?.addEventListener('click', saveScene);
@@ -1064,6 +1241,7 @@ function initEventListeners() {
                 const result = await app.loadModel(file);
                 if (result) {
                     console.log(`[Editor ${state.VERSION}] Model loaded successfully:`, result.name);
+                    applyPreviewModeToAllModels(state.exportMode);
                     if (state.selectedModelId) updateModelAnimationControls(state.selectedModelId);
                 } else {
                     console.warn(`[Editor ${state.VERSION}] Failed to load model:`, file.name);
@@ -1093,6 +1271,12 @@ function initEventListeners() {
     dom.sceneBgColorHex?.addEventListener('change', (e) => {
         applySceneBackgroundHex(e.target.value, 'custom');
     });
+    dom.sceneDepthScale?.addEventListener('input', (e) => {
+        applySceneDepthRangeScale(e.target.value, true);
+    });
+    dom.sceneDepthScaleNumber?.addEventListener('change', (e) => {
+        applySceneDepthRangeScale(e.target.value);
+    });
     dom.skyPresetGrid?.addEventListener('click', (e) => {
         if (!(e.target instanceof Element)) return;
         const btn = e.target.closest('[data-sky-id]');
@@ -1113,8 +1297,6 @@ function initEventListeners() {
     // 缩放
     dom.scaleS?.addEventListener('input', updateModelFromEditor);
 
-    // 可见性
-    dom.btnToggleVisible?.addEventListener('click', toggleModelVisibility);
     dom.btnModelAnimPlayPause?.addEventListener('click', toggleSelectedModelAnimationPlayPause);
     dom.btnModelAnimLoop?.addEventListener('click', toggleSelectedModelAnimationLoop);
     dom.modelAnimSpeed?.addEventListener('input', updateSelectedModelAnimationSpeed);
@@ -1155,6 +1337,7 @@ function initEventListeners() {
                 const result = await app.loadModel(file);
                 if (result) {
                     console.log(`[Editor ${state.VERSION}] Dropped model loaded successfully:`, result.name);
+                    applyPreviewModeToAllModels(state.exportMode);
                     if (state.selectedModelId) updateModelAnimationControls(state.selectedModelId);
                 } else {
                     console.warn(`[Editor ${state.VERSION}] Failed to load dropped model:`, file.name);
@@ -1224,6 +1407,11 @@ async function init() {
         updateModelList();
         updateModelAnimationControls(state.selectedModelId);
     });
+
+    registerDebugHooks();
+
+    // 同步渲染模式（颜色/深度/法向）到核心渲染器
+    setExportMode(state.exportMode);
 
     // 初始化事件监听
     initEventListeners();
