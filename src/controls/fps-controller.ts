@@ -11,6 +11,8 @@ const DEFAULT_ROTATE_SPEED = 0.002;
 const DEFAULT_SCROLL_SPEED = 0.5;
 const DEFAULT_ROTATE_INERTIA = 0.85;
 const DEFAULT_MOVE_INERTIA = 0.85;
+const DEFAULT_KEY_YAW_SPEED = 1.8;   // rad/s
+const DEFAULT_KEY_ROLL_SPEED = 1.6;  // rad/s
 
 // ---- Helper functions ----
 function clamp(x: number, lo: number, hi: number) { 
@@ -50,6 +52,7 @@ export class FPSController implements IController {
   // Store yaw and pitch separately to avoid gimbal lock
   private yaw = 0;
   private pitch = 0;
+  private roll = 0;
   
   // User input flag
   userInput = false;
@@ -59,6 +62,8 @@ export class FPSController implements IController {
   
   // Fly mode - true: 6DoF movement along view direction, false: restrict to XZ plane (ground)
   flyMode = true;
+  keyYawSpeed = DEFAULT_KEY_YAW_SPEED;
+  keyRollSpeed = DEFAULT_KEY_ROLL_SPEED;
 
   constructor(
     moveSpeed = DEFAULT_MOVEMENT_SPEED,
@@ -151,12 +156,25 @@ export class FPSController implements IController {
     this.yaw += deltaYaw;
     this.pitch += deltaPitch;
     this.pitch = clamp(this.pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+
+    // Keyboard yaw (Q/E) and roll (R / Shift+R)
+    const yawInput = (this.keycode["KeyE"] ? 1 : 0) - (this.keycode["KeyQ"] ? 1 : 0);
+    const rollInput = this.keycode["KeyR"]
+      ? ((this.keycode["ShiftLeft"] || this.keycode["ShiftRight"]) ? -1 : 1)
+      : 0;
+    if (yawInput !== 0) {
+      this.yaw += yawInput * this.keyYawSpeed * deltaTime;
+    }
+    if (rollInput !== 0) {
+      this.roll += rollInput * this.keyRollSpeed * deltaTime;
+    }
     
     // Build camera rotation with intrinsic YXZ order
     // First build C2W (camera to world), then invert to get W2C
     const c2w = quat.identity(quat.create());
     quat.rotateY(c2w, c2w, this.yaw);   // yaw about world Y  
     quat.rotateX(c2w, c2w, this.pitch); // pitch about local X
+    quat.rotateZ(c2w, c2w, this.roll);  // roll about local Z
     
     // Camera needs W2C (world to camera) quaternion
     const w2c = quat.invert(quat.create(), c2w);
@@ -170,12 +188,8 @@ export class FPSController implements IController {
     if (this.keycode["KeyS"] || this.keycode["ArrowDown"]) inputVector[2] += 1;
     if (this.keycode["KeyA"] || this.keycode["ArrowLeft"]) inputVector[0] -= 1;
     if (this.keycode["KeyD"] || this.keycode["ArrowRight"]) inputVector[0] += 1;
-    if (this.keycode["KeyR"] || this.keycode["PageUp"]) inputVector[1] += 1;
-    if (this.keycode["KeyF"] || this.keycode["PageDown"]) inputVector[1] -= 1;
-    
-    // Q/E for additional strafing
-    if (this.keycode["KeyQ"]) inputVector[0] -= 1;
-    if (this.keycode["KeyE"]) inputVector[0] += 1;
+    if (this.keycode["PageUp"]) inputVector[1] += 1;
+    if (this.keycode["PageDown"]) inputVector[1] -= 1;
     
     // Add scroll for forward/backward movement
     if (Math.abs(this.scrollDelta) > 0) {
@@ -254,6 +268,7 @@ export class FPSController implements IController {
   resetOrientation(): void {
     this.yaw = 0;
     this.pitch = 0;
+    this.roll = 0;
     this.rotateVelocity = vec3.fromValues(0, 0, 0);
     this.moveVelocity = vec3.fromValues(0, 0, 0);
   }
@@ -267,9 +282,10 @@ export class FPSController implements IController {
   }
   
   // Set orientation (useful for initialization)
-  setOrientation(yaw: number, pitch: number): void {
+  setOrientation(yaw: number, pitch: number, roll: number = this.roll): void {
     this.yaw = yaw;
     this.pitch = clamp(pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+    this.roll = roll;
   }
   
   // Toggle fly mode

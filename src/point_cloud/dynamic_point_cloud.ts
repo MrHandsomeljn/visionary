@@ -165,6 +165,7 @@ export class DynamicPointCloud extends PointCloud {
     }
 
     adjustedFrameTime *= 0.4;
+    let stopAtEnd = false;
     // console.log(adjustedFrameTime)
     try {
       // Get model's expected input names
@@ -181,6 +182,7 @@ export class DynamicPointCloud extends PointCloud {
         adjustedFrameTime = ((adjustedFrameTime % 1.0) + 1.0) % 1.0;
       } else {
         adjustedFrameTime = Math.max(0.0, Math.min(adjustedFrameTime, 1.0));
+        stopAtEnd = this.timeline.isPlaying() && adjustedFrameTime >= 0.9999;
       }
 
       const inputData = {
@@ -194,6 +196,12 @@ export class DynamicPointCloud extends PointCloud {
       // Run inference - writes DIRECTLY to GPU buffers with full GPU pipeline!
       // const startTime = performance.now();
       await this.onnxGenerator.generate(inputData);
+
+      // In non-loop mode, stop playback at the end frame and keep time pinned at 1.0.
+      if (stopAtEnd) {
+        this.timeline.stopAnimation();
+        this.timeline.setAnimationTime(1.0);
+      }
       
       // const inferenceTime = performance.now() - startTime;
       // console.log(`⚡ Dynamic inference completed: ${inferenceTime.toFixed(2)}ms`);
@@ -208,6 +216,10 @@ export class DynamicPointCloud extends PointCloud {
    * Animation control methods - delegate to timeline controller
    */
   startAnimation(speed: number = 1.0): void {
+    // Replay from head when non-loop animation has already reached the end.
+    if (!this.is_loop && this.timeline.isStopped() && this.timeline.getCurrentTime() >= 0.9999) {
+      this.timeline.setAnimationTime(0.0);
+    }
     this.timeline.startAnimation(speed);
   }
 

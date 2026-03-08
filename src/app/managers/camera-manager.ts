@@ -8,6 +8,7 @@ import { PerspectiveCamera, PerspectiveProjection } from "../../camera/perspecti
 import { IController, ControllerType } from "../../controls/base-controller";
 import { FPSController } from "../../controls/fps-controller";
 import { CameraController } from "../../controls/controller";
+import { lookAtW2C } from "../../controls/orbit";
 import { PointCloud } from "../../point_cloud";
 import { deg2rad } from "../../utils";
 
@@ -397,6 +398,38 @@ export class CameraManager {
     this.controller.scroll = 0;
     this.controller.leftMousePressed = false;
     this.controller.rightMousePressed = false;
+  }
+
+  /**
+   * Rebuild camera rotation with world-up while keeping the current view direction.
+   * This removes roll/twist without changing what the camera is looking at.
+   */
+  uprightCurrentView(up: vec3 = vec3.fromValues(0, 1, 0)): boolean {
+    if (!this.camera) return false;
+
+    const c2w = quat.invert(quat.create(), this.camera.rotationQ);
+    const forward = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 0, -1), c2w);
+    if (vec3.length(forward) < 1e-6) return false;
+    vec3.normalize(forward, forward);
+
+    this.camera.rotationQ = lookAtW2C(forward, up);
+
+    if (this.controllerType === 'orbit' && this.controller instanceof CameraController) {
+      this.syncOrbitAfterExternalLookAt(vec3.clone(this.controller.center), up);
+      return true;
+    }
+
+    if (this.controllerType === 'fps' && this.controller instanceof FPSController) {
+      const yaw = Math.atan2(forward[0], forward[2]);
+      const horizontalLength = Math.sqrt(forward[0] * forward[0] + forward[2] * forward[2]);
+      const pitch = Math.atan2(-forward[1], horizontalLength);
+      this.controller.setOrientation(yaw, pitch, 0);
+      this.controller.leftMousePressed = false;
+      this.controller.rightMousePressed = false;
+      return true;
+    }
+
+    return true;
   }
 
   /**
