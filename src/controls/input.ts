@@ -7,18 +7,19 @@ export function processKeyboardInput(
   rotation: Float32Array, // vec3-like [yaw, pitch, roll] 
   sensitivity: number
 ): boolean {
+  void rotation;
+  void sensitivity;
   const step = pressed ? 1 : -1;
   let handled = true;
   
   switch (code) {
-    case "KeyW": amount[2] += +step; break;
-    case "KeyS": amount[2] += -step; break;
-    case "KeyA": amount[0] += -step; break;
-    case "KeyD": amount[0] += +step; break;
-    case "KeyQ": rotation[2] +=  step / sensitivity; break;
-    case "KeyE": rotation[2] += -step / sensitivity; break;
-    case "Space":     amount[1] +=  step; break;
-    case "ShiftLeft": amount[1] += -step; break;
+    // WASD translation
+    case "KeyW": amount[2] += step; break;
+    case "KeyS": amount[2] -= step; break;
+    case "KeyA": amount[0] += step; break;
+    case "KeyD": amount[0] -= step; break;
+    case "PageUp": amount[1] += step; break;
+    case "PageDown": amount[1] -= step; break;
     default: handled = false;
   }
   

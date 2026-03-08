@@ -23,6 +23,40 @@ import { PointCloud, DynamicPointCloud } from "../point_cloud";
 import { lookAtW2C } from "../controls/orbit";
 
 const MAX_MODELS = 10000;
+const CAMERA_KEY_CODES = new Set([
+  "KeyW",
+  "KeyA",
+  "KeyS",
+  "KeyD",
+  "KeyQ",
+  "KeyE",
+  "KeyR",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Space",
+  "ShiftLeft",
+  "ShiftRight",
+  "PageUp",
+  "PageDown",
+  "AltLeft",
+  "AltRight",
+]);
+
+type SceneSkyPreset = {
+  id: string;
+  name: string;
+  colorHex: string;
+};
+
+const SCENE_SKY_PRESETS: SceneSkyPreset[] = [
+  { id: "studio", name: "工作室", colorHex: "#10131C" },
+  { id: "clear_day", name: "晴空", colorHex: "#6EAEEA" },
+  { id: "sunset", name: "日落", colorHex: "#E9875A" },
+  { id: "dusk", name: "暮光", colorHex: "#4A5D86" },
+  { id: "night", name: "夜空", colorHex: "#050814" },
+];
 
 /**
  * Editor model data - tracks models with UI state
@@ -38,6 +72,8 @@ interface EditorModel {
   scale: number;
   modelType: string;
   modelEntry?: ModelEntry;
+  sourceFile?: File;
+  sourcePath?: string;
 }
 
 /**
@@ -66,12 +102,15 @@ export class EditorApp {
   // Editor state
   private editorModels: Map<string, EditorModel> = new Map();
   private onModelsChangedCallback: ((models: EditorModel[]) => void) | null = null;
+  private sceneBackgroundColor: [number, number, number, number] = [0.02, 0.03, 0.08, 1.0];
+  private sceneSkyPresetId: string = "night";
 
   // Mouse state for camera control
   private lastMouseX = 0;
   private lastMouseY = 0;
   private leftMouseDown = false;
   private rightMouseDown = false;
+  private activeCameraKeys: Set<string> = new Set();
 
   // Version
   readonly VERSION = '0.05';
@@ -162,6 +201,7 @@ export class EditorApp {
 
     // Initialize render loop
     this.renderLoop.init(this.gpu, this.renderer, this.canvas);
+    this.renderLoop.setBackgroundColor(this.sceneBackgroundColor);
 
     // Start render loop
     this.renderLoop.start();
@@ -178,10 +218,9 @@ export class EditorApp {
   private setupCanvasEvents(): void {
     if (!this.canvas) return;
 
-    const controller = this.cameraManager.getController();
-
     // Mouse events - directly set controller state like demo/simple
     this.canvas.addEventListener('mousedown', (e) => {
+      const controller = this.cameraManager.getController();
       if (e.button === 0) {
         this.leftMouseDown = true;
         controller.leftMousePressed = true;
@@ -198,6 +237,7 @@ export class EditorApp {
     });
 
     window.addEventListener('mouseup', (e) => {
+      const controller = this.cameraManager.getController();
       if (e.button === 0) {
         this.leftMouseDown = false;
         controller.leftMousePressed = false;
@@ -214,6 +254,7 @@ export class EditorApp {
         const dy = e.clientY - this.lastMouseY;
         this.lastMouseX = e.clientX;
         this.lastMouseY = e.clientY;
+        const controller = this.cameraManager.getController();
         controller.processMouse(dx, dy);
       }
     });
@@ -221,8 +262,14 @@ export class EditorApp {
     // Wheel event
     this.canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
+      const controller = this.cameraManager.getController();
       controller.processScroll(e.deltaY > 0 ? 0.05 : -0.05);
     }, { passive: false });
+
+    // Keyboard events
+    window.addEventListener('keydown', (e) => this.handleCameraKeyboard(e, true));
+    window.addEventListener('keyup', (e) => this.handleCameraKeyboard(e, false));
+    window.addEventListener('blur', () => this.releaseAllCameraKeys());
 
     // Prevent context menu
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -230,10 +277,70 @@ export class EditorApp {
     console.log('[EditorApp] Canvas event listeners setup');
   }
 
+  private isEditingText(): boolean {
+    const active = document.activeElement as HTMLElement | null;
+    if (!active) return false;
+    const tag = active.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || active.isContentEditable;
+  }
+
+  private setControllerAltPressed(pressed: boolean): void {
+    const controller = this.cameraManager.getController() as { altPressed?: boolean };
+    if (typeof controller.altPressed === "boolean") {
+      controller.altPressed = pressed;
+    }
+  }
+
+  private handleCameraKeyboard(event: KeyboardEvent, pressed: boolean): void {
+    if (!CAMERA_KEY_CODES.has(event.code)) return;
+    if (this.isEditingText()) return;
+    if (pressed && event.repeat) return;
+
+    const isAltKey = event.code === "AltLeft" || event.code === "AltRight";
+    if (isAltKey) {
+      this.setControllerAltPressed(pressed);
+    }
+
+    const controller = this.cameraManager.getController();
+    if (pressed) {
+      if (this.activeCameraKeys.has(event.code)) return;
+      const handled = controller.processKeyboard(event.code, true);
+      if (handled) {
+        this.activeCameraKeys.add(event.code);
+        event.preventDefault();
+      }
+      return;
+    }
+
+    if (!this.activeCameraKeys.has(event.code)) return;
+    controller.processKeyboard(event.code, false);
+    this.activeCameraKeys.delete(event.code);
+    event.preventDefault();
+  }
+
+  private releaseAllCameraKeys(): void {
+    this.leftMouseDown = false;
+    this.rightMouseDown = false;
+    const controller = this.cameraManager.getController();
+    controller.leftMousePressed = false;
+    controller.rightMousePressed = false;
+
+    if (this.activeCameraKeys.size === 0) {
+      this.setControllerAltPressed(false);
+      return;
+    }
+
+    this.activeCameraKeys.forEach((code) => {
+      controller.processKeyboard(code, false);
+    });
+    this.activeCameraKeys.clear();
+    this.setControllerAltPressed(false);
+  }
+
   /**
    * Load a model file
    */
-  async loadModel(file: File): Promise<EditorModel | null> {
+  async loadModel(file: File, options: { sourcePath?: string } = {}): Promise<EditorModel | null> {
     console.log(`[EditorApp ${this.VERSION}] ===== loadModel START =====`);
     console.log(`[EditorApp ${this.VERSION}] File:`, file.name, file.size, 'bytes', file.type);
 
@@ -295,7 +402,9 @@ export class EditorApp {
         rotation: { x: 0, y: 0, z: 0 },
         scale: 1,
         modelType: lowerName.endsWith('.onnx') ? 'onnx' : (detectGaussianFormat(lowerName) || 'unknown'),
-        modelEntry: modelEntry
+        modelEntry: modelEntry,
+        sourceFile: file,
+        sourcePath: options.sourcePath || file.name
       };
 
       this.editorModels.set(editorModel.id, editorModel);
@@ -499,6 +608,7 @@ export class EditorApp {
    * Set camera mode
    */
   setCameraMode(mode: 'orbit' | 'fps'): void {
+    this.releaseAllCameraKeys();
     this.cameraManager.switchController(mode);
     console.log('[EditorApp] Camera mode:', mode);
   }
@@ -563,6 +673,17 @@ export class EditorApp {
     this.cameraManager.syncOrbitAfterExternalLookAt(target, worldUp);
     console.log(`[EditorApp] Focused model: ${model.name}`);
     return true;
+  }
+
+  /**
+   * Keep current view direction and remove camera roll (upright to world +Y).
+   */
+  uprightCamera(): boolean {
+    const ok = this.cameraManager.uprightCurrentView(vec3.fromValues(0, 1, 0));
+    if (ok) {
+      console.log("[EditorApp] Camera upright");
+    }
+    return ok;
   }
 
   /**
@@ -697,6 +818,69 @@ export class EditorApp {
   resetCamera(): void {
     this.cameraManager.resetCamera();
     console.log('[EditorApp] Camera reset');
+  }
+
+  /**
+   * Get current scene background color in #RRGGBB format.
+   */
+  getSceneBackgroundColorHex(): string {
+    return this.rgbaToHex(this.sceneBackgroundColor);
+  }
+
+  /**
+   * Set scene background color using #RRGGBB.
+   */
+  setSceneBackgroundColorHex(hex: string): boolean {
+    const parsed = this.hexToRgb(hex);
+    if (!parsed) return false;
+    this.sceneBackgroundColor = [parsed[0], parsed[1], parsed[2], 1.0];
+    this.sceneSkyPresetId = "custom";
+    this.renderLoop.setBackgroundColor(this.sceneBackgroundColor);
+    return true;
+  }
+
+  /**
+   * Get current selected sky preset id.
+   */
+  getSceneSkyPresetId(): string {
+    return this.sceneSkyPresetId;
+  }
+
+  /**
+   * List available sky presets.
+   */
+  getSceneSkyPresets(): SceneSkyPreset[] {
+    return SCENE_SKY_PRESETS.map((preset) => ({ ...preset }));
+  }
+
+  /**
+   * Apply one predefined sky preset.
+   */
+  applySceneSkyPreset(id: string): SceneSkyPreset | null {
+    const preset = SCENE_SKY_PRESETS.find((item) => item.id === id);
+    if (!preset) return null;
+    const ok = this.setSceneBackgroundColorHex(preset.colorHex);
+    if (!ok) return null;
+    this.sceneSkyPresetId = preset.id;
+    return { ...preset };
+  }
+
+  private hexToRgb(hex: string): [number, number, number] | null {
+    const normalized = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+    if (!normalized) return null;
+    const raw = normalized[1];
+    const r = Number.parseInt(raw.slice(0, 2), 16) / 255;
+    const g = Number.parseInt(raw.slice(2, 4), 16) / 255;
+    const b = Number.parseInt(raw.slice(4, 6), 16) / 255;
+    return [r, g, b];
+  }
+
+  private rgbaToHex(color: [number, number, number, number]): string {
+    const toHex = (v: number) => {
+      const clamped = Math.max(0, Math.min(255, Math.round(v * 255)));
+      return clamped.toString(16).padStart(2, "0");
+    };
+    return `#${toHex(color[0])}${toHex(color[1])}${toHex(color[2])}`;
   }
 
   /**

@@ -6,7 +6,7 @@
     <title>Visionary Editor 0.05</title>
     <link rel="stylesheet" href="./editor.css">
 </head>
-<body>
+<body class="theme-light">
     <div id="app">
         <!-- Canvas Container -->
         <div id="canvas-container">
@@ -46,12 +46,13 @@
                     <span class="menu-label">场景</span>
                     <div class="menu-actions">
                         <button id="btnSaveScene" class="menu-btn">
-                            <span class="menu-btn-icon">💾</span>
-                            <span class="menu-btn-text">保存场景</span>
+                            <span class="menu-btn-text">保存</span>
+                        </button>
+                        <button id="btnLoadScene" class="menu-btn">
+                            <span class="menu-btn-text">加载</span>
                         </button>
                         <button id="btnClearScene" class="menu-btn">
-                            <span class="menu-btn-icon">🗑️</span>
-                            <span class="menu-btn-text">清空场景</span>
+                            <span class="menu-btn-text">清空</span>
                         </button>
                     </div>
                 </div>
@@ -82,6 +83,9 @@
                 </div>
                 <div class="menu-spacer"></div>
                 <div class="menu-section menu-section-right">
+                    <button id="btnThemeToggle" class="theme-toggle-btn" title="切换白天/夜间">
+                        白天
+                    </button>
                     <span class="version-label" id="versionLabel">0.05</span>
                 </div>
             </div>
@@ -97,7 +101,6 @@
                     <div class="sidebar-content">
                         <div id="modelList" class="model-list">
                             <div class="empty-list">
-                                <div class="empty-icon">📁</div>
                                 <p>暂无模型</p>
                                 <p class="empty-hint">拖拽文件到此处，或点击下方按钮</p>
                             </div>
@@ -106,10 +109,6 @@
                             <button id="btnAddModel" class="add-model-btn">
                                 <span class="add-icon">+</span>
                                 <span class="add-text">添加模型</span>
-                            </button>
-                            <button id="btnLoadModels" class="load-models-btn">
-                                <span class="load-icon">📂</span>
-                                <span class="load-text">加载模型</span>
                             </button>
                         </div>
                     </div>
@@ -121,128 +120,150 @@
                 </div>
 
                 <!-- Right: Model Properties -->
-                <div id="right-sidebar" class="hidden">
+                <div id="right-sidebar">
                     <div class="sidebar-header">
-                        <h2 id="selectedModelName">模型属性</h2>
-                        <button id="btnCloseEditor" class="close-editor-btn">
-                            <span>✕</span>
-                        </button>
+                        <h2>设置面板</h2>
+                        <div class="sidebar-header-actions">
+                            <button id="btnCloseEditor" class="close-editor-btn" title="取消当前模型选中">
+                                <span>取消选中</span>
+                            </button>
+                        </div>
                     </div>
                     <div class="sidebar-content">
-                        <!-- Transform Section -->
-                        <div class="editor-section">
-                            <div class="section-header">
-                                <h3>变换</h3>
-                                <div class="section-actions">
-                                    <button class="icon-btn" id="btnResetTransform" title="重置">↺</button>
-                                </div>
+                        <!-- Scene Settings Card -->
+                        <div id="sceneSettingsPanel" class="settings-card">
+                            <div class="settings-card-header">
+                                <h3>场景设置</h3>
                             </div>
-
-                            <!-- Position XYZ -->
-                            <div class="property-row">
-                                <label class="property-label">
-                                    <span class="property-icon">📍</span>
-                                    <span>位置</span>
-                                </label>
-                                <div class="property-inputs">
-                                    <div class="input-group">
-                                        <label class="input-label">X</label>
-                                        <input type="number" id="posX" step="0.1" value="0">
-                                    </div>
-                                    <div class="input-group">
-                                        <label class="input-label">Y</label>
-                                        <input type="number" id="posY" step="0.1" value="0">
-                                    </div>
-                                    <div class="input-group">
-                                        <label class="input-label">Z</label>
-                                        <input type="number" id="posZ" step="0.1" value="0">
+                            <div class="settings-card-body">
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>背景色</span>
+                                    </label>
+                                    <div class="property-inputs scene-bg-color-row">
+                                        <input type="color" id="sceneBgColorPicker" value="#050814">
+                                        <input type="text" id="sceneBgColorHex" value="#050814" maxlength="7" placeholder="#RRGGBB">
                                     </div>
                                 </div>
-                            </div>
 
-                            <!-- Rotation RX RY RZ -->
-                            <div class="property-row">
-                                <label class="property-label">
-                                    <span class="property-icon">🔄</span>
-                                    <span>旋转</span>
-                                </label>
-                                <div class="property-inputs">
-                                    <div class="input-group">
-                                        <label class="input-label">RX</label>
-                                        <input type="number" id="rotX" step="1" value="0">
-                                        <span class="unit">°</span>
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>预设</span>
+                                    </label>
+                                    <div class="property-inputs">
+                                        <div id="skyPresetGrid" class="sky-preset-grid"></div>
                                     </div>
-                                    <div class="input-group">
-                                        <label class="input-label">RY</label>
-                                        <input type="number" id="rotY" step="1" value="0">
-                                        <span class="unit">°</span>
-                                    </div>
-                                    <div class="input-group">
-                                        <label class="input-label">RZ</label>
-                                        <input type="number" id="rotZ" step="1" value="0">
-                                        <span class="unit">°</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Scale S -->
-                            <div class="property-row">
-                                <label class="property-label">
-                                    <span class="property-icon">📐</span>
-                                    <span>缩放</span>
-                                </label>
-                                <div class="property-inputs">
-                                    <label class="input-label">S</label>
-                                    <input type="number" id="scaleS" step="0.1" min="0.1" value="1">
-                                </div>
-                            </div>
-
-                            <!-- Visibility -->
-                            <div class="property-row">
-                                <label class="property-label">
-                                    <span class="property-icon">👁️</span>
-                                    <span>可见性</span>
-                                </label>
-                                <div class="property-inputs">
-                                    <button class="visibility-toggle" id="btnToggleVisible">
-                                        <span class="toggle-icon">👁️</span>
-                                        <span class="toggle-label">可见</span>
-                                    </button>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- ONNX Animation Section -->
-                        <div id="onnxAnimSection" class="editor-section hidden">
-                            <div class="section-header">
-                                <h3>ONNX 动画</h3>
+                        <!-- Model Settings Card -->
+                        <div id="modelSettingsCard" class="settings-card model-settings-card inactive">
+                            <div class="settings-card-header">
+                                <h3>模型设置</h3>
+                                <span id="selectedModelName" class="selected-model-name">未选中模型</span>
                             </div>
 
-                            <div class="property-row">
-                                <label class="property-label">
-                                    <span class="property-icon">🎬</span>
-                                    <span>控制</span>
-                                </label>
-                                <div class="property-inputs model-anim-actions">
-                                    <button id="btnModelAnimPlayPause" class="timeline-action-btn model-anim-btn">
-                                        <span class="btn-icon">⏸️</span>
-                                        <span class="btn-text">暂停</span>
-                                    </button>
-                                    <button id="btnModelAnimLoop" class="timeline-action-btn model-anim-btn active">
-                                        <span class="btn-icon">🔁</span>
-                                        <span class="btn-text">循环</span>
-                                    </button>
+                            <div id="modelTransformSection" class="editor-section">
+                                <div class="section-header">
+                                    <h4 class="subsection-title">变换</h4>
+                                    <div class="section-actions">
+                                        <button class="icon-btn" id="btnResetTransform" title="重置">↺</button>
+                                    </div>
+                                </div>
+
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>位置</span>
+                                    </label>
+                                    <div class="property-inputs">
+                                        <div class="input-group">
+                                            <label class="input-label">X</label>
+                                            <input type="number" id="posX" step="0.1" value="0">
+                                        </div>
+                                        <div class="input-group">
+                                            <label class="input-label">Y</label>
+                                            <input type="number" id="posY" step="0.1" value="0">
+                                        </div>
+                                        <div class="input-group">
+                                            <label class="input-label">Z</label>
+                                            <input type="number" id="posZ" step="0.1" value="0">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>旋转</span>
+                                    </label>
+                                    <div class="property-inputs">
+                                        <div class="input-group">
+                                            <label class="input-label">RX</label>
+                                            <input type="number" id="rotX" step="1" value="0">
+                                            <span class="unit">°</span>
+                                        </div>
+                                        <div class="input-group">
+                                            <label class="input-label">RY</label>
+                                            <input type="number" id="rotY" step="1" value="0">
+                                            <span class="unit">°</span>
+                                        </div>
+                                        <div class="input-group">
+                                            <label class="input-label">RZ</label>
+                                            <input type="number" id="rotZ" step="1" value="0">
+                                            <span class="unit">°</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>缩放</span>
+                                    </label>
+                                    <div class="property-inputs">
+                                        <label class="input-label">S</label>
+                                        <input type="number" id="scaleS" step="0.1" min="0.1" value="1">
+                                    </div>
+                                </div>
+
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>可见性</span>
+                                    </label>
+                                    <div class="property-inputs">
+                                        <button class="visibility-toggle" id="btnToggleVisible">
+                                            <span class="toggle-label">可见</span>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div class="property-row">
-                                <label class="property-label">
-                                    <span class="property-icon">⏱️</span>
-                                    <span>速率</span>
-                                </label>
-                                <div class="property-inputs model-anim-speed-row">
-                                    <input type="range" id="modelAnimSpeed" min="0.1" max="3.0" step="0.1" value="1.0">
-                                    <span id="modelAnimSpeedValue" class="time-value">1.0x</span>
+                            <div id="onnxAnimSection" class="editor-section hidden">
+                                <div class="section-header">
+                                    <h4 class="subsection-title">ONNX 动画</h4>
+                                </div>
+
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>控制</span>
+                                    </label>
+                                    <div class="property-inputs model-anim-actions">
+                                        <button id="btnModelAnimPlayPause" class="timeline-action-btn model-anim-btn">
+                                            <span class="btn-text">暂停</span>
+                                        </button>
+                                        <button id="btnModelAnimLoop" class="timeline-action-btn model-anim-btn active">
+                                            <span class="btn-text">循环</span>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>速率</span>
+                                    </label>
+                                    <div class="property-inputs model-anim-speed-row">
+                                        <input type="range" id="modelAnimSpeed" min="0.1" max="3.0" step="0.1" value="1.0">
+                                        <span id="modelAnimSpeedValue" class="time-value">1.0x</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -256,18 +277,18 @@
                     <h2>相机关键帧</h2>
                     <div class="timeline-actions">
                         <button id="btnAddKeyframe" class="timeline-action-btn">
-                            <span class="btn-icon">➕</span>
-                            <span class="btn-text">添加关键帧</span>
+                            <span class="btn-icon">+</span>
+                            <span class="btn-text">新增</span>
                         </button>
                         <button id="btnRemoveKeyframe" class="timeline-action-btn">
-                            <span class="btn-icon">➖</span>
-                            <span class="btn-text">删除关键帧</span>
+                            <span class="btn-icon">-</span>
+                            <span class="btn-text">删除</span>
                         </button>
                         <button id="btnPlayCamera" class="timeline-action-btn">
-                            <span class="btn-icon">▶️</span>
+                            <span class="btn-icon">播放</span>
                         </button>
                         <button id="btnLoopCamera" class="timeline-action-btn">
-                            <span class="btn-icon">🔁</span>
+                            <span class="btn-icon">循环</span>
                         </button>
                     </div>
                 </div>

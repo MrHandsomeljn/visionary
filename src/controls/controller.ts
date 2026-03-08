@@ -28,12 +28,16 @@ export class CameraController implements IController {
   /** If provided, use as "global up reference"; otherwise use internal orbit up state */
   up: vec3 | null = null;
 
-  amount = vec3.fromValues(0, 0, 0);   // Placeholder (consistent with Rust, not used in this update)
+  amount = vec3.fromValues(0, 0, 0);   // Keyboard move vector: [strafe, lift, forward]
   shift  = vec2.fromValues(0, 0);      // Right-click pan (x=dy, y=-dx)
   rotation = vec3.fromValues(0, 0, 0); // yaw(x), pitch(y), roll(z)
   scroll = 0;
   speed: number;
   sensitivity: number;
+  keyMoveSpeed: number;
+  keyVerticalSpeed: number;
+  keyYawSpeed: number;
+  keyRollSpeed: number;
 
   leftMousePressed = false;
   rightMousePressed = false;
@@ -42,6 +46,10 @@ export class CameraController implements IController {
 
   // --- Key: stable orbit up state ---
   private orbitUp = vec3.clone(WORLD_UP);
+  private keyYawLeftPressed = false;
+  private keyYawRightPressed = false;
+  private keyRollPressed = false;
+  private shiftPressed = false;
 
   // Debug
   private debug = false;
@@ -51,6 +59,11 @@ export class CameraController implements IController {
   constructor(speed = 0.2, sensitivity = 0.1) {
     this.speed = speed; 
     this.sensitivity = sensitivity;
+    // Keep keyboard navigation responsive in editor mode.
+    this.keyMoveSpeed = 3.0;
+    this.keyVerticalSpeed = 3.0;
+    this.keyYawSpeed = 1.8;
+    this.keyRollSpeed = 1.6;
   }
 
   // Allow external reset of orbit up (e.g., when switching views)
@@ -59,6 +72,33 @@ export class CameraController implements IController {
   }
 
   processKeyboard(code: string, pressed: boolean): boolean {
+    switch (code) {
+      case "KeyQ":
+        this.keyYawLeftPressed = pressed;
+        this.userInput = true;
+        return true;
+      case "KeyE":
+        this.keyYawRightPressed = pressed;
+        this.userInput = true;
+        return true;
+      case "KeyR":
+        this.keyRollPressed = pressed;
+        this.userInput = true;
+        return true;
+      case "ShiftLeft":
+      case "ShiftRight":
+        this.shiftPressed = pressed;
+        this.userInput = true;
+        return true;
+      case "AltLeft":
+      case "AltRight":
+        this.altPressed = pressed;
+        this.userInput = true;
+        return true;
+      default:
+        break;
+    }
+
     const handled = processKeyboardInput(
       code,
       pressed,
@@ -116,9 +156,22 @@ export class CameraController implements IController {
     // === 4) Rotation (yaw around yawAxis, pitch around right; Alt enables roll around forward) ===
     let yaw   =  this.rotation[0] * dtSec * this.sensitivity;
     let pitch = -this.rotation[1] * dtSec * this.sensitivity;
-    let roll  = 0;
+    let roll  = this.rotation[2] * dtSec * this.sensitivity;
+
+    // Keyboard yaw: Q/E controls look-left/look-right.
+    const keyYawInput = (this.keyYawRightPressed ? 1 : 0) - (this.keyYawLeftPressed ? 1 : 0);
+    if (keyYawInput !== 0) {
+      yaw += keyYawInput * this.keyYawSpeed * dtSec;
+    }
+
+    // Keyboard roll: R and Shift+R.
+    if (this.keyRollPressed) {
+      const rollDir = this.shiftPressed ? -1 : 1;
+      roll += rollDir * this.keyRollSpeed * dtSec;
+    }
+
     if (this.altPressed) { 
-      roll = -this.rotation[1] * dtSec * this.sensitivity; 
+      roll += -this.rotation[1] * dtSec * this.sensitivity; 
       yaw = 0; 
       pitch = 0; 
     }
@@ -127,6 +180,22 @@ export class CameraController implements IController {
     forward = rotationResult.forward;
     right = rotationResult.right;
     yawAxis = rotationResult.yawAxis;
+
+    // Keyboard translation (FPS-like): move camera and center together.
+    if (this.amount[0] !== 0 || this.amount[1] !== 0 || this.amount[2] !== 0) {
+      const move = vec3.create();
+      vec3.scaleAndAdd(move, move, right, this.amount[0]);
+      vec3.scaleAndAdd(move, move, WORLD_UP, this.amount[1]);
+      vec3.scaleAndAdd(move, move, forward, this.amount[2]);
+
+      const len = vec3.length(move);
+      if (len > 1e-6) {
+        vec3.scale(move, move, 1 / len);
+        const base = this.amount[1] !== 0 ? this.keyVerticalSpeed : this.keyMoveSpeed;
+        vec3.scale(move, move, base * dtSec);
+        vec3.add(this.center, this.center, move);
+      }
+    }
 
     // Update position: pos = center - forward * dist1
     vec3.add(cam.positionV, this.center, vec3.scale(vec3.create(), forward, -dist1));
@@ -174,6 +243,12 @@ export class CameraController implements IController {
     this.rotation = vec3.fromValues(0, 0, 0);
     this.shift = vec2.fromValues(0, 0);
     this.scroll = 0;
+    this.amount = vec3.fromValues(0, 0, 0);
     this.orbitUp = vec3.clone(WORLD_UP);
+    this.keyYawLeftPressed = false;
+    this.keyYawRightPressed = false;
+    this.keyRollPressed = false;
+    this.shiftPressed = false;
+    this.altPressed = false;
   }
 }
