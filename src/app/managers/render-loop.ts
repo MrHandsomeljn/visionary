@@ -13,6 +13,7 @@ import { CameraManager } from "./camera-manager";
 export interface AppState {
   background: [number, number, number, number];
   gaussianScale: number;
+  depthRangeScale: number;
   animationId: number;
   lastTime: number;
   frames: number;
@@ -36,6 +37,7 @@ export class RenderLoop {
   private state: AppState = {
     background: [0, 0, 0, 1],
     gaussianScale: 1.0,
+    depthRangeScale: 1.0,
     animationId: 0,
     lastTime: performance.now(),
     frames: 0,
@@ -204,6 +206,7 @@ export class RenderLoop {
       camera: camera,
       viewport: [this.canvas.width, this.canvas.height],
       gaussianScaling: this.state.gaussianScale,
+      sceneExtendScale: this.state.depthRangeScale,
     } as any);
 
     // 2) Then open render pass and draw
@@ -272,6 +275,14 @@ export class RenderLoop {
    */
   setGaussianScale(scale: number): void {
     this.state.gaussianScale = scale;
+  }
+
+  /**
+   * Set depth visualization range scale (used by scene_extend mapping in shader).
+   */
+  setDepthRangeScale(scale: number): void {
+    const safe = Number.isFinite(scale) ? Math.max(0.01, Math.min(100, scale)) : 1.0;
+    this.state.depthRangeScale = safe;
   }
 
   /**

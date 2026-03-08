@@ -25,6 +25,8 @@ export interface RenderArgs {
   walltime?: number;
   /** Scene extent for LOD */
   sceneExtend?: number;
+  /** Multiplier applied to auto scene extent (useful for depth visualization range tuning) */
+  sceneExtendScale?: number;
   /** Scene center for culling */
   sceneCenter?: [number,number,number];
 }

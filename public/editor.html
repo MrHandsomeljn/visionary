@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visionary Editor 0.05</title>
+    <title>Visionary Editor 0.0.6</title>
     <link rel="stylesheet" href="./editor.css">
 </head>
 <body class="theme-light">
@@ -86,7 +86,7 @@
                     <button id="btnThemeToggle" class="theme-toggle-btn" title="切换白天/夜间">
                         白天
                     </button>
-                    <span class="version-label" id="versionLabel">0.05</span>
+                    <span class="version-label" id="versionLabel">0.0.6</span>
                 </div>
             </div>
 
@@ -154,6 +154,16 @@
                                         <div id="skyPresetGrid" class="sky-preset-grid"></div>
                                     </div>
                                 </div>
+
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>深度倍率</span>
+                                    </label>
+                                    <div class="property-inputs depth-scale-row">
+                                        <input type="range" id="sceneDepthScale" min="0.01" max="100.0" step="0.001" value="1.000">
+                                        <input type="number" id="sceneDepthScaleNumber" min="0.01" max="100.0" step="0.001" value="1.000">
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -176,18 +186,18 @@
                                     <label class="property-label">
                                         <span>位置</span>
                                     </label>
-                                    <div class="property-inputs">
+                                    <div class="property-inputs transform-grid">
                                         <div class="input-group">
-                                            <label class="input-label">X</label>
-                                            <input type="number" id="posX" step="0.1" value="0">
+                                            <label class="input-label input-drag-label" data-drag-target="posX" data-drag-step="0.01">X</label>
+                                            <input type="number" id="posX" step="0.001" value="0.000">
                                         </div>
                                         <div class="input-group">
-                                            <label class="input-label">Y</label>
-                                            <input type="number" id="posY" step="0.1" value="0">
+                                            <label class="input-label input-drag-label" data-drag-target="posY" data-drag-step="0.01">Y</label>
+                                            <input type="number" id="posY" step="0.001" value="0.000">
                                         </div>
                                         <div class="input-group">
-                                            <label class="input-label">Z</label>
-                                            <input type="number" id="posZ" step="0.1" value="0">
+                                            <label class="input-label input-drag-label" data-drag-target="posZ" data-drag-step="0.01">Z</label>
+                                            <input type="number" id="posZ" step="0.001" value="0.000">
                                         </div>
                                     </div>
                                 </div>
@@ -196,21 +206,18 @@
                                     <label class="property-label">
                                         <span>旋转</span>
                                     </label>
-                                    <div class="property-inputs">
+                                    <div class="property-inputs transform-grid">
                                         <div class="input-group">
-                                            <label class="input-label">RX</label>
-                                            <input type="number" id="rotX" step="1" value="0">
-                                            <span class="unit">°</span>
+                                            <label class="input-label input-drag-label" data-drag-target="rotX" data-drag-step="0.1">RX</label>
+                                            <input type="number" id="rotX" step="0.001" value="0.000">
                                         </div>
                                         <div class="input-group">
-                                            <label class="input-label">RY</label>
-                                            <input type="number" id="rotY" step="1" value="0">
-                                            <span class="unit">°</span>
+                                            <label class="input-label input-drag-label" data-drag-target="rotY" data-drag-step="0.1">RY</label>
+                                            <input type="number" id="rotY" step="0.001" value="0.000">
                                         </div>
                                         <div class="input-group">
-                                            <label class="input-label">RZ</label>
-                                            <input type="number" id="rotZ" step="1" value="0">
-                                            <span class="unit">°</span>
+                                            <label class="input-label input-drag-label" data-drag-target="rotZ" data-drag-step="0.1">RZ</label>
+                                            <input type="number" id="rotZ" step="0.001" value="0.000">
                                         </div>
                                     </div>
                                 </div>
@@ -219,22 +226,14 @@
                                     <label class="property-label">
                                         <span>缩放</span>
                                     </label>
-                                    <div class="property-inputs">
-                                        <label class="input-label">S</label>
-                                        <input type="number" id="scaleS" step="0.1" min="0.1" value="1">
+                                    <div class="property-inputs transform-grid">
+                                        <div class="input-group scale-span">
+                                            <label class="input-label input-drag-label" data-drag-target="scaleS" data-drag-step="0.01">S</label>
+                                            <input type="number" id="scaleS" step="0.001" min="0.001" value="1.000">
+                                        </div>
                                     </div>
                                 </div>
 
-                                <div class="property-row">
-                                    <label class="property-label">
-                                        <span>可见性</span>
-                                    </label>
-                                    <div class="property-inputs">
-                                        <button class="visibility-toggle" id="btnToggleVisible">
-                                            <span class="toggle-label">可见</span>
-                                        </button>
-                                    </div>
-                                </div>
                             </div>
 
                             <div id="onnxAnimSection" class="editor-section hidden">
@@ -261,8 +260,8 @@
                                         <span>速率</span>
                                     </label>
                                     <div class="property-inputs model-anim-speed-row">
-                                        <input type="range" id="modelAnimSpeed" min="0.1" max="3.0" step="0.1" value="1.0">
-                                        <span id="modelAnimSpeedValue" class="time-value">1.0x</span>
+                                        <input type="range" id="modelAnimSpeed" min="0.001" max="10.0" step="0.001" value="1.000">
+                                        <span id="modelAnimSpeedValue" class="time-value">1.000x</span>
                                     </div>
                                 </div>
                             </div>

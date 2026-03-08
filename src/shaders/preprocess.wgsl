@@ -589,11 +589,23 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
 
         // 可视化时编码到颜色 [0,1]
         let n_rgb = clamp(0.5 * (n_world + vec3<f32>(1.0, 1.0, 1.0)), vec3<f32>(0.0), vec3<f32>(1.0));
-        color = vec4<f32>(n_rgb, opacity);
+        // NOTE:
+        // In visualization modes, binding alpha to per-splat opacity makes output almost black
+        // because fs_main multiplies RGB by exp(-a) * alpha again.
+        color = vec4<f32>(n_rgb, 1.0);
     } else if (uModel.rendermode == 2u) {
-        // 模式2: 深度可视化（使用透视除法后的 NDC 深度，0..1）
-        let depth_ndc = 1.0 - clamp(pos2d.z / pos2d.w, 0.0, 1.0);
-        color = vec4<f32>(depth_ndc, depth_ndc, depth_ndc, opacity);
+        // 模式2: 深度可视化
+        // 使用局部可视化范围（基于 scene_extend）而不是相机真实 far，
+        // 避免 far 过大导致画面几乎全白/全黑。
+        let znear = -camera.proj[3][2] / camera.proj[2][2];
+        let zfar = -camera.proj[3][2] / (camera.proj[2][2] - 1.0);
+        let view_pos = camera.view * vec4<f32>(xyz, 1.0);
+        let z_view = abs(view_pos.z);
+        let local_far = znear + max(1e-3, render_settings.scene_extend * 3.0);
+        let vis_far = min(zfar, local_far);
+        let depth_linear = clamp((z_view - znear) / max(1e-6, (vis_far - znear)), 0.0, 1.0);
+        let depth_vis = pow(1.0 - depth_linear, 0.9);
+        color = vec4<f32>(depth_vis, depth_vis, depth_vis, 1.0);
     } else {
         // 默认: 正常颜色
         color = vec4<f32>(

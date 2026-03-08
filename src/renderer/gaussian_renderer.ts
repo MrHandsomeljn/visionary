@@ -434,13 +434,15 @@ export class GaussianRenderer implements IRenderer {
       Math.abs(sceneMax[2] - sceneMin[2])
     );
     
+    const sceneExtendScale = Math.max(0.05, args.sceneExtendScale ?? 1.0);
+
     return {
       maxSHDegree: Math.min(args.maxSHDegree ?? pointCloud.shDeg, this.shDegree),
       showEnvMap: args.showEnvMap ?? true,
       mipSplatting: args.mipSplatting ?? pointCloud.mipSplatting ?? false,
       kernelSize: args.kernelSize ?? pointCloud.kernelSize ?? DEFAULT_KERNEL_SIZE,
       walltime: args.walltime ?? 1.0,
-      sceneExtend: args.sceneExtend ?? sceneSize,
+      sceneExtend: args.sceneExtend ?? (sceneSize * sceneExtendScale),
       center: new Float32Array([
         args.sceneCenter?.[0] ?? center[0],
         args.sceneCenter?.[1] ?? center[1],

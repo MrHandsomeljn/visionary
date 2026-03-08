@@ -1,5 +1,5 @@
 /**
- * Visionary Editor Application 0.05
+ * Visionary Editor Application 0.0.6
  * Editor version of main app with UI controls
  */
 
@@ -51,12 +51,21 @@ type SceneSkyPreset = {
 };
 
 const SCENE_SKY_PRESETS: SceneSkyPreset[] = [
-  { id: "studio", name: "工作室", colorHex: "#10131C" },
+    { id: "black", name: "纯黑", colorHex: "#000000" },
+  { id: "white", name: "纯白", colorHex: "#FFFFFF" },
   { id: "clear_day", name: "晴空", colorHex: "#6EAEEA" },
   { id: "sunset", name: "日落", colorHex: "#E9875A" },
   { id: "dusk", name: "暮光", colorHex: "#4A5D86" },
   { id: "night", name: "夜空", colorHex: "#050814" },
 ];
+
+type EditorRenderMode = "color" | "normal" | "depth";
+
+const RENDER_MODE_INDEX: Record<EditorRenderMode, number> = {
+  color: 0,
+  normal: 1,
+  depth: 2,
+};
 
 /**
  * Editor model data - tracks models with UI state
@@ -104,6 +113,8 @@ export class EditorApp {
   private onModelsChangedCallback: ((models: EditorModel[]) => void) | null = null;
   private sceneBackgroundColor: [number, number, number, number] = [0.02, 0.03, 0.08, 1.0];
   private sceneSkyPresetId: string = "night";
+  private sceneDepthRangeScale: number = 1.0;
+  private renderMode: EditorRenderMode = "color";
 
   // Mouse state for camera control
   private lastMouseX = 0;
@@ -113,7 +124,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = '0.05';
+  readonly VERSION = '0.0.6';
 
   constructor() {
     this.modelManager = new ModelManager(MAX_MODELS);
@@ -202,6 +213,7 @@ export class EditorApp {
     // Initialize render loop
     this.renderLoop.init(this.gpu, this.renderer, this.canvas);
     this.renderLoop.setBackgroundColor(this.sceneBackgroundColor);
+    this.renderLoop.setDepthRangeScale(this.sceneDepthRangeScale);
 
     // Start render loop
     this.renderLoop.start();
@@ -378,6 +390,8 @@ export class EditorApp {
       if (!modelEntry) {
         throw new Error('Failed to create model entry');
       }
+
+      this.applyRenderModeToModelEntry(modelEntry, this.renderMode);
 
       // Get point count from model entry (fallback to point cloud numPoints)
       let pointCount = Number(modelEntry.pointCount ?? 0);
@@ -614,6 +628,39 @@ export class EditorApp {
   }
 
   /**
+   * Set renderer output mode for all loaded models.
+   * Uses existing PointCloud.setRenderMode (0=color, 1=normal, 2=depth).
+   */
+  setRenderMode(mode: EditorRenderMode): boolean {
+    if (mode !== "color" && mode !== "normal" && mode !== "depth") {
+      return false;
+    }
+
+    this.renderMode = mode;
+    let updated = 0;
+    this.editorModels.forEach((model) => {
+      if (this.applyRenderModeToModelEntry(model.modelEntry, mode)) {
+        updated += 1;
+      }
+    });
+
+    // Fallback: ensure all models managed by ModelManager are updated too.
+    const managedModels = this.modelManager.getFullModels();
+    managedModels.forEach((modelEntry) => {
+      if (this.applyRenderModeToModelEntry(modelEntry, mode)) {
+        updated += 1;
+      }
+    });
+
+    console.log(`[EditorApp] Render mode set to: ${mode} (${updated} model(s) updated)`);
+    return true;
+  }
+
+  getRenderMode(): EditorRenderMode {
+    return this.renderMode;
+  }
+
+  /**
    * Focus camera on the selected model.
    */
   focusModel(id: string): boolean {
@@ -762,7 +809,7 @@ export class EditorApp {
     const dynamicPC = this.getDynamicPointCloudForModel(model);
     if (!dynamicPC) return false;
 
-    const safeSpeed = Math.max(0.1, speed);
+    const safeSpeed = Math.max(0.001, speed);
     dynamicPC.setAnimationSpeed(safeSpeed);
     return true;
   }
@@ -775,6 +822,16 @@ export class EditorApp {
       return null;
     }
     return model.modelEntry.pointCloud;
+  }
+
+  private applyRenderModeToModelEntry(modelEntry: ModelEntry | undefined | null, mode: EditorRenderMode): boolean {
+    if (!modelEntry || !modelEntry.pointCloud) return false;
+
+    const pointCloud = modelEntry.pointCloud as { setRenderMode?: (modeValue: number) => void };
+    if (typeof pointCloud.setRenderMode !== "function") return false;
+
+    pointCloud.setRenderMode(RENDER_MODE_INDEX[mode]);
+    return true;
   }
 
   private getModelFocusPoint(model: EditorModel): vec3 | null {
@@ -863,6 +920,24 @@ export class EditorApp {
     if (!ok) return null;
     this.sceneSkyPresetId = preset.id;
     return { ...preset };
+  }
+
+  /**
+   * Get depth visualization range scale.
+   */
+  getSceneDepthRangeScale(): number {
+    return this.sceneDepthRangeScale;
+  }
+
+  /**
+   * Set depth visualization range scale (0.01 - 100.0).
+   */
+  setSceneDepthRangeScale(scale: number): boolean {
+    if (!Number.isFinite(scale)) return false;
+    const safe = Math.max(0.01, Math.min(100, scale));
+    this.sceneDepthRangeScale = safe;
+    this.renderLoop.setDepthRangeScale(safe);
+    return true;
   }
 
   private hexToRgb(hex: string): [number, number, number] | null {

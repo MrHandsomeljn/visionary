@@ -310,10 +310,6 @@ export class GaussianPreprocessor implements IPreprocessor {
     dataView.setFloat32(offset + 12, 0, true);
     offset += 16;
     
-    // Gaussian scaling
-    dataView.setFloat32(offset, settings.gaussianScaling, true);
-    offset += 4;
-    
     // Max SH degree
     dataView.setUint32(offset, settings.maxSHDegree, true);
     offset += 4;
