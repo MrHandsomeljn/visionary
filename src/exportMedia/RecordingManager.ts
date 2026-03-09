@@ -87,11 +87,14 @@ export class RecordingManager {
         renderer.setSize(renderWidth, renderHeight, false); 
 
         // 初始化渲染器
-        await options.recordingCamera.initializeRenderer(
+        const initialized = await options.recordingCamera.initializeRenderer(
             options.mainRenderer,
             options.scene,
             options.gaussianModels
         );
+        if (!initialized || !options.recordingCamera.renderer) {
+            throw new Error('RecordingCamera initializeRenderer failed');
+        }
         
         // ✅ 关键修复：在初始化完成后，确保录制渲染器的尺寸正确设置
         // 并强制更新高斯渲染器的深度纹理，使用正确的分辨率
