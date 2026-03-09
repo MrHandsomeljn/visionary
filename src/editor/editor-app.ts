@@ -1,10 +1,13 @@
 /**
- * Visionary Editor Application 0.0.6
+ * Visionary Editor Application 0.0.7
  * Editor version of main app with UI controls
  */
 
-import { vec3 } from "gl-matrix";
+import * as THREE from "three/webgpu";
+import { vec3, quat } from "gl-matrix";
 import { GaussianRenderer } from "../renderer/gaussian_renderer";
+import { GaussianModel } from "../app/GaussianModel";
+import { GaussianThreeJSRenderer } from "../app/GaussianThreeJSRenderer";
 import { setHidden } from "../app/dom-elements";
 import {
   ModelManager,
@@ -16,7 +19,12 @@ import {
   type ModelEntry,
   type LoadingCallbacks
 } from "../app/managers";
-import { defaultLoader, detectGaussianFormat, isGaussianFormat } from "../io";
+import {
+  defaultLoader,
+  detectGaussianFormat,
+  isGaussianFormat,
+  isThreeJSDataSource
+} from "../io";
 import { initWebGPU_onnx, WebGPUContext, DEFAULT_DUMMY_MODEL_URL } from "../app/webgpu-context";
 import { initOrtEnvironment, getDefaultOrtWasmPaths } from "../config/ort-config";
 import { PointCloud, DynamicPointCloud } from "../point_cloud";
@@ -67,6 +75,14 @@ const RENDER_MODE_INDEX: Record<EditorRenderMode, number> = {
   depth: 2,
 };
 
+const MESH_EXTENSIONS = new Set(["glb", "gltf", "obj", "fbx", "stl"]);
+const EDITOR_ORIGINAL_MATERIAL_KEY = "__editorOriginalMaterial";
+const EDITOR_OVERRIDE_MATERIAL_KEY = "__editorOverrideMaterial";
+const EDITOR_DEPTH_RANGE_UNIFORM_KEY = "__editorDepthRangeUniform";
+const EDITOR_DEPTH_RANGE_VALUE_KEY = "__editorDepthRangeValue";
+const EDITOR_DEPTH_RANGE_UNIFORM_NAME = "uEditorDepthRange";
+const EDITOR_DEPTH_BASE_EXTENT_KEY = "__editorDepthBaseExtent";
+
 /**
  * Editor model data - tracks models with UI state
  */
@@ -81,8 +97,16 @@ interface EditorModel {
   scale: number;
   modelType: string;
   modelEntry?: ModelEntry;
+  object3D?: THREE.Object3D;
+  gaussianModel?: GaussianModel;
   sourceFile?: File;
   sourcePath?: string;
+}
+
+interface EditorCameraPose {
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
+  fovDegrees: number;
 }
 
 /**
@@ -99,6 +123,15 @@ export class EditorApp {
   // Core components
   private gpu: WebGPUContext | null = null;
   private renderer: GaussianRenderer | null = null;
+  private meshCanvas: HTMLCanvasElement | null = null;
+  private meshRenderer: THREE.WebGPURenderer | null = null;
+  private meshScene: THREE.Scene | null = null;
+  private meshCamera: THREE.PerspectiveCamera | null = null;
+  private fusedRenderer: GaussianThreeJSRenderer | null = null;
+  private meshRenderAnimationId = 0;
+  private fusionLastTime = performance.now();
+  private fusionFrameRunning = false;
+  private fusionStartTime = performance.now();
 
   // Managers
   private modelManager: ModelManager;
@@ -124,7 +157,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = '0.0.6';
+  readonly VERSION = "0.0.7";
 
   constructor() {
     this.modelManager = new ModelManager(MAX_MODELS);
@@ -203,6 +236,9 @@ export class EditorApp {
     // Initialize camera
     this.cameraManager.initCamera(this.canvas);
 
+    // Initialize mesh overlay renderer (for GLB/GLTF/OBJ/FBX/STL)
+    await this.initMeshViewport();
+
     // Setup resize handler
     window.addEventListener("resize", () => this.resize());
     this.resize();
@@ -210,13 +246,11 @@ export class EditorApp {
     // Setup canvas event listeners (using same approach as demo/simple)
     this.setupCanvasEvents();
 
-    // Initialize render loop
+    // Keep legacy render loop state in sync for backward compatibility, but use fused loop for rendering.
     this.renderLoop.init(this.gpu, this.renderer, this.canvas);
     this.renderLoop.setBackgroundColor(this.sceneBackgroundColor);
     this.renderLoop.setDepthRangeScale(this.sceneDepthRangeScale);
-
-    // Start render loop
-    this.renderLoop.start();
+    this.startMeshRenderLoop();
 
     console.log(`[EditorApp ${this.VERSION}] Initialized successfully!`);
     console.log(`[EditorApp ${this.VERSION}] Supported formats: ${defaultLoader.getAllSupportedExtensions().join(', ')}`);
@@ -267,7 +301,7 @@ export class EditorApp {
         this.lastMouseX = e.clientX;
         this.lastMouseY = e.clientY;
         const controller = this.cameraManager.getController();
-        controller.processMouse(dx, dy);
+        controller.processMouse(-dx, -dy);
       }
     });
 
@@ -289,6 +323,286 @@ export class EditorApp {
     console.log('[EditorApp] Canvas event listeners setup');
   }
 
+  private async initMeshViewport(): Promise<void> {
+    if (!this.canvas || !this.gpu) return;
+    this.meshCanvas = this.canvas;
+
+    this.meshScene = new THREE.Scene();
+    this.meshCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000);
+    this.meshCamera.matrixAutoUpdate = true;
+
+    const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+    this.meshScene.add(ambient);
+    const key = new THREE.DirectionalLight(0xffffff, 0.8);
+    key.position.set(5, 8, 6);
+    this.meshScene.add(key);
+
+    try {
+      this.meshRenderer = new THREE.WebGPURenderer({
+        canvas: this.canvas,
+        antialias: true,
+        forceWebGL: false,
+        context: this.gpu.context,
+        device: this.gpu.device
+      });
+      await this.meshRenderer.init();
+      this.meshRenderer.setClearColor(
+        new THREE.Color(this.sceneBackgroundColor[0], this.sceneBackgroundColor[1], this.sceneBackgroundColor[2]),
+        this.sceneBackgroundColor[3]
+      );
+      this.meshRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      const rect = this.canvas.getBoundingClientRect();
+      this.meshRenderer.setSize(rect.width || 1, rect.height || 1, false);
+
+      // Always keep fused renderer alive (even with 0 Gaussian models) so mesh-only depth preview works.
+      if (!this.fusedRenderer && this.meshScene) {
+        this.fusedRenderer = new GaussianThreeJSRenderer(this.meshRenderer, this.meshScene, []);
+        await this.fusedRenderer.init();
+        this.fusedRenderer.setDepthRangeScale(this.sceneDepthRangeScale);
+        this.fusedRenderer.setPreviewMode(this.renderMode);
+      }
+    } catch (error) {
+      console.warn("[EditorApp] Fused renderer initialization failed:", error);
+      this.meshRenderer = null;
+    }
+  }
+
+  private startMeshRenderLoop(): void {
+    if (this.meshRenderAnimationId !== 0) return;
+    this.fusionLastTime = performance.now();
+    this.fusionStartTime = this.fusionLastTime;
+    const tick = async () => {
+      this.meshRenderAnimationId = requestAnimationFrame(tick);
+      if (this.fusionFrameRunning) return;
+      if (!this.meshRenderer || !this.meshScene || !this.meshCamera) return;
+
+      this.fusionFrameRunning = true;
+      try {
+        const now = performance.now();
+        const dt = Math.min(0.05, (now - this.fusionLastTime) / 1000);
+        this.fusionLastTime = now;
+
+        this.cameraManager.update(dt);
+        this.syncMeshCameraFromCoreCamera();
+
+        if (this.fusedRenderer) {
+          await this.fusedRenderer.updateDynamicModels(this.meshCamera, (now - this.fusionStartTime) / 500.0);
+          this.fusedRenderer.onBeforeRender(this.meshRenderer, this.meshScene, this.meshCamera);
+          this.fusedRenderer.renderThreeScene(this.meshCamera);
+          const drew = this.fusedRenderer.drawSplats(this.meshRenderer, this.meshScene, this.meshCamera);
+          if (!drew && this.renderMode !== "depth") {
+            this.meshRenderer.render(this.meshScene, this.meshCamera);
+          }
+        } else {
+          this.meshRenderer.render(this.meshScene, this.meshCamera);
+        }
+      } finally {
+        this.fusionFrameRunning = false;
+      }
+    };
+    this.meshRenderAnimationId = requestAnimationFrame(tick);
+  }
+
+  private stopMeshRenderLoop(): void {
+    if (this.meshRenderAnimationId !== 0) {
+      cancelAnimationFrame(this.meshRenderAnimationId);
+      this.meshRenderAnimationId = 0;
+    }
+  }
+
+  private syncMeshCameraFromCoreCamera(): void {
+    if (!this.meshCamera) return;
+    const src = this.cameraManager.getCamera();
+    if (!src) return;
+
+    const c2w = quat.create();
+    quat.invert(c2w, src.rotationQ);
+    const forward = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 0, 1), c2w);
+    const up = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 1, 0), c2w);
+
+    this.meshCamera.position.set(src.positionV[0], src.positionV[1], src.positionV[2]);
+    this.meshCamera.up.set(up[0], up[1], up[2]);
+    this.meshCamera.lookAt(
+      src.positionV[0] + forward[0],
+      src.positionV[1] + forward[1],
+      src.positionV[2] + forward[2]
+    );
+
+    const aspect = this.canvas && this.canvas.height > 0 ? this.canvas.width / this.canvas.height : 1;
+    this.meshCamera.aspect = aspect;
+    this.meshCamera.fov = Math.max(1e-3, src.projection.fovy) * 180 / Math.PI;
+    this.meshCamera.near = Math.max(1e-4, src.projection.znear);
+    this.meshCamera.far = Math.max(this.meshCamera.near + 1e-3, src.projection.zfar);
+    this.meshCamera.updateProjectionMatrix();
+    this.meshCamera.updateMatrixWorld(true);
+  }
+
+  private isMeshFilename(fileName: string): boolean {
+    const lower = fileName.toLowerCase();
+    const ext = lower.includes(".") ? lower.split(".").pop() : "";
+    return MESH_EXTENSIONS.has(ext || "");
+  }
+
+  private detectModelTypeFromFileName(fileName: string): string {
+    const lower = fileName.toLowerCase();
+    if (lower.endsWith(".onnx")) return "onnx";
+    const gaussian = detectGaussianFormat(lower);
+    if (gaussian) return gaussian;
+    const ext = lower.includes(".") ? lower.split(".").pop() : "";
+    if (MESH_EXTENSIONS.has(ext || "")) return ext || "mesh";
+    return "unknown";
+  }
+
+  private addMeshObjectToScene(root: THREE.Object3D): void {
+    if (!this.meshScene) return;
+    const baseBox = new THREE.Box3().setFromObject(root);
+    let baseExtent = 1.0;
+    if (!baseBox.isEmpty()) {
+      const size = baseBox.getSize(new THREE.Vector3());
+      baseExtent = Math.max(0.001, size.x, size.y, size.z);
+    }
+    (root.userData ??= {})[EDITOR_DEPTH_BASE_EXTENT_KEY] = baseExtent;
+    root.visible = true;
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh || !("isMesh" in mesh) || !(mesh as any).isMesh) return;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      (mesh.userData ??= {})[EDITOR_DEPTH_BASE_EXTENT_KEY] = baseExtent;
+    });
+    this.applyRenderModeToMeshObject(root, this.renderMode);
+    this.meshScene.add(root);
+  }
+
+  private countMeshVertices(root: THREE.Object3D): number {
+    let count = 0;
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh || !("isMesh" in mesh) || !(mesh as any).isMesh) return;
+      const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
+      const positionAttr = geometry?.attributes?.position;
+      if (positionAttr && typeof positionAttr.count === "number") {
+        count += positionAttr.count;
+      }
+    });
+    return count;
+  }
+
+  private removeMeshObject(model: EditorModel): void {
+    const object3D = model.object3D;
+    if (!object3D || !this.meshScene) return;
+    this.applyRenderModeToMeshObject(object3D, "color");
+    this.meshScene.remove(object3D);
+    object3D.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh || !("isMesh" in mesh) || !(mesh as any).isMesh) return;
+      (mesh.geometry as THREE.BufferGeometry | undefined)?.dispose();
+      const material = mesh.material;
+      if (Array.isArray(material)) {
+        material.forEach((m) => m?.dispose?.());
+      } else {
+        material?.dispose?.();
+      }
+    });
+  }
+
+  private createMeshDepthPreviewMaterial(userData: Record<string, unknown>): THREE.MeshDepthMaterial {
+    const override = new THREE.MeshDepthMaterial({ depthPacking: THREE.BasicDepthPacking });
+    userData[EDITOR_DEPTH_RANGE_VALUE_KEY] = this.sceneDepthRangeScale;
+    override.onBeforeCompile = (shader) => {
+      const rangeValue = userData[EDITOR_DEPTH_RANGE_VALUE_KEY];
+      const initialRange = typeof rangeValue === "number" && Number.isFinite(rangeValue)
+        ? Math.max(0.000001, rangeValue)
+        : this.sceneDepthRangeScale;
+      const depthRangeUniform = { value: initialRange };
+      shader.uniforms[EDITOR_DEPTH_RANGE_UNIFORM_NAME] = depthRangeUniform;
+      userData[EDITOR_DEPTH_RANGE_UNIFORM_KEY] = depthRangeUniform;
+      let fragment = shader.fragmentShader.replace(
+        "#include <packing>",
+        `#include <packing>
+uniform float ${EDITOR_DEPTH_RANGE_UNIFORM_NAME};`
+      );
+      const outputExpr = `float viewZ = -perspectiveDepthToViewZ( fragCoordZ, cameraNear, cameraFar );
+float depthRange = max(${EDITOR_DEPTH_RANGE_UNIFORM_NAME}, 0.000001);
+float depth01 = clamp(viewZ / depthRange, 0.0, 1.0);
+gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
+      fragment = fragment.replace(
+        /gl_FragColor\s*=\s*vec4\s*\(\s*vec3\s*\(\s*1\.0\s*-\s*fragCoordZ\s*\)\s*,\s*opacity\s*\)\s*;/,
+        outputExpr
+      );
+      fragment = fragment.replace(
+        /gl_FragColor\s*=\s*packDepthToRGBA\s*\(\s*fragCoordZ\s*\)\s*;/,
+        outputExpr
+      );
+      shader.fragmentShader = fragment;
+    };
+    override.needsUpdate = true;
+    return override;
+  }
+
+  private syncMeshDepthRangeUniform(root: THREE.Object3D): void {
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh || !("isMesh" in mesh) || !(mesh as any).isMesh) return;
+      const userData = (mesh.userData ??= {}) as Record<string, unknown>;
+      userData[EDITOR_DEPTH_RANGE_VALUE_KEY] = this.sceneDepthRangeScale;
+      const depthRangeUniform = userData[EDITOR_DEPTH_RANGE_UNIFORM_KEY] as { value: number } | undefined;
+      if (depthRangeUniform && typeof depthRangeUniform.value === "number") {
+        depthRangeUniform.value = Math.max(0.000001, this.sceneDepthRangeScale);
+      }
+    });
+  }
+
+  private applyRenderModeToMeshObject(root: THREE.Object3D, mode: EditorRenderMode): boolean {
+    let updated = false;
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh || !("isMesh" in mesh) || !(mesh as any).isMesh) return;
+
+      const userData = (mesh.userData ??= {}) as Record<string, unknown>;
+      const original = userData[EDITOR_ORIGINAL_MATERIAL_KEY] as THREE.Material | THREE.Material[] | undefined;
+      if (!original) {
+        userData[EDITOR_ORIGINAL_MATERIAL_KEY] = mesh.material as THREE.Material | THREE.Material[];
+      }
+
+      const activeOverride = userData[EDITOR_OVERRIDE_MATERIAL_KEY] as THREE.Material | THREE.Material[] | undefined;
+      const disposeMaterial = (mat: THREE.Material | THREE.Material[] | undefined) => {
+        if (!mat) return;
+        if (Array.isArray(mat)) {
+          mat.forEach((m) => m?.dispose?.());
+        } else {
+          mat.dispose?.();
+        }
+      };
+
+      if (mode === "color" || mode === "depth") {
+        if (activeOverride) {
+          disposeMaterial(activeOverride);
+          delete userData[EDITOR_OVERRIDE_MATERIAL_KEY];
+          delete userData[EDITOR_DEPTH_RANGE_UNIFORM_KEY];
+          delete userData[EDITOR_DEPTH_RANGE_VALUE_KEY];
+        }
+        const restore = userData[EDITOR_ORIGINAL_MATERIAL_KEY] as THREE.Material | THREE.Material[] | undefined;
+        if (restore) {
+          mesh.material = restore;
+          updated = true;
+        }
+        return;
+      }
+
+      if (activeOverride) {
+        disposeMaterial(activeOverride);
+        delete userData[EDITOR_OVERRIDE_MATERIAL_KEY];
+      }
+
+      const override = new THREE.MeshNormalMaterial();
+      mesh.material = override;
+      userData[EDITOR_OVERRIDE_MATERIAL_KEY] = override;
+      updated = true;
+    });
+    return updated;
+  }
+
   private isEditingText(): boolean {
     const active = document.activeElement as HTMLElement | null;
     if (!active) return false;
@@ -303,10 +617,17 @@ export class EditorApp {
     }
   }
 
+  private remapCameraCode(code: string): string {
+    if (code === "KeyA") return "KeyD";
+    if (code === "KeyD") return "KeyA";
+    return code;
+  }
+
   private handleCameraKeyboard(event: KeyboardEvent, pressed: boolean): void {
     if (!CAMERA_KEY_CODES.has(event.code)) return;
     if (this.isEditingText()) return;
     if (pressed && event.repeat) return;
+    const mappedCode = this.remapCameraCode(event.code);
 
     const isAltKey = event.code === "AltLeft" || event.code === "AltRight";
     if (isAltKey) {
@@ -315,18 +636,18 @@ export class EditorApp {
 
     const controller = this.cameraManager.getController();
     if (pressed) {
-      if (this.activeCameraKeys.has(event.code)) return;
-      const handled = controller.processKeyboard(event.code, true);
+      if (this.activeCameraKeys.has(mappedCode)) return;
+      const handled = controller.processKeyboard(mappedCode, true);
       if (handled) {
-        this.activeCameraKeys.add(event.code);
+        this.activeCameraKeys.add(mappedCode);
         event.preventDefault();
       }
       return;
     }
 
-    if (!this.activeCameraKeys.has(event.code)) return;
-    controller.processKeyboard(event.code, false);
-    this.activeCameraKeys.delete(event.code);
+    if (!this.activeCameraKeys.has(mappedCode)) return;
+    controller.processKeyboard(mappedCode, false);
+    this.activeCameraKeys.delete(mappedCode);
     event.preventDefault();
   }
 
@@ -365,9 +686,16 @@ export class EditorApp {
 
     try {
       const lowerName = file.name.toLowerCase();
+      const modelType = this.detectModelTypeFromFileName(lowerName);
 
-      // Detect file type
       let modelEntry: ModelEntry | null = null;
+      let meshObject: THREE.Object3D | null = null;
+      let gaussianModel: GaussianModel | null = null;
+      let isDynamic = false;
+      let pointCount = 0;
+      let position = { x: 0, y: 0, z: 0 };
+      let rotation = { x: 0, y: 0, z: 0 };
+      let scale = 1;
 
       if (lowerName.endsWith('.onnx')) {
         // Load ONNX model
@@ -380,22 +708,57 @@ export class EditorApp {
           file.name,
           { staticInference: false, debugLogging: false }
         );
+        if (!modelEntry) {
+          throw new Error('Failed to create ONNX model entry');
+        }
+        isDynamic = Boolean(modelEntry.isDynamic);
+        pointCount = Number(modelEntry.pointCount ?? 0);
       } else if (isGaussianFormat(lowerName)) {
         // Load Gaussian model (PLY, SPZ, KSplat, SPLAT, SOG, etc.)
         modelEntry = await this.fileLoader.loadFile(file, this.gpu.device);
+        if (!modelEntry) {
+          throw new Error('Failed to create Gaussian model entry');
+        }
+        isDynamic = Boolean(modelEntry.isDynamic);
+        pointCount = Number(modelEntry.pointCount ?? 0);
+      } else if (this.isMeshFilename(lowerName)) {
+        const loaded = await defaultLoader.loadFile(file, {
+          isGaussian: false,
+          onProgress: (progress) => {
+            this.showLoading(true, progress.stage, Math.round(progress.progress * 100));
+          }
+        });
+        if (!isThreeJSDataSource(loaded)) {
+          throw new Error(`File loaded but not recognized as mesh: ${file.name}`);
+        }
+        meshObject = loaded.object3D() as THREE.Object3D;
+        this.addMeshObjectToScene(meshObject);
+        pointCount = this.countMeshVertices(meshObject);
+        position = { x: meshObject.position.x, y: meshObject.position.y, z: meshObject.position.z };
+        rotation = { x: meshObject.rotation.x, y: meshObject.rotation.y, z: meshObject.rotation.z };
+        scale = Number(meshObject.scale.x || 1);
       } else {
         throw new Error(`Unsupported file type: ${file.name}. Supported: ${defaultLoader.getAllSupportedExtensions().join(', ')}`);
       }
 
-      if (!modelEntry) {
-        throw new Error('Failed to create model entry');
+      if (modelEntry) {
+        if (!this.meshScene || !this.meshRenderer) {
+          throw new Error("Fusion renderer not initialized");
+        }
+        gaussianModel = new GaussianModel(modelEntry);
+        this.meshScene.add(gaussianModel);
+        if (!this.fusedRenderer) {
+          this.fusedRenderer = new GaussianThreeJSRenderer(this.meshRenderer, this.meshScene, [gaussianModel]);
+          await this.fusedRenderer.init();
+          this.fusedRenderer.setDepthRangeScale(this.sceneDepthRangeScale);
+          this.fusedRenderer.setPreviewMode(this.renderMode);
+        } else {
+          this.fusedRenderer.appendGaussianModel(gaussianModel);
+        }
+        this.applyRenderModeToModelEntry(modelEntry, this.renderMode);
       }
 
-      this.applyRenderModeToModelEntry(modelEntry, this.renderMode);
-
-      // Get point count from model entry (fallback to point cloud numPoints)
-      let pointCount = Number(modelEntry.pointCount ?? 0);
-      if ((!Number.isFinite(pointCount) || pointCount <= 0) && modelEntry.pointCloud) {
+      if ((!Number.isFinite(pointCount) || pointCount <= 0) && modelEntry?.pointCloud) {
         const pcWithNumPoints = modelEntry.pointCloud as { numPoints?: number };
         pointCount = Number(pcWithNumPoints.numPoints ?? 0);
       }
@@ -409,14 +772,16 @@ export class EditorApp {
       const editorModel: EditorModel = {
         id: Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9),
         name: file.name,
-        pointCount: pointCount, // Ensure it's always a number
+        pointCount,
         visible: true,
-        isDynamic: Boolean(modelEntry.isDynamic),
-        position: { x: 0, y: 0, z: 0 },
-        rotation: { x: 0, y: 0, z: 0 },
-        scale: 1,
-        modelType: lowerName.endsWith('.onnx') ? 'onnx' : (detectGaussianFormat(lowerName) || 'unknown'),
-        modelEntry: modelEntry,
+        isDynamic,
+        position,
+        rotation,
+        scale,
+        modelType,
+        modelEntry: modelEntry || undefined,
+        object3D: meshObject || undefined,
+        gaussianModel: gaussianModel || undefined,
         sourceFile: file,
         sourcePath: options.sourcePath || file.name
       };
@@ -424,8 +789,12 @@ export class EditorApp {
       this.editorModels.set(editorModel.id, editorModel);
 
       // Setup camera for first model
-      if (this.editorModels.size === 1 && modelEntry.pointCloud instanceof PointCloud) {
-        this.setupCameraForFirstModel(modelEntry.pointCloud);
+      if (this.editorModels.size === 1) {
+        if (modelEntry?.pointCloud instanceof PointCloud) {
+          this.setupCameraForFirstModel(modelEntry.pointCloud);
+        } else if (meshObject) {
+          this.setupCameraForFirstMesh(meshObject);
+        }
       }
 
       this.showLoading(false);
@@ -479,6 +848,38 @@ export class EditorApp {
     }
   }
 
+  private setupCameraForFirstMesh(object3D: THREE.Object3D): void {
+    const box = new THREE.Box3().setFromObject(object3D);
+    if (box.isEmpty()) return;
+
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const radius = Math.max(size.length() * 0.5, 1e-3);
+
+    console.log(
+      `[EditorApp] Mesh bounds: center=[${center.x.toFixed(2)},${center.y.toFixed(2)},${center.z.toFixed(2)}], radius=${radius.toFixed(2)}`
+    );
+
+    const distance = Math.max(radius * 2.2, 2.0);
+    const pos = vec3.fromValues(
+      center.x - distance * 0.5,
+      center.y - distance * 0.5,
+      center.z - distance * 0.5
+    );
+
+    const camera = this.cameraManager.getCamera();
+    if (camera) {
+      vec3.copy(camera.positionV, pos);
+      const focus = vec3.fromValues(center.x, center.y, center.z);
+      const forward = vec3.subtract(vec3.create(), focus, pos);
+      if (vec3.length(forward) > 1e-6) {
+        vec3.normalize(forward, forward);
+        camera.rotationQ = lookAtW2C(forward, vec3.fromValues(0, 1, 0));
+      }
+      this.cameraManager.syncOrbitAfterExternalLookAt(focus, vec3.fromValues(0, 1, 0));
+    }
+  }
+
   /**
    * Remove a model
    */
@@ -493,6 +894,16 @@ export class EditorApp {
       this.modelManager.removeModel(model.modelEntry.id);
       this.onnxManager.disposeModel(model.modelEntry.id);
     }
+    if (model.gaussianModel && this.fusedRenderer) {
+      const models = this.fusedRenderer.getGaussianModels();
+      const index = models.indexOf(model.gaussianModel);
+      if (index >= 0) {
+        this.fusedRenderer.removeModelById(`model_${index}`);
+      } else if (this.meshScene) {
+        this.meshScene.remove(model.gaussianModel);
+      }
+    }
+    this.removeMeshObject(model);
 
     this.editorModels.delete(id);
     this.notifyModelsChanged();
@@ -513,6 +924,12 @@ export class EditorApp {
     if (model.modelEntry) {
       this.modelManager.setModelVisibility(model.modelEntry.id, visible);
     }
+    if (model.gaussianModel) {
+      model.gaussianModel.setModelVisible(visible);
+    }
+    if (model.object3D) {
+      model.object3D.visible = visible;
+    }
 
     this.notifyModelsChanged();
     return true;
@@ -530,6 +947,11 @@ export class EditorApp {
     if (model.modelEntry) {
       this.modelManager.setModelPosition(model.modelEntry.id, x, y, z);
     }
+    if (model.gaussianModel) {
+      model.gaussianModel.position.set(x, y, z);
+    } else if (model.object3D) {
+      model.object3D.position.set(x, y, z);
+    }
 
     return true;
   }
@@ -546,6 +968,11 @@ export class EditorApp {
     if (model.modelEntry) {
       this.modelManager.setModelRotation(model.modelEntry.id, rx, ry, rz);
     }
+    if (model.gaussianModel) {
+      model.gaussianModel.rotation.set(rx, ry, rz);
+    } else if (model.object3D) {
+      model.object3D.rotation.set(rx, ry, rz);
+    }
 
     return true;
   }
@@ -561,6 +988,11 @@ export class EditorApp {
 
     if (model.modelEntry) {
       this.modelManager.setModelScale(model.modelEntry.id, scale);
+    }
+    if (model.gaussianModel) {
+      model.gaussianModel.scale.set(scale, scale, scale);
+    } else if (model.object3D) {
+      model.object3D.scale.set(scale, scale, scale);
     }
 
     return true;
@@ -585,6 +1017,15 @@ export class EditorApp {
         0, 0, 0, 1
       ]);
     }
+    if (model.gaussianModel) {
+      model.gaussianModel.position.set(0, 0, 0);
+      model.gaussianModel.rotation.set(0, 0, 0);
+      model.gaussianModel.scale.set(1, 1, 1);
+    } else if (model.object3D) {
+      model.object3D.position.set(0, 0, 0);
+      model.object3D.rotation.set(0, 0, 0);
+      model.object3D.scale.set(1, 1, 1);
+    }
 
     return true;
   }
@@ -593,13 +1034,10 @@ export class EditorApp {
    * Clear all models
    */
   clearAllModels(): void {
-    this.editorModels.forEach((model) => {
-      if (model.modelEntry) {
-        this.modelManager.removeModel(model.modelEntry.id);
-        this.onnxManager.disposeModel(model.modelEntry.id);
-      }
+    const ids = Array.from(this.editorModels.keys());
+    ids.forEach((id) => {
+      this.removeModel(id);
     });
-    this.editorModels.clear();
     this.notifyModelsChanged();
     console.log('[EditorApp] All models cleared');
   }
@@ -637,9 +1075,13 @@ export class EditorApp {
     }
 
     this.renderMode = mode;
+    this.fusedRenderer?.setPreviewMode(mode);
     let updated = 0;
     this.editorModels.forEach((model) => {
       if (this.applyRenderModeToModelEntry(model.modelEntry, mode)) {
+        updated += 1;
+      }
+      if (model.object3D && this.applyRenderModeToMeshObject(model.object3D, mode)) {
         updated += 1;
       }
     });
@@ -836,6 +1278,20 @@ export class EditorApp {
 
   private getModelFocusPoint(model: EditorModel): vec3 | null {
     const fallback = vec3.fromValues(model.position.x, model.position.y, model.position.z);
+    if (model.gaussianModel) {
+      const worldAabb = model.gaussianModel.getWorldAABB();
+      if (worldAabb) {
+        const c = worldAabb.center();
+        return vec3.fromValues(c[0], c[1], c[2]);
+      }
+    }
+    if (model.object3D) {
+      const box = new THREE.Box3().setFromObject(model.object3D);
+      if (!box.isEmpty()) {
+        const center = box.getCenter(new THREE.Vector3());
+        return vec3.fromValues(center.x, center.y, center.z);
+      }
+    }
     if (!model.modelEntry) return fallback;
 
     const pc = model.modelEntry.pointCloud as any;
@@ -870,6 +1326,48 @@ export class EditorApp {
   }
 
   /**
+   * Get camera pose used by timeline keyframes.
+   */
+  getCameraPose(): EditorCameraPose | null {
+    const camera = this.getCamera();
+    if (!camera) return null;
+    return {
+      ...camera,
+      fovDegrees: this.getSceneCameraFovDegrees(),
+    };
+  }
+
+  /**
+   * Set camera pose from timeline keyframe.
+   */
+  setCameraPose(pose: Partial<EditorCameraPose> | null | undefined): boolean {
+    if (!pose?.position || !pose?.rotation) return false;
+
+    const px = Number(pose.position.x);
+    const py = Number(pose.position.y);
+    const pz = Number(pose.position.z);
+    const qx = Number(pose.rotation.x);
+    const qy = Number(pose.rotation.y);
+    const qz = Number(pose.rotation.z);
+    const qw = Number(pose.rotation.w);
+
+    if (![px, py, pz, qx, qy, qz, qw].every((v) => Number.isFinite(v))) {
+      return false;
+    }
+
+    const pos = vec3.fromValues(px, py, pz);
+    const rot = quat.fromValues(qx, qy, qz, qw);
+    const ok = this.cameraManager.setCameraPose(pos, rot);
+    if (!ok) return false;
+
+    if (Number.isFinite(Number(pose.fovDegrees))) {
+      this.setSceneCameraFovDegrees(Number(pose.fovDegrees));
+    }
+
+    return true;
+  }
+
+  /**
    * Reset camera
    */
   resetCamera(): void {
@@ -893,6 +1391,12 @@ export class EditorApp {
     this.sceneBackgroundColor = [parsed[0], parsed[1], parsed[2], 1.0];
     this.sceneSkyPresetId = "custom";
     this.renderLoop.setBackgroundColor(this.sceneBackgroundColor);
+    if (this.meshRenderer) {
+      this.meshRenderer.setClearColor(
+        new THREE.Color(this.sceneBackgroundColor[0], this.sceneBackgroundColor[1], this.sceneBackgroundColor[2]),
+        this.sceneBackgroundColor[3]
+      );
+    }
     return true;
   }
 
@@ -930,6 +1434,20 @@ export class EditorApp {
   }
 
   /**
+   * Get scene camera vertical FOV in degrees.
+   */
+  getSceneCameraFovDegrees(): number {
+    return this.cameraManager.getFovDegrees() ?? 45;
+  }
+
+  /**
+   * Set scene camera vertical FOV in degrees.
+   */
+  setSceneCameraFovDegrees(value: number): boolean {
+    return this.cameraManager.setFovDegrees(value);
+  }
+
+  /**
    * Set depth visualization range scale (0.01 - 100.0).
    */
   setSceneDepthRangeScale(scale: number): boolean {
@@ -937,6 +1455,12 @@ export class EditorApp {
     const safe = Math.max(0.01, Math.min(100, scale));
     this.sceneDepthRangeScale = safe;
     this.renderLoop.setDepthRangeScale(safe);
+    this.fusedRenderer?.setDepthRangeScale(safe);
+    this.editorModels.forEach((model) => {
+      if (model.object3D) {
+        this.syncMeshDepthRangeUniform(model.object3D);
+      }
+    });
     return true;
   }
 
@@ -965,8 +1489,17 @@ export class EditorApp {
     if (!this.canvas) return;
     this.cameraManager.resize(this.canvas);
 
-    if (this.renderer) {
-      // Render loop handles renderer resize
+    if (this.meshCanvas && this.canvas) {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const rect = this.canvas.getBoundingClientRect();
+      const w = Math.max(1, Math.floor(rect.width * dpr));
+      const h = Math.max(1, Math.floor(rect.height * dpr));
+      if (this.meshCanvas.width !== w) this.meshCanvas.width = w;
+      if (this.meshCanvas.height !== h) this.meshCanvas.height = h;
+      if (this.meshRenderer) {
+        this.meshRenderer.setPixelRatio(dpr);
+        this.meshRenderer.setSize(rect.width || 1, rect.height || 1, false);
+      }
     }
   }
 
@@ -1021,15 +1554,26 @@ export class EditorApp {
    */
   dispose(): void {
     this.renderLoop.stop();
+    this.stopMeshRenderLoop();
     this.clearAllModels();
 
     if (this.renderer) {
       const rendererWithDispose = this.renderer as unknown as { dispose?: () => void };
       rendererWithDispose.dispose?.();
     }
+    if (this.meshRenderer) {
+      this.meshRenderer.dispose();
+    }
+    if (this.meshCanvas && this.meshCanvas !== this.canvas && this.meshCanvas.parentElement) {
+      this.meshCanvas.parentElement.removeChild(this.meshCanvas);
+    }
 
     this.gpu = null;
     this.renderer = null;
+    this.meshRenderer = null;
+    this.meshScene = null;
+    this.meshCamera = null;
+    this.meshCanvas = null;
 
     console.log('[EditorApp] Disposed');
   }

@@ -373,6 +373,82 @@ export class CameraManager {
   }
 
   /**
+   * Get vertical FOV in degrees.
+   */
+  getFovDegrees(): number | null {
+    if (!this.camera) return null;
+    return this.camera.projection.fovy * 180 / Math.PI;
+  }
+
+  /**
+   * Set vertical FOV in degrees and update paired horizontal FOV by current aspect.
+   */
+  setFovDegrees(value: number): boolean {
+    if (!this.camera || !Number.isFinite(value)) return false;
+
+    const clamped = Math.max(1, Math.min(179, value));
+    const fovy = deg2rad(clamped);
+    const width = Math.max(1, this.canvasElement?.width || 1);
+    const height = Math.max(1, this.canvasElement?.height || 1);
+    const aspect = width / height;
+    const fovx = 2 * Math.atan(Math.tan(fovy * 0.5) * Math.max(aspect, 1e-6));
+
+    this.camera.projection = new PerspectiveProjection(
+      [width, height],
+      [fovx, fovy],
+      this.camera.projection.znear,
+      this.camera.projection.zfar
+    );
+
+    return true;
+  }
+
+  /**
+   * Apply external camera pose and synchronize active controller state.
+   */
+  setCameraPose(position: vec3, rotation: quat): boolean {
+    if (!this.camera) return false;
+
+    vec3.copy(this.camera.positionV, position);
+    quat.copy(this.camera.rotationQ, rotation);
+    quat.normalize(this.camera.rotationQ, this.camera.rotationQ);
+
+    if (this.controllerType === 'orbit' && this.controller instanceof CameraController) {
+      const c2w = quat.invert(quat.create(), this.camera.rotationQ);
+      const forward = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 0, 1), c2w);
+      const up = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 1, 0), c2w);
+
+      if (vec3.length(forward) > 1e-6) {
+        vec3.normalize(forward, forward);
+      } else {
+        vec3.set(forward, 0, 0, 1);
+      }
+
+      let dist = vec3.distance(this.camera.positionV, this.controller.center);
+      if (!Number.isFinite(dist) || dist < 1e-3) {
+        dist = 3.0;
+      }
+      const center = vec3.scaleAndAdd(vec3.create(), this.camera.positionV, forward, dist);
+      this.syncOrbitAfterExternalLookAt(center, up);
+      return true;
+    }
+
+    if (this.controllerType === 'fps' && this.controller instanceof FPSController) {
+      const c2w = quat.invert(quat.create(), this.camera.rotationQ);
+      const forward = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 0, -1), c2w);
+      const horizontalLength = Math.sqrt(forward[0] * forward[0] + forward[2] * forward[2]);
+      const yaw = Math.atan2(forward[0], forward[2]);
+      const pitch = Math.atan2(-forward[1], Math.max(horizontalLength, 1e-6));
+      this.controller.setOrientation(yaw, pitch);
+      this.controller.leftMousePressed = false;
+      this.controller.rightMousePressed = false;
+      return true;
+    }
+
+    return true;
+  }
+
+  /**
    * Set orbit controller center point
    */
   setOrbitCenter(center: vec3): void {

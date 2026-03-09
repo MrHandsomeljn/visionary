@@ -124,8 +124,13 @@ export class GLTFLoaderAdapter extends ThreeJSLoaderAdapter<THREE.Group> {
       this.loader.load(
         url,
         (gltf: any) => {
-          // 保留 GLTF 自带材质，仅补充阴影配置
-          this.applyShadowsAndMaterial(gltf.scene);
+          // 保留 GLTF 自带材质；若扩展材质不可用导致材质缺失，则回退标准材质
+          const fallbackMaterial = new THREE.MeshStandardMaterial({
+            color: 0xbfc7d6,
+            roughness: 0.8,
+            metalness: 0.05
+          });
+          this.applyShadowsAndMaterial(gltf.scene, fallbackMaterial);
           resolve(gltf.scene);
         },
         (progress: any) => {
