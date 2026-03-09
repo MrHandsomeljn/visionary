@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.0.8
+ * Visionary Editor UI Controller 0.0.9
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -109,9 +109,10 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.0.8',
+    VERSION: '0.0.9',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
+    cameraSequenceVisible: true,
     currentTime: 0,
     isPlaying: false,
     isLooping: false,
@@ -144,6 +145,7 @@ const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
 const TIMELINE_MIN_DURATION_SEC = 10;
 const TIMELINE_SLIDER_THUMB_PX = 16;
 const EXPORT_FALLBACK_FPS = 24;
+const CAMERA_SEQUENCE_LIST_ITEM_ID = '__editor_camera_sequence__';
 const EXPORT_PRESET_RESOLUTIONS = [
     { width: 1280, height: 720, label: '1280 x 720 (720p)' },
     { width: 1920, height: 1080, label: '1920 x 1080 (1080p)' },
@@ -501,27 +503,70 @@ function updateModelCount() {
     dom.modelCountBadge.textContent = `${visibleCount}/${totalCount}`;
 }
 
+function syncCameraSequenceVisibilityState() {
+    if (typeof app?.getCameraSequenceVisible === 'function') {
+        const visible = app.getCameraSequenceVisible();
+        if (typeof visible === 'boolean') {
+            state.cameraSequenceVisible = visible;
+        }
+    }
+    return Boolean(state.cameraSequenceVisible);
+}
+
+function setCameraSequenceVisibility(nextVisible, silent = false) {
+    const safe = Boolean(nextVisible);
+    const ok = app?.setCameraSequenceVisible?.(safe);
+    if (ok === false) {
+        showError('设置相机序列可见性失败');
+        return false;
+    }
+    state.cameraSequenceVisible = safe;
+    updateModelList();
+    if (!silent) {
+        showInfo(`相机序列: ${safe ? '可见' : '隐藏'}`);
+    }
+    return true;
+}
+
 /**
  * 更新模型列表 UI
  */
 function updateModelList() {
     if (!app || !dom.modelList) return;
     const models = app.getModels();
+    const cameraSequenceVisible = syncCameraSequenceVisibilityState();
+    const cameraSequenceItemHtml = `
+        <div class="model-item model-item-system" data-id="${CAMERA_SEQUENCE_LIST_ITEM_ID}" data-system-item="camera-sequence">
+            <span class="model-name">相机序列</span>
+            <button class="model-visibility-btn ${cameraSequenceVisible ? 'active' : ''}" data-system-action="toggle-camera-sequence-visibility" title="切换可见性">
+                ${cameraSequenceVisible ? '可见' : '隐藏'}
+            </button>
+        </div>
+    `;
 
     if (models.length === 0) {
-        dom.modelList.innerHTML = '<div class="empty-list">' +
+        dom.modelList.innerHTML = cameraSequenceItemHtml + '<div class="empty-list">' +
             '<p>暂无模型</p>' +
             '<p class="empty-hint">拖拽文件到此处，或点击下方按钮</p>' +
             '</div>';
+        dom.modelList.querySelectorAll('.model-visibility-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const systemAction = btn.dataset.systemAction;
+                if (systemAction === 'toggle-camera-sequence-visibility') {
+                    setCameraSequenceVisibility(!state.cameraSequenceVisible);
+                }
+            });
+        });
     } else {
-        dom.modelList.innerHTML = models.map((model) => `
+        dom.modelList.innerHTML = cameraSequenceItemHtml + models.map((model) => `
             <div class="model-item ${state.selectedModelId === model.id ? 'selected' : ''}" data-id="${model.id}">
                 <span class="model-name">${model.name}</span>
                 <span class="model-points">${model.pointCount.toLocaleString()} 点</span>
                 <button class="model-visibility-btn ${model.visible ? 'active' : ''}" data-id="${model.id}" title="切换可见性">
                     ${model.visible ? '可见' : '隐藏'}
                 </button>
-                <span class="model-remove" data-id="${model.id}" title="删除">删除</span>
+                <span class="model-remove" data-id="${model.id}" title="删除">&times;</span>
             </div>
         `).join('');
 
@@ -540,6 +585,11 @@ function updateModelList() {
         dom.modelList.querySelectorAll('.model-visibility-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                const systemAction = btn.dataset.systemAction;
+                if (systemAction === 'toggle-camera-sequence-visibility') {
+                    setCameraSequenceVisibility(!state.cameraSequenceVisible);
+                    return;
+                }
                 const id = btn.dataset.id;
                 const model = app.getModel(id);
                 if (!model) return;
@@ -553,6 +603,7 @@ function updateModelList() {
         // 绑定点击选择事件
         dom.modelList.querySelectorAll('.model-item').forEach(item => {
             item.addEventListener('click', () => {
+                if (item.dataset.systemItem === 'camera-sequence') return;
                 selectModel(item.dataset.id);
             });
         });
@@ -1017,6 +1068,20 @@ async function withTemporaryPreviewMode(mode, fn) {
     }
 }
 
+async function withTemporaryCameraSequenceHidden(fn) {
+    const previousVisible = syncCameraSequenceVisibilityState();
+    if (previousVisible) {
+        setCameraSequenceVisibility(false, true);
+    }
+    try {
+        return await fn();
+    } finally {
+        if (previousVisible) {
+            setCameraSequenceVisibility(true, true);
+        }
+    }
+}
+
 function buildExportTimelineController(recordingCamera, exportFov) {
     const callbacks = new Set();
     const maxFrame = Math.max(0, getTimelineTotalFrames());
@@ -1203,14 +1268,16 @@ async function onConfirmExportModal() {
     showLoading(true, pendingExportType === 'video' ? '渲染视频中...' : '渲染图片中...', 10);
 
     try {
-        await withTemporaryPreviewMode(options.mode, async () => {
-            if (pendingExportType === 'image') {
-                await exportImageWithOfficialPipeline(options);
-                showInfo(`图片导出完成: ${options.resolution.width}x${options.resolution.height}, ${getExportModeLabel(options.mode)}`);
-                return;
-            }
-            await exportVideoWithOfficialPipeline(options);
-            showInfo(`视频导出完成: ${options.resolution.width}x${options.resolution.height}, ${getExportModeLabel(options.mode)}`);
+        await withTemporaryCameraSequenceHidden(async () => {
+            await withTemporaryPreviewMode(options.mode, async () => {
+                if (pendingExportType === 'image') {
+                    await exportImageWithOfficialPipeline(options);
+                    showInfo(`图片导出完成: ${options.resolution.width}x${options.resolution.height}, ${getExportModeLabel(options.mode)}`);
+                    return;
+                }
+                await exportVideoWithOfficialPipeline(options);
+                showInfo(`视频导出完成: ${options.resolution.width}x${options.resolution.height}, ${getExportModeLabel(options.mode)}`);
+            });
         });
         isExporting = false;
         setExportModalBusy(false);
@@ -1482,6 +1549,7 @@ async function loadScene() {
         state.selectedFrame = 0;
         state.currentTime = 0;
         updateTimelineUI();
+        syncCameraSequenceVisualization();
         closeEditor();
 
         const envBgHex = toHexFromBgColor(raw?.env?.bgColor);
@@ -1579,6 +1647,7 @@ function clearScene() {
         state.selectedFrame = 0;
         state.currentTime = 0;
         updateTimelineUI();
+        syncCameraSequenceVisualization();
         app.clearAllModels();
         closeEditor();
         showInfo('场景已清空');
@@ -1591,6 +1660,66 @@ function clearScene() {
 function openModelFileSelector() {
     console.log(`[Editor ${state.VERSION}] Opening file selector...`);
     dom.fileInput?.click();
+}
+
+function syncCameraSequenceVisualization() {
+    if (!app?.setCameraSequenceVisualization) return;
+    const keyframes = (Array.isArray(state.keyframes) ? state.keyframes : []).map((item) => ({
+        frame: Math.round(Number(item.frame) || 0),
+        time: Number(item.time) || 0,
+        camera: item.camera,
+    }));
+    const trajectory = buildSampledCameraTrajectory();
+    app.setCameraSequenceVisualization(keyframes, state.selectedFrame, trajectory);
+}
+
+function buildSampledCameraTrajectory() {
+    if (!Array.isArray(state.keyframes) || state.keyframes.length === 0) return [];
+    if (state.keyframes.length === 1) {
+        const camera = state.keyframes[0]?.camera;
+        if (!camera?.position) return [];
+        return [{
+            x: Number(camera.position.x) || 0,
+            y: Number(camera.position.y) || 0,
+            z: Number(camera.position.z) || 0,
+        }];
+    }
+
+    const totalFrames = getTimelineTotalFrames();
+    const maxSamples = 3000;
+    const step = Math.max(1, Math.ceil((totalFrames + 1) / maxSamples));
+    const points = [];
+
+    for (let frame = 0; frame <= totalFrames; frame += step) {
+        const time = frameToTime(frame);
+        const pose = interpolateCameraPoseAt(time);
+        if (!pose?.position) continue;
+        points.push({
+            x: Number(pose.position.x) || 0,
+            y: Number(pose.position.y) || 0,
+            z: Number(pose.position.z) || 0,
+        });
+    }
+
+    // Ensure terminal point is included even when sampling step > 1.
+    const endPose = interpolateCameraPoseAt(frameToTime(totalFrames));
+    if (endPose?.position) {
+        const endPoint = {
+            x: Number(endPose.position.x) || 0,
+            y: Number(endPose.position.y) || 0,
+            z: Number(endPose.position.z) || 0,
+        };
+        const last = points[points.length - 1];
+        const isDifferent = !last ||
+            Math.abs(last.x - endPoint.x) > 1e-6 ||
+            Math.abs(last.y - endPoint.y) > 1e-6 ||
+            Math.abs(last.z - endPoint.z) > 1e-6;
+        if (isDifferent) {
+            points.push(endPoint);
+        }
+    }
+
+    return points;
 }
 
 function getTimelineTotalFrames() {
@@ -1658,8 +1787,12 @@ function setTimelineFrame(frame, options = {}) {
     if (dom.timelineSlider && options.syncSlider !== false) {
         dom.timelineSlider.value = String(safeFrame);
     }
-    updateTimeDisplay();
-    updateTimelineUI();
+    if (options.lightweightUi) {
+        updateTimeDisplay();
+        updateTimelineCursorOnly();
+    } else {
+        updateTimelineUI();
+    }
 }
 
 function setTimelineFps(nextFpsRaw) {
@@ -1693,6 +1826,7 @@ function setTimelineFps(nextFpsRaw) {
     }
 
     setTimelineFrame(timeToFrame(previousTime), { applyPose: false, syncSlider: true });
+    syncCameraSequenceVisualization();
     if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
         updateExportTimelineHint('video');
     }
@@ -1795,6 +1929,7 @@ function onKeyframeMarkerDragMove(event) {
     keyframeMarkerDrag.moved = true;
     suppressMarkerClickOnce = true;
     setTimelineFrame(nextFrame, { applyPose: false, syncSlider: true });
+    syncCameraSequenceVisualization();
 
     if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
         updateExportTimelineHint('video');
@@ -1881,6 +2016,31 @@ function timelineMappedLeftStyle(ratio) {
     return `calc((100% - ${TIMELINE_SLIDER_THUMB_PX}px) * ${r} + ${TIMELINE_SLIDER_THUMB_PX / 2}px)`;
 }
 
+function updateTimelineCursorOnly() {
+    const totalFrames = getTimelineTotalFrames();
+    const ratio = totalFrames > 0 ? (state.selectedFrame / totalFrames) : 0;
+    const leftStyle = timelineMappedLeftStyle(ratio);
+
+    const rulerCursor = dom.timelineRuler?.querySelector('.timeline-ruler-cursor');
+    if (rulerCursor instanceof HTMLElement) {
+        rulerCursor.style.left = leftStyle;
+    }
+
+    const trackCursor = dom.timelineTrack?.querySelector('.timeline-track-cursor');
+    if (trackCursor instanceof HTMLElement) {
+        trackCursor.style.left = leftStyle;
+    }
+
+    dom.timelineTrack?.querySelectorAll('.timeline-keyframe-marker').forEach((marker) => {
+        const frame = Number(marker.dataset.frame);
+        marker.classList.toggle('selected', frame === state.selectedFrame);
+    });
+
+    if (dom.btnRemoveKeyframe) {
+        dom.btnRemoveKeyframe.disabled = findKeyframeIndexByFrame(state.selectedFrame) < 0;
+    }
+}
+
 function updateTimelineUI() {
     const totalFrames = getTimelineTotalFrames();
 
@@ -1929,6 +2089,7 @@ function addKeyframe() {
 
     state.currentKeyframeIndex = findKeyframeIndexByFrame(frame);
     updateTimelineUI();
+    syncCameraSequenceVisualization();
     if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
         updateExportTimelineHint('video');
     }
@@ -1948,6 +2109,7 @@ function removeKeyframe() {
     const removed = state.keyframes.splice(index, 1)[0];
     state.currentKeyframeIndex = findKeyframeIndexByFrame(frame);
     updateTimelineUI();
+    syncCameraSequenceVisualization();
     if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
         updateExportTimelineHint('video');
     }
@@ -2083,14 +2245,24 @@ function tickTimelinePlayback(timestamp) {
     const nextTime = state.currentTime + dt;
     if (nextTime >= duration) {
         if (state.isLooping) {
-            setTimelineFrame(0, { applyPose: true, syncSlider: true });
+            if (state.selectedFrame !== 0) {
+                setTimelineFrame(0, { applyPose: true, syncSlider: true, lightweightUi: true });
+            } else {
+                state.currentTime = 0;
+                updateTimeDisplay();
+            }
         } else {
             stopTimelinePlayback(true);
             return;
         }
     } else {
         const nextFrame = timeToFrame(nextTime);
-        setTimelineFrame(nextFrame, { applyPose: true, syncSlider: true });
+        if (nextFrame !== state.selectedFrame) {
+            setTimelineFrame(nextFrame, { applyPose: true, syncSlider: true, lightweightUi: true });
+        } else {
+            state.currentTime = nextTime;
+            updateTimeDisplay();
+        }
     }
 
     timelinePlaybackRaf = requestAnimationFrame(tickTimelinePlayback);
@@ -2163,6 +2335,7 @@ function initTimelineUI() {
         dom.timelineFps.value = String(state.timelineFps);
     }
     setTimelineFrame(0, { applyPose: false, syncSlider: true });
+    syncCameraSequenceVisualization();
 }
 
 /**
@@ -2434,11 +2607,18 @@ async function init() {
         showError('Failed to initialize editor');
         return;
     }
+    state.cameraSequenceVisible = Boolean(app.getCameraSequenceVisible?.() ?? state.cameraSequenceVisible);
 
     // 注册模型变化回调
     app.onModelsChanged((models) => {
         updateModelList();
         updateModelAnimationControls(state.selectedModelId);
+    });
+    app.onCameraInteraction?.((kind) => {
+        if (!state.isPlaying) return;
+        if (kind !== 'drag' && kind !== 'wheel' && kind !== 'keyboard') return;
+        stopTimelinePlayback(false);
+        showInfo('相机动画: 已暂停（手动控制）');
     });
 
     registerDebugHooks();

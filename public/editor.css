@@ -1,4 +1,4 @@
-/* Visionary Editor Styles 0.0.8 */
+/* Visionary Editor Styles 0.0.9 */
 
 :root {
     --bg-color: #0a0a0f;
@@ -1399,6 +1399,14 @@ body {
     border-color: var(--accent);
 }
 
+.model-item-system {
+    cursor: default;
+}
+
+.model-item-system:hover {
+    background: var(--input-bg);
+}
+
 .model-name {
     font-size: 13px;
     font-weight: 500;
@@ -1442,8 +1450,9 @@ body {
 }
 
 .model-remove {
-    min-width: 40px;
-    padding: 0 6px;
+    min-width: 22px;
+    width: 22px;
+    padding: 0;
     height: 24px;
     background: transparent;
     border: 1px solid var(--border-color);
@@ -1454,7 +1463,8 @@ body {
     align-items: center;
     justify-content: center;
     transition: all 0.2s ease;
-    font-size: 11px;
+    font-size: 15px;
+    line-height: 1;
 }
 
 .model-remove:hover {

@@ -1,5 +1,5 @@
 /**
- * Visionary Editor Application 0.0.8
+ * Visionary Editor Application 0.0.9
  * Editor version of main app with UI controls
  */
 
@@ -82,6 +82,12 @@ const EDITOR_DEPTH_RANGE_UNIFORM_KEY = "__editorDepthRangeUniform";
 const EDITOR_DEPTH_RANGE_VALUE_KEY = "__editorDepthRangeValue";
 const EDITOR_DEPTH_RANGE_UNIFORM_NAME = "uEditorDepthRange";
 const EDITOR_DEPTH_BASE_EXTENT_KEY = "__editorDepthBaseExtent";
+const EDITOR_CAMERA_SEQUENCE_HELPER_KEY = "__visionaryEditorHelper";
+const CAMERA_SEQUENCE_FRUSTUM_COLOR = 0x22c55e;
+const CAMERA_SEQUENCE_PATH_COLOR = 0x4a90d9;
+const CAMERA_SEQUENCE_CURRENT_COLOR = 0xf59e0b;
+const CAMERA_SEQUENCE_FRUSTUM_RADIUS_FACTOR = 0.022;
+const CAMERA_SEQUENCE_PATH_RADIUS_FACTOR = 0.026;
 
 /**
  * Editor model data - tracks models with UI state
@@ -116,6 +122,18 @@ interface EditorRenderCameraSnapshot {
   near: number;
   far: number;
   aspect: number;
+}
+
+interface EditorTimelineCameraKeyframe {
+  frame: number;
+  time: number;
+  camera: EditorCameraPose;
+}
+
+interface EditorCameraTrajectoryPoint {
+  x: number;
+  y: number;
+  z: number;
 }
 
 /**
@@ -157,6 +175,10 @@ export class EditorApp {
   private sceneSkyPresetId: string = "night";
   private sceneDepthRangeScale: number = 1.0;
   private renderMode: EditorRenderMode = "color";
+  private cameraSequenceVisible: boolean = true;
+  private cameraSequenceGroup: THREE.Group | null = null;
+  private cameraSequenceCurrentMarker: THREE.Mesh | null = null;
+  private onCameraInteractionCallback: ((kind: "drag" | "wheel" | "keyboard") => void) | null = null;
 
   // Mouse state for camera control
   private lastMouseX = 0;
@@ -166,7 +188,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = "0.0.8";
+  readonly VERSION = "0.0.9";
 
   constructor() {
     this.modelManager = new ModelManager(MAX_MODELS);
@@ -309,6 +331,9 @@ export class EditorApp {
         const dy = e.clientY - this.lastMouseY;
         this.lastMouseX = e.clientX;
         this.lastMouseY = e.clientY;
+        if (Math.abs(dx) > 0 || Math.abs(dy) > 0) {
+          this.notifyCameraInteraction("drag");
+        }
         const controller = this.cameraManager.getController();
         controller.processMouse(-dx, -dy);
       }
@@ -317,6 +342,7 @@ export class EditorApp {
     // Wheel event
     this.canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
+      this.notifyCameraInteraction("wheel");
       const controller = this.cameraManager.getController();
       controller.processScroll(e.deltaY > 0 ? 0.05 : -0.05);
     }, { passive: false });
@@ -393,6 +419,7 @@ export class EditorApp {
 
         this.cameraManager.update(dt);
         this.syncMeshCameraFromCoreCamera();
+        this.updateCameraSequenceCurrentMarkerFromMeshCamera();
 
         if (this.fusedRenderer) {
           await this.fusedRenderer.updateDynamicModels(this.meshCamera, (now - this.fusionStartTime) / 500.0);
@@ -649,6 +676,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       const handled = controller.processKeyboard(mappedCode, true);
       if (handled) {
         this.activeCameraKeys.add(mappedCode);
+        this.notifyCameraInteraction("keyboard");
         event.preventDefault();
       }
       return;
@@ -1491,6 +1519,340 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   }
 
   /**
+   * Visualize camera keyframes as frustums and center trajectory in 3D scene.
+   * Reuses the same frustum geometry convention as RecordingCamera gizmo.
+   */
+  setCameraSequenceVisualization(
+    keyframes: EditorTimelineCameraKeyframe[],
+    selectedFrame?: number | null,
+    sampledTrajectory?: EditorCameraTrajectoryPoint[]
+  ): boolean {
+    if (!this.meshScene) return false;
+    const group = this.ensureCameraSequenceGroup();
+    if (!group) return false;
+    group.visible = this.cameraSequenceVisible;
+
+    this.clearCameraSequenceGroupContents();
+
+    const normalized = (Array.isArray(keyframes) ? keyframes : [])
+      .filter((item) => item && item.camera && item.camera.position && item.camera.rotation)
+      .map((item) => ({
+        frame: Math.round(Number(item.frame) || 0),
+        time: Number(item.time) || 0,
+        camera: item.camera,
+      }))
+      .sort((a, b) => a.frame - b.frame);
+
+    if (normalized.length === 0) {
+      return true;
+    }
+
+    const centers = normalized.map((item) =>
+      new THREE.Vector3(
+        Number(item.camera.position.x) || 0,
+        Number(item.camera.position.y) || 0,
+        Number(item.camera.position.z) || 0
+      )
+    );
+    const sampledCenters = (Array.isArray(sampledTrajectory) ? sampledTrajectory : [])
+      .map((p) => new THREE.Vector3(Number(p?.x) || 0, Number(p?.y) || 0, Number(p?.z) || 0))
+      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
+
+    const aspect = this.meshCamera && Number.isFinite(this.meshCamera.aspect) && this.meshCamera.aspect > 0
+      ? this.meshCamera.aspect
+      : 16 / 9;
+    const frustumLength = this.computeCameraSequenceFrustumLength();
+    const selected = Number.isFinite(Number(selectedFrame)) ? Math.round(Number(selectedFrame)) : null;
+
+    const frustumRadius = Math.max(0.003, frustumLength * CAMERA_SEQUENCE_FRUSTUM_RADIUS_FACTOR);
+    const pathRadius = Math.max(0.003, frustumLength * CAMERA_SEQUENCE_PATH_RADIUS_FACTOR);
+
+    for (const item of normalized) {
+      const color = selected !== null && item.frame === selected
+        ? CAMERA_SEQUENCE_CURRENT_COLOR
+        : CAMERA_SEQUENCE_FRUSTUM_COLOR;
+      const frustum = this.buildCameraFrustumWireframe(
+        item.camera,
+        aspect,
+        frustumLength,
+        frustumRadius,
+        color
+      );
+      if (frustum) {
+        group.add(frustum);
+      }
+    }
+
+    const pathPoints = sampledCenters.length >= 2 ? sampledCenters : centers;
+    if (pathPoints.length >= 2) {
+      for (let i = 1; i < pathPoints.length; i++) {
+        const segment = this.buildThickLineSegment(
+          pathPoints[i - 1],
+          pathPoints[i],
+          pathRadius,
+          CAMERA_SEQUENCE_PATH_COLOR,
+          0.9
+        );
+        if (segment) {
+          group.add(segment);
+        }
+      }
+    }
+
+    const markerRadius = Math.max(0.02, frustumLength * 0.08);
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(markerRadius, 12, 8),
+      new THREE.MeshBasicMaterial({
+        color: CAMERA_SEQUENCE_CURRENT_COLOR,
+        transparent: false,
+        depthTest: true,
+        depthWrite: true,
+      })
+    );
+    marker.renderOrder = 0;
+    marker.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
+    group.add(marker);
+    this.cameraSequenceCurrentMarker = marker;
+    this.updateCameraSequenceCurrentMarkerFromMeshCamera();
+
+    return true;
+  }
+
+  clearCameraSequenceVisualization(): void {
+    this.clearCameraSequenceGroupContents();
+  }
+
+  setCameraSequenceVisible(visible: boolean): boolean {
+    this.cameraSequenceVisible = !!visible;
+    if (this.cameraSequenceGroup) {
+      this.cameraSequenceGroup.visible = this.cameraSequenceVisible;
+      this.cameraSequenceGroup.updateMatrixWorld(true);
+    }
+    return true;
+  }
+
+  getCameraSequenceVisible(): boolean {
+    return this.cameraSequenceVisible;
+  }
+
+  onCameraInteraction(callback: ((kind: "drag" | "wheel" | "keyboard") => void) | null): void {
+    this.onCameraInteractionCallback = callback;
+  }
+
+  private ensureCameraSequenceGroup(): THREE.Group | null {
+    if (!this.meshScene) return null;
+    if (this.cameraSequenceGroup && this.cameraSequenceGroup.parent === this.meshScene) {
+      return this.cameraSequenceGroup;
+    }
+
+    const group = new THREE.Group();
+    group.name = "EditorCameraSequence";
+    group.visible = this.cameraSequenceVisible;
+    group.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
+    this.meshScene.add(group);
+    this.cameraSequenceGroup = group;
+    return group;
+  }
+
+  private clearCameraSequenceGroupContents(): void {
+    if (!this.cameraSequenceGroup) {
+      this.cameraSequenceCurrentMarker = null;
+      return;
+    }
+
+    while (this.cameraSequenceGroup.children.length > 0) {
+      const child = this.cameraSequenceGroup.children.pop();
+      if (!child) continue;
+      this.disposeObject3DResources(child);
+      this.cameraSequenceGroup.remove(child);
+    }
+    this.cameraSequenceCurrentMarker = null;
+  }
+
+  private disposeObject3DResources(object: THREE.Object3D): void {
+    object.traverse((node) => {
+      const asMesh = node as THREE.Mesh;
+      const geometry = asMesh.geometry as THREE.BufferGeometry | undefined;
+      if (geometry && typeof geometry.dispose === "function") {
+        geometry.dispose();
+      }
+
+      const materialCandidate = asMesh.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(materialCandidate)) {
+        materialCandidate.forEach((material) => material?.dispose?.());
+      } else {
+        materialCandidate?.dispose?.();
+      }
+    });
+  }
+
+  private computeCameraSequenceFrustumLength(): number {
+    const sceneBounds = new THREE.Box3();
+    let hasBounds = false;
+
+    // Use current model bounds as the stable scale reference.
+    // This avoids helper thickness/size changing when only keyframe count changes.
+    for (const model of this.editorModels.values()) {
+      if (!model?.visible) continue;
+
+      if (model.object3D) {
+        const meshBounds = new THREE.Box3().setFromObject(model.object3D);
+        if (!meshBounds.isEmpty()) {
+          sceneBounds.union(meshBounds);
+          hasBounds = true;
+        }
+      }
+
+      const gaussianAabb = (model.gaussianModel as any)?.getWorldAABB?.();
+      const min = gaussianAabb?.min as [number, number, number] | undefined;
+      const max = gaussianAabb?.max as [number, number, number] | undefined;
+      if (
+        min && max &&
+        Number.isFinite(min[0]) && Number.isFinite(min[1]) && Number.isFinite(min[2]) &&
+        Number.isFinite(max[0]) && Number.isFinite(max[1]) && Number.isFinite(max[2])
+      ) {
+        sceneBounds.expandByPoint(new THREE.Vector3(min[0], min[1], min[2]));
+        sceneBounds.expandByPoint(new THREE.Vector3(max[0], max[1], max[2]));
+        hasBounds = true;
+      }
+    }
+
+    if (!hasBounds || sceneBounds.isEmpty()) {
+      return 0.35;
+    }
+
+    const size = sceneBounds.getSize(new THREE.Vector3());
+    const span = Math.max(size.x, size.y, size.z);
+    if (!Number.isFinite(span) || span <= 0) {
+      return 0.35;
+    }
+    return Math.max(0.15, Math.min(3.0, span * 0.08));
+  }
+
+  private buildCameraFrustumWireframe(
+    pose: EditorCameraPose,
+    aspect: number,
+    frustumLength: number,
+    lineRadius: number,
+    color: number
+  ): THREE.Group | null {
+    const px = Number(pose?.position?.x);
+    const py = Number(pose?.position?.y);
+    const pz = Number(pose?.position?.z);
+    const qx = Number(pose?.rotation?.x);
+    const qy = Number(pose?.rotation?.y);
+    const qz = Number(pose?.rotation?.z);
+    const qw = Number(pose?.rotation?.w);
+    const fov = Number(pose?.fovDegrees);
+
+    if (![px, py, pz, qx, qy, qz, qw].every((v) => Number.isFinite(v))) {
+      return null;
+    }
+
+    const center = new THREE.Vector3(px, py, pz);
+    const w2c = new THREE.Quaternion(qx, qy, qz, qw);
+    const c2w = w2c.clone().invert();
+
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(c2w).normalize();
+    let up = new THREE.Vector3(0, 1, 0).applyQuaternion(c2w).normalize();
+    let right = new THREE.Vector3().crossVectors(forward, up);
+    if (right.lengthSq() < 1e-8) {
+      right = new THREE.Vector3(1, 0, 0);
+      up = new THREE.Vector3(0, 1, 0);
+    } else {
+      right.normalize();
+      up = new THREE.Vector3().crossVectors(right, forward).normalize();
+    }
+
+    const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 16 / 9;
+    const safeLength = Math.max(0.05, frustumLength);
+    const safeFov = Math.max(1, Math.min(179, Number.isFinite(fov) ? fov : 45));
+    const halfHeight = Math.tan((safeFov * Math.PI / 180) * 0.5) * safeLength;
+    const halfWidth = halfHeight * safeAspect;
+
+    const baseCenter = center.clone().addScaledVector(forward, safeLength);
+    const tl = baseCenter.clone().addScaledVector(up, halfHeight).addScaledVector(right, -halfWidth);
+    const tr = baseCenter.clone().addScaledVector(up, halfHeight).addScaledVector(right, halfWidth);
+    const bl = baseCenter.clone().addScaledVector(up, -halfHeight).addScaledVector(right, -halfWidth);
+    const br = baseCenter.clone().addScaledVector(up, -halfHeight).addScaledVector(right, halfWidth);
+
+    const edges: Array<[THREE.Vector3, THREE.Vector3]> = [
+      [center, tl],
+      [center, tr],
+      [center, bl],
+      [center, br],
+      [tl, tr],
+      [tr, br],
+      [br, bl],
+      [bl, tl],
+    ];
+
+    const group = new THREE.Group();
+    group.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
+    for (const [start, end] of edges) {
+      const segment = this.buildThickLineSegment(start, end, lineRadius, color, 0.88);
+      if (!segment) continue;
+      group.add(segment);
+    }
+    return group;
+  }
+
+  private buildThickLineSegment(
+    start: THREE.Vector3,
+    end: THREE.Vector3,
+    radius: number,
+    color: number,
+    opacity = 0.9
+  ): THREE.Mesh | null {
+    const delta = new THREE.Vector3().subVectors(end, start);
+    const length = delta.length();
+    if (!Number.isFinite(length) || length <= 1e-6) return null;
+
+    const geometry = new THREE.CylinderGeometry(
+      Math.max(1e-4, radius),
+      Math.max(1e-4, radius),
+      length,
+      10,
+      1,
+      true
+    );
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: opacity < 0.999,
+      opacity,
+      depthTest: true,
+      depthWrite: true,
+    });
+
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(start).add(end).multiplyScalar(0.5);
+    const direction = delta.multiplyScalar(1 / length);
+    const quaternion = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      direction
+    );
+    mesh.quaternion.copy(quaternion);
+    mesh.renderOrder = 0;
+    mesh.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
+    return mesh;
+  }
+
+  private updateCameraSequenceCurrentMarkerFromMeshCamera(): void {
+    if (!this.cameraSequenceCurrentMarker || !this.meshCamera) return;
+    this.cameraSequenceCurrentMarker.position.copy(this.meshCamera.position);
+    this.cameraSequenceCurrentMarker.updateMatrixWorld(true);
+  }
+
+  private notifyCameraInteraction(kind: "drag" | "wheel" | "keyboard"): void {
+    if (!this.onCameraInteractionCallback) return;
+    try {
+      this.onCameraInteractionCallback(kind);
+    } catch (error) {
+      console.warn("[EditorApp] camera interaction callback error:", error);
+    }
+  }
+
+  /**
    * Get scene camera vertical FOV in degrees.
    */
   getSceneCameraFovDegrees(): number {
@@ -1613,6 +1975,12 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     this.renderLoop.stop();
     this.stopMeshRenderLoop();
     this.clearAllModels();
+    this.clearCameraSequenceGroupContents();
+    if (this.cameraSequenceGroup && this.meshScene) {
+      this.meshScene.remove(this.cameraSequenceGroup);
+    }
+    this.cameraSequenceGroup = null;
+    this.cameraSequenceCurrentMarker = null;
 
     if (this.renderer) {
       const rendererWithDispose = this.renderer as unknown as { dispose?: () => void };
