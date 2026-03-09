@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visionary Editor 0.0.6</title>
+    <title>Visionary Editor 0.0.7</title>
     <link rel="stylesheet" href="./editor.css">
 </head>
 <body class="theme-light">
@@ -86,7 +86,7 @@
                     <button id="btnThemeToggle" class="theme-toggle-btn" title="切换白天/夜间">
                         白天
                     </button>
-                    <span class="version-label" id="versionLabel">0.0.6</span>
+                    <span class="version-label" id="versionLabel">0.0.7</span>
                 </div>
             </div>
 
@@ -162,6 +162,16 @@
                                     <div class="property-inputs depth-scale-row">
                                         <input type="range" id="sceneDepthScale" min="0.01" max="100.0" step="0.001" value="1.000">
                                         <input type="number" id="sceneDepthScaleNumber" min="0.01" max="100.0" step="0.001" value="1.000">
+                                    </div>
+                                </div>
+
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>FOV</span>
+                                    </label>
+                                    <div class="property-inputs scene-fov-row">
+                                        <input type="range" id="sceneFovRange" min="1.000" max="179.000" step="0.001" value="45.000">
+                                        <input type="number" id="sceneFovNumber" min="1.000" max="179.000" step="0.001" value="45.000">
                                     </div>
                                 </div>
                             </div>
@@ -289,35 +299,43 @@
                         <button id="btnLoopCamera" class="timeline-action-btn">
                             <span class="btn-icon">循环</span>
                         </button>
+                        <div class="timeline-fps-control">
+                            <label for="timelineFps">FPS</label>
+                            <select id="timelineFps">
+                                <option value="12">12</option>
+                                <option value="24" selected>24</option>
+                                <option value="30">30</option>
+                                <option value="60">60</option>
+                            </select>
+                        </div>
+                        <span id="timeValue" class="time-value timeline-time-value">0.000s</span>
                     </div>
                 </div>
                 <div class="timeline-track-container">
-                    <div class="timeline-ruler"></div>
-                    <div class="timeline-track">
+                    <div id="timelineRuler" class="timeline-ruler"></div>
+                    <div id="timelineTrack" class="timeline-track">
                         <!-- Keyframe markers will be added here -->
                         <div class="timeline-placeholder">
                             <span class="placeholder-text">添加关键帧开始录制相机运动</span>
                         </div>
                     </div>
                     <div class="timeline-slider-container">
-                        <span class="time-label">时间:</span>
                         <input type="range" id="timelineSlider" min="0" max="1" step="0.001" value="0">
-                        <span id="timeValue" class="time-value">0.00s</span>
                     </div>
                 </div>
             </div>
         </div>
 
         <!-- File Input (hidden) -->
-        <input type="file" id="fileInput" accept=".ply,.onnx,.glb,.gltf,.splat,.ksplat,.spz,.sog" multiple style="display: none;">
+        <input type="file" id="fileInput" accept=".ply,.onnx,.glb,.gltf,.obj,.fbx,.stl,.splat,.ksplat,.spz,.sog" multiple style="display: none;">
 
         <!-- Modal for Model Loading -->
         <div id="modelModal" class="modal hidden">
             <div class="modal-content">
                 <h3>选择模型文件</h3>
                 <div class="modal-body">
-                    <p>选择要添加的模型文件（支持 .ply, .onnx, .glb, .gltf, .splat, .ksplat, .spz, .sog）</p>
-                    <input type="file" id="modalFileInput" accept=".ply,.onnx,.glb,.gltf,.splat,.ksplat,.spz,.sog" multiple>
+                    <p>选择要添加的模型文件（支持 .ply, .onnx, .glb, .gltf, .obj, .fbx, .stl, .splat, .ksplat, .spz, .sog）</p>
+                    <input type="file" id="modalFileInput" accept=".ply,.onnx,.glb,.gltf,.obj,.fbx,.stl,.splat,.ksplat,.spz,.sog" multiple>
                 </div>
                 <div class="modal-footer">
                     <button id="modalCancel" class="button button-secondary">取消</button>

@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.0.6
+ * Visionary Editor UI Controller 0.0.7
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -43,6 +43,8 @@ const dom = {
     skyPresetGrid: document.getElementById('skyPresetGrid'),
     sceneDepthScale: document.getElementById('sceneDepthScale'),
     sceneDepthScaleNumber: document.getElementById('sceneDepthScaleNumber'),
+    sceneFovRange: document.getElementById('sceneFovRange'),
+    sceneFovNumber: document.getElementById('sceneFovNumber'),
 
     // 变换控件
     btnResetTransform: document.getElementById('btnResetTransform'),
@@ -77,6 +79,9 @@ const dom = {
     btnRemoveKeyframe: document.getElementById('btnRemoveKeyframe'),
     btnPlayCamera: document.getElementById('btnPlayCamera'),
     btnLoopCamera: document.getElementById('btnLoopCamera'),
+    timelineFps: document.getElementById('timelineFps'),
+    timelineRuler: document.getElementById('timelineRuler'),
+    timelineTrack: document.getElementById('timelineTrack'),
     timelineSlider: document.getElementById('timelineSlider'),
     timeValue: document.getElementById('timeValue'),
 
@@ -95,7 +100,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.0.6',
+    VERSION: '0.0.7',
     renderMode: 'video', // 'video' | 'image'
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
@@ -104,9 +109,13 @@ const state = {
     isLooping: false,
     keyframes: [],
     currentKeyframeIndex: -1,
+    selectedFrame: 0,
+    timelineFps: 24,
+    timelineDurationSec: 10,
     sceneBackgroundHex: '#050814',
     sceneSkyPresetId: 'night',
     sceneDepthRangeScale: 1.0,
+    sceneCameraFov: 45.0,
 };
 
 // EditorApp 实例 (会在 init 后设置)
@@ -114,7 +123,12 @@ let app = null;
 let animationUiSyncTimer = null;
 let labelDragState = null;
 let isInputLabelDragging = false;
+let timelinePlaybackRaf = 0;
+let timelinePlaybackLastTime = 0;
 const THEME_STORAGE_KEY = 'visionary_editor_theme';
+const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
+const TIMELINE_MIN_DURATION_SEC = 10;
+const TIMELINE_SLIDER_THUMB_PX = 16;
 
 const FALLBACK_SKY_PRESETS = [
     { id: 'studio', name: '工作室', colorHex: '#10131C' },
@@ -180,6 +194,38 @@ function applySceneDepthRangeScale(value, silent = false) {
     }
 }
 
+function clampSceneFov(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return Math.max(1, Math.min(179, n));
+}
+
+function syncSceneFovInputs() {
+    const fixed = Number(state.sceneCameraFov || 45).toFixed(3);
+    if (dom.sceneFovRange) dom.sceneFovRange.value = fixed;
+    if (dom.sceneFovNumber) dom.sceneFovNumber.value = fixed;
+}
+
+function applySceneCameraFov(value, silent = false) {
+    const safe = clampSceneFov(value);
+    if (safe === null) {
+        showError('FOV 格式错误');
+        return;
+    }
+
+    const ok = app?.setSceneCameraFovDegrees?.(safe);
+    if (!ok) {
+        showError('设置 FOV 失败');
+        return;
+    }
+
+    state.sceneCameraFov = safe;
+    syncSceneFovInputs();
+    if (!silent) {
+        showInfo(`FOV: ${safe.toFixed(3)}°`);
+    }
+}
+
 function applySceneBackgroundHex(hex, skyPresetId = 'custom') {
     const normalized = normalizeHexColor(hex);
     if (!normalized) {
@@ -220,9 +266,13 @@ function initSceneSettingsUI() {
     state.sceneBackgroundHex = normalizeHexColor(app.getSceneBackgroundColorHex?.()) || state.sceneBackgroundHex;
     state.sceneSkyPresetId = app.getSceneSkyPresetId?.() || state.sceneSkyPresetId;
     state.sceneDepthRangeScale = Number(app.getSceneDepthRangeScale?.() || state.sceneDepthRangeScale || 1.0);
+    state.sceneCameraFov = clampSceneFov(
+        Number(app.getSceneCameraFovDegrees?.() || state.sceneCameraFov || 45.0)
+    ) || 45.0;
 
     syncSceneBackgroundInputs();
     syncSceneDepthRangeInputs();
+    syncSceneFovInputs();
     renderSkyPresetGrid();
 }
 
@@ -736,6 +786,11 @@ function toHexFromBgColor(bgColor) {
 function inferAssetType(pathOrName = '') {
     const text = String(pathOrName).toLowerCase();
     if (text.endsWith('.onnx')) return 'onnx';
+    if (text.endsWith('.glb')) return 'glb';
+    if (text.endsWith('.gltf')) return 'gltf';
+    if (text.endsWith('.obj')) return 'obj';
+    if (text.endsWith('.fbx')) return 'fbx';
+    if (text.endsWith('.stl')) return 'stl';
     if (text.endsWith('.spz')) return 'spz';
     if (text.endsWith('.ksplat')) return 'ksplat';
     if (text.endsWith('.splat')) return 'splat';
@@ -962,6 +1017,12 @@ async function loadScene() {
         }
 
         app.clearAllModels();
+        stopTimelinePlayback(false);
+        state.keyframes = [];
+        state.currentKeyframeIndex = -1;
+        state.selectedFrame = 0;
+        state.currentTime = 0;
+        updateTimelineUI();
         closeEditor();
 
         const envBgHex = toHexFromBgColor(raw?.env?.bgColor);
@@ -1053,6 +1114,12 @@ async function loadScene() {
  */
 function clearScene() {
     if (confirm('确定要清空所有模型吗？')) {
+        stopTimelinePlayback(false);
+        state.keyframes = [];
+        state.currentKeyframeIndex = -1;
+        state.selectedFrame = 0;
+        state.currentTime = 0;
+        updateTimelineUI();
         app.clearAllModels();
         closeEditor();
         showInfo('场景已清空');
@@ -1067,39 +1134,239 @@ function openModelFileSelector() {
     dom.fileInput?.click();
 }
 
+function getTimelineTotalFrames() {
+    const fps = Math.max(1, Number(state.timelineFps || 24));
+    const durationSec = Math.max(1, Number(state.timelineDurationSec || TIMELINE_MIN_DURATION_SEC));
+    return Math.max(1, Math.round(durationSec * fps));
+}
+
+function frameToTime(frame) {
+    const fps = Math.max(1, Number(state.timelineFps || 24));
+    return Math.max(0, frame) / fps;
+}
+
+function timeToFrame(timeSec) {
+    const fps = Math.max(1, Number(state.timelineFps || 24));
+    return Math.round(Math.max(0, Number(timeSec) || 0) * fps);
+}
+
+function clampTimelineFrame(frame) {
+    const total = getTimelineTotalFrames();
+    const n = Math.round(Number(frame) || 0);
+    return Math.max(0, Math.min(total, n));
+}
+
+function findKeyframeIndexByFrame(frame) {
+    const safeFrame = clampTimelineFrame(frame);
+    return state.keyframes.findIndex((kf) => Number(kf.frame) === safeFrame);
+}
+
+function captureCurrentCameraPose() {
+    if (!app) return null;
+    const pose = app.getCameraPose?.();
+    if (pose) return pose;
+
+    const camera = app.getCamera?.();
+    if (!camera) return null;
+    return {
+        position: { ...camera.position },
+        rotation: { ...camera.rotation },
+        fovDegrees: Number(app.getSceneCameraFovDegrees?.() || state.sceneCameraFov || 45),
+    };
+}
+
+function applyCameraPoseForTime(timeSec) {
+    if (!app || state.keyframes.length === 0) return;
+    const pose = interpolateCameraPoseAt(timeSec);
+    if (!pose) return;
+    app.setCameraPose?.(pose);
+    if (Number.isFinite(pose.fovDegrees)) {
+        state.sceneCameraFov = pose.fovDegrees;
+        syncSceneFovInputs();
+    }
+}
+
+function setTimelineFrame(frame, options = {}) {
+    const safeFrame = clampTimelineFrame(frame);
+    state.selectedFrame = safeFrame;
+    state.currentTime = frameToTime(safeFrame);
+    state.currentKeyframeIndex = findKeyframeIndexByFrame(safeFrame);
+
+    if (options.applyPose !== false) {
+        applyCameraPoseForTime(state.currentTime);
+    }
+
+    if (dom.timelineSlider && options.syncSlider !== false) {
+        dom.timelineSlider.value = String(safeFrame);
+    }
+    updateTimeDisplay();
+    updateTimelineUI();
+}
+
+function setTimelineFps(nextFpsRaw) {
+    const nextFps = Number(nextFpsRaw);
+    if (!Number.isFinite(nextFps) || nextFps <= 0) {
+        showError('FPS 格式错误');
+        return;
+    }
+
+    if (state.isPlaying) {
+        stopTimelinePlayback(false);
+    }
+
+    const previousTime = Number(state.currentTime || 0);
+    state.timelineFps = nextFps;
+
+    const dedup = new Map();
+    for (const keyframe of state.keyframes) {
+        const frame = clampTimelineFrame(Math.round((Number(keyframe.time) || 0) * nextFps));
+        const normalized = {
+            ...keyframe,
+            frame,
+            time: frameToTime(frame),
+        };
+        dedup.set(frame, normalized);
+    }
+
+    state.keyframes = Array.from(dedup.values()).sort((a, b) => a.frame - b.frame);
+    if (dom.timelineFps) {
+        dom.timelineFps.value = String(nextFps);
+    }
+
+    setTimelineFrame(timeToFrame(previousTime), { applyPose: false, syncSlider: true });
+}
+
+function renderTimelineRuler() {
+    if (!dom.timelineRuler) return;
+
+    const totalFrames = getTimelineTotalFrames();
+    const fps = Math.max(1, Number(state.timelineFps || 24));
+    const html = [];
+
+    for (let frame = 0; frame <= totalFrames; frame++) {
+        const ratio = frame / totalFrames;
+        const leftStyle = timelineMappedLeftStyle(ratio);
+        const isMajor = frame % fps === 0;
+        html.push(
+            `<span class="timeline-tick ${isMajor ? 'major' : 'minor'}" style="left:${leftStyle}"></span>`
+        );
+        if (isMajor) {
+            const sec = Math.round(frame / fps);
+            html.push(
+                `<span class="timeline-tick-label" style="left:${leftStyle}">${sec}s</span>`
+            );
+        }
+    }
+
+    const cursorRatio = state.selectedFrame / totalFrames;
+    html.push(`<span class="timeline-ruler-cursor" style="left:${timelineMappedLeftStyle(cursorRatio)}"></span>`);
+    dom.timelineRuler.innerHTML = html.join('');
+}
+
+function renderTimelineTrack() {
+    if (!dom.timelineTrack) return;
+    const totalFrames = getTimelineTotalFrames();
+    const hasKeyframes = state.keyframes.length > 0;
+    const html = [];
+
+    if (!hasKeyframes) {
+        html.push('<div class="timeline-placeholder"><span class="placeholder-text">添加关键帧开始录制相机运动</span></div>');
+    }
+
+    const cursorRatio = state.selectedFrame / totalFrames;
+    html.push(`<span class="timeline-track-cursor" style="left:${timelineMappedLeftStyle(cursorRatio)}"></span>`);
+
+    for (const keyframe of state.keyframes) {
+        const frame = clampTimelineFrame(keyframe.frame);
+        const ratio = frame / totalFrames;
+        const selectedClass = frame === state.selectedFrame ? 'selected' : '';
+        html.push(
+            `<button type="button" class="timeline-keyframe-marker ${selectedClass}" data-frame="${frame}" style="left:${timelineMappedLeftStyle(ratio)}" title="${keyframe.time.toFixed(3)}s"></button>`
+        );
+    }
+
+    dom.timelineTrack.innerHTML = html.join('');
+    dom.timelineTrack.querySelectorAll('.timeline-keyframe-marker').forEach((marker) => {
+        marker.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const frame = Number(marker.dataset.frame);
+            setTimelineFrame(frame, { applyPose: true, syncSlider: true });
+        });
+    });
+}
+
+function timelineMappedLeftStyle(ratio) {
+    const clamped = Math.max(0, Math.min(1, Number(ratio) || 0));
+    const r = clamped.toFixed(6);
+    return `calc((100% - ${TIMELINE_SLIDER_THUMB_PX}px) * ${r} + ${TIMELINE_SLIDER_THUMB_PX / 2}px)`;
+}
+
+function updateTimelineUI() {
+    const totalFrames = getTimelineTotalFrames();
+
+    if (dom.timelineSlider) {
+        dom.timelineSlider.min = '0';
+        dom.timelineSlider.max = String(totalFrames);
+        dom.timelineSlider.step = '1';
+        dom.timelineSlider.value = String(state.selectedFrame);
+    }
+
+    if (dom.btnRemoveKeyframe) {
+        dom.btnRemoveKeyframe.disabled = findKeyframeIndexByFrame(state.selectedFrame) < 0;
+    }
+
+    renderTimelineRuler();
+    renderTimelineTrack();
+    updateTimeDisplay();
+}
+
 /**
- * 添加关键帧（占位符）
+ * 添加/覆盖关键帧（当前时间戳）
  */
 function addKeyframe() {
-    const camera = app?.getCamera();
-    if (camera) {
-        const keyframe = {
-            time: state.currentTime,
-            camera: camera
-        };
-        state.keyframes.push(keyframe);
-        updateTimelineUI();
+    const pose = captureCurrentCameraPose();
+    if (!pose) {
+        showError('无法读取当前相机位姿');
+        return;
     }
-    showInfo('addKeyframe - 占位符（功能开发中）');
+
+    const frame = clampTimelineFrame(state.selectedFrame);
+    const keyframe = {
+        frame,
+        time: frameToTime(frame),
+        camera: pose,
+    };
+
+    const existingIndex = findKeyframeIndexByFrame(frame);
+    if (existingIndex >= 0) {
+        state.keyframes[existingIndex] = keyframe;
+        showInfo(`关键帧已覆盖: ${keyframe.time.toFixed(3)}s`);
+    } else {
+        state.keyframes.push(keyframe);
+        state.keyframes.sort((a, b) => a.frame - b.frame);
+        showInfo(`关键帧已新增: ${keyframe.time.toFixed(3)}s`);
+    }
+
+    state.currentKeyframeIndex = findKeyframeIndexByFrame(frame);
+    updateTimelineUI();
 }
 
 /**
- * 删除关键帧
+ * 删除当前时间戳上的关键帧
  */
 function removeKeyframe() {
-    if (state.keyframes.length > 0) {
-        state.keyframes.pop();
-        updateTimelineUI();
-        showInfo('removeKeyframe - 占位符（功能开发中）');
+    const frame = clampTimelineFrame(state.selectedFrame);
+    const index = findKeyframeIndexByFrame(frame);
+    if (index < 0) {
+        showInfo(`当前时间戳无关键帧: ${frameToTime(frame).toFixed(3)}s`);
+        return;
     }
-}
 
-/**
- * 更新时间轴 UI
- */
-function updateTimelineUI() {
-    const count = state.keyframes.length;
-    showInfo(`关键帧数量: ${count}`);
+    const removed = state.keyframes.splice(index, 1)[0];
+    state.currentKeyframeIndex = findKeyframeIndexByFrame(frame);
+    updateTimelineUI();
+    showInfo(`关键帧已删除: ${removed.time.toFixed(3)}s`);
 }
 
 /**
@@ -1110,7 +1377,7 @@ function updatePlayButtonUI() {
     const icon = dom.btnPlayCamera.querySelector('.btn-icon');
     if (state.isPlaying) {
         dom.btnPlayCamera.classList.add('active');
-        if (icon) icon.textContent = '||';
+        if (icon) icon.textContent = '暂停';
     } else {
         dom.btnPlayCamera.classList.remove('active');
         if (icon) icon.textContent = '播放';
@@ -1128,12 +1395,137 @@ function startAnimationControlsSyncLoop() {
 }
 
 /**
- * 播放/暂停相机动画（占位）
+ * 球面线性插值 quaternion
+ */
+function slerpQuaternion(a, b, t) {
+    const q1 = [a.x, a.y, a.z, a.w];
+    let q2 = [b.x, b.y, b.z, b.w];
+    let dot = q1[0] * q2[0] + q1[1] * q2[1] + q1[2] * q2[2] + q1[3] * q2[3];
+
+    if (dot < 0) {
+        dot = -dot;
+        q2 = [-q2[0], -q2[1], -q2[2], -q2[3]];
+    }
+
+    if (dot > 0.9995) {
+        const out = {
+            x: q1[0] + t * (q2[0] - q1[0]),
+            y: q1[1] + t * (q2[1] - q1[1]),
+            z: q1[2] + t * (q2[2] - q1[2]),
+            w: q1[3] + t * (q2[3] - q1[3]),
+        };
+        const len = Math.hypot(out.x, out.y, out.z, out.w) || 1;
+        out.x /= len;
+        out.y /= len;
+        out.z /= len;
+        out.w /= len;
+        return out;
+    }
+
+    const theta0 = Math.acos(Math.min(1, Math.max(-1, dot)));
+    const sinTheta0 = Math.sin(theta0);
+    const theta = theta0 * t;
+    const sinTheta = Math.sin(theta);
+    const s0 = Math.cos(theta) - dot * sinTheta / Math.max(sinTheta0, 1e-6);
+    const s1 = sinTheta / Math.max(sinTheta0, 1e-6);
+
+    return {
+        x: s0 * q1[0] + s1 * q2[0],
+        y: s0 * q1[1] + s1 * q2[1],
+        z: s0 * q1[2] + s1 * q2[2],
+        w: s0 * q1[3] + s1 * q2[3],
+    };
+}
+
+function interpolateCameraPoseAt(timeSec) {
+    if (state.keyframes.length === 0) return null;
+    const keyframes = state.keyframes;
+
+    if (timeSec <= keyframes[0].time) {
+        return keyframes[0].camera;
+    }
+    const last = keyframes[keyframes.length - 1];
+    if (timeSec >= last.time) {
+        return last.camera;
+    }
+
+    for (let i = 0; i < keyframes.length - 1; i++) {
+        const a = keyframes[i];
+        const b = keyframes[i + 1];
+        if (timeSec < a.time || timeSec > b.time) continue;
+
+        const span = Math.max(1e-6, b.time - a.time);
+        const t = (timeSec - a.time) / span;
+        const rot = slerpQuaternion(a.camera.rotation, b.camera.rotation, t);
+
+        return {
+            position: {
+                x: a.camera.position.x + (b.camera.position.x - a.camera.position.x) * t,
+                y: a.camera.position.y + (b.camera.position.y - a.camera.position.y) * t,
+                z: a.camera.position.z + (b.camera.position.z - a.camera.position.z) * t,
+            },
+            rotation: rot,
+            fovDegrees: a.camera.fovDegrees + (b.camera.fovDegrees - a.camera.fovDegrees) * t,
+        };
+    }
+
+    return last.camera;
+}
+
+function stopTimelinePlayback(resetToStart = false) {
+    state.isPlaying = false;
+    if (timelinePlaybackRaf) {
+        cancelAnimationFrame(timelinePlaybackRaf);
+        timelinePlaybackRaf = 0;
+    }
+
+    if (resetToStart) {
+        setTimelineFrame(0, { applyPose: true, syncSlider: true });
+    } else {
+        updateTimelineUI();
+    }
+    updatePlayButtonUI();
+}
+
+function tickTimelinePlayback(timestamp) {
+    if (!state.isPlaying) return;
+
+    const now = Number(timestamp) || performance.now();
+    const dt = Math.max(0, Math.min(0.1, (now - timelinePlaybackLastTime) / 1000));
+    timelinePlaybackLastTime = now;
+
+    const duration = frameToTime(getTimelineTotalFrames());
+    const nextTime = state.currentTime + dt;
+    if (nextTime >= duration) {
+        if (state.isLooping) {
+            setTimelineFrame(0, { applyPose: true, syncSlider: true });
+        } else {
+            stopTimelinePlayback(true);
+            return;
+        }
+    } else {
+        const nextFrame = timeToFrame(nextTime);
+        setTimelineFrame(nextFrame, { applyPose: true, syncSlider: true });
+    }
+
+    timelinePlaybackRaf = requestAnimationFrame(tickTimelinePlayback);
+}
+
+/**
+ * 播放/暂停相机动画
  */
 function playCameraAnimation() {
-    state.isPlaying = !state.isPlaying;
-    showInfo(`相机动画: ${state.isPlaying ? '播放' : '暂停'}（占位）`);
+    if (state.isPlaying) {
+        stopTimelinePlayback(false);
+        showInfo('相机动画: 暂停');
+        return;
+    }
+
+    state.isPlaying = true;
+    timelinePlaybackLastTime = performance.now();
     updatePlayButtonUI();
+    timelinePlaybackRaf = requestAnimationFrame(tickTimelinePlayback);
+    showInfo('相机动画: 播放');
 }
 
 /**
@@ -1150,7 +1542,7 @@ function toggleCameraLoop() {
             btn.classList.remove('active');
         }
     }
-    showInfo(`相机动画循环: ${state.isLooping ? '开启' : '关闭'}（占位）`);
+    showInfo(`相机动画循环: ${state.isLooping ? '开启' : '关闭'}`);
 }
 
 /**
@@ -1158,6 +1550,35 @@ function toggleCameraLoop() {
  */
 function updateTimeDisplay() {
     if (dom.timeValue) dom.timeValue.textContent = `${state.currentTime.toFixed(3)}s`;
+}
+
+function handleTimelinePointerSelection(event) {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLElement)) return;
+    const rect = target.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const effectiveWidth = Math.max(1, rect.width - TIMELINE_SLIDER_THUMB_PX);
+    const local = (event.clientX - rect.left) - (TIMELINE_SLIDER_THUMB_PX / 2);
+    const ratio = Math.max(0, Math.min(1, local / effectiveWidth));
+    const frame = Math.round(ratio * getTimelineTotalFrames());
+    setTimelineFrame(frame, { applyPose: true, syncSlider: true });
+}
+
+function initTimelineUI() {
+    const initialFps = Number(dom.timelineFps?.value || state.timelineFps);
+    if (Number.isFinite(initialFps) && initialFps > 0) {
+        state.timelineFps = initialFps;
+    }
+    if (dom.timelineFps) {
+        const hasOptions = Array.from(dom.timelineFps.options || []).length > 0;
+        if (!hasOptions) {
+            dom.timelineFps.innerHTML = TIMELINE_FPS_OPTIONS
+                .map((fps) => `<option value="${fps}">${fps}</option>`)
+                .join('');
+        }
+        dom.timelineFps.value = String(state.timelineFps);
+    }
+    setTimelineFrame(0, { applyPose: false, syncSlider: true });
 }
 
 /**
@@ -1277,6 +1698,12 @@ function initEventListeners() {
     dom.sceneDepthScaleNumber?.addEventListener('change', (e) => {
         applySceneDepthRangeScale(e.target.value);
     });
+    dom.sceneFovRange?.addEventListener('input', (e) => {
+        applySceneCameraFov(e.target.value, true);
+    });
+    dom.sceneFovNumber?.addEventListener('change', (e) => {
+        applySceneCameraFov(e.target.value);
+    });
     dom.skyPresetGrid?.addEventListener('click', (e) => {
         if (!(e.target instanceof Element)) return;
         const btn = e.target.closest('[data-sky-id]');
@@ -1313,9 +1740,14 @@ function initEventListeners() {
     dom.btnRemoveKeyframe?.addEventListener('click', removeKeyframe);
     dom.btnPlayCamera?.addEventListener('click', playCameraAnimation);
     dom.btnLoopCamera?.addEventListener('click', toggleCameraLoop);
+    dom.timelineFps?.addEventListener('change', (e) => {
+        setTimelineFps(e.target.value);
+    });
+    dom.timelineRuler?.addEventListener('click', handleTimelinePointerSelection);
+    dom.timelineTrack?.addEventListener('click', handleTimelinePointerSelection);
     dom.timelineSlider?.addEventListener('input', (e) => {
-        state.currentTime = parseFloat(e.target.value);
-        updateTimeDisplay();
+        const nextFrame = Math.round(Number(e.target.value || 0));
+        setTimelineFrame(nextFrame, { applyPose: true, syncSlider: true });
     });
 
     // 文件拖拽
@@ -1416,6 +1848,7 @@ async function init() {
     // 初始化事件监听
     initEventListeners();
     initSceneSettingsUI();
+    initTimelineUI();
     closeEditor();
     startAnimationControlsSyncLoop();
 
@@ -1433,12 +1866,12 @@ async function init() {
     console.log('');
     console.log('第一阶段功能状态：');
     console.log('3D 场景渲染：已实现（WebGPU + GaussianRenderer）');
-    console.log('模型加载：已实现（支持 .ply, .onnx, .splat, .ksplat 等）');
+    console.log('模型加载：已实现（支持 .ply, .onnx, .glb, .gltf, .obj, .fbx, .stl 等）');
     console.log('相机控制：已实现（轨道/自由模式，预设视角）');
     console.log('');
     console.log('请测试以下功能：');
     console.log('1. 点击"添加模型"按钮，选择文件');
-    console.log('2. 拖拽 .ply 或 .onnx 文件到页面');
+    console.log('2. 拖拽 .ply/.onnx/.glb/.gltf/.obj/.fbx/.stl 文件到页面');
     console.log('3. 使用鼠标控制相机（左键旋转，右键平移，滚轮缩放）');
     console.log('');
     console.log('调试信息：');

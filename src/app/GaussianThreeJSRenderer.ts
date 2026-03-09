@@ -6,6 +6,9 @@ import {PointCloud, DynamicPointCloud} from "../point_cloud";
 import { CameraAdapter } from "../camera/CameraAdapter";
 import { FBXModelWrapper } from "../models/fbx-model-wrapper";
 
+type ScenePreviewMode = "color" | "normal" | "depth";
+const EDITOR_DEPTH_BASE_EXTENT_KEY = "__editorDepthBaseExtent";
+
 export class GaussianThreeJSRenderer extends THREE.Mesh {
     private renderer: GaussianRenderer;
     private gaussianModels: GaussianModel[];
@@ -21,6 +24,9 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
     private sceneDepthRT: THREE.RenderTarget | null = null;  // Three.js scene renders here for depth
     private sceneDepthTexture: THREE.DepthTexture | null = null;
     private autoDepthMode: boolean = true; // Auto capture depth from full scene
+    private sceneDepthRangeScale: number = 1.0;
+    private scenePreviewMode: ScenePreviewMode = "color";
+    private unifiedSceneExtent: number = 1.0;
     
     // Legacy occluder support (kept for compatibility)
     private occluderMeshes: THREE.Mesh[] = [];
@@ -106,8 +112,12 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
             //console.log('[Depth] Rendered Three scene to RT (color + depth captured)');
         }
         
-        // Blit RT color to canvas (no need to re-render scene)
-        this.blitRenderTargetToCanvas(camera);
+        if (this.scenePreviewMode === "depth") {
+            this.blitDepthTextureToCanvas(camera);
+        } else {
+            // Blit RT color to canvas (no need to re-render scene)
+            this.blitRenderTargetToCanvas(camera);
+        }
     }
 
     /**
@@ -170,6 +180,248 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
             // Fallback: re-render scene to canvas
             this.threeRenderer.render(this.threeScene, camera);
         }
+    }
+
+    private blitDepthTextureToCanvas(camera: THREE.Camera): void {
+        if (!this.sceneDepthRT || !this.sceneDepthTexture) return;
+
+        try {
+            const device = (this.threeRenderer as any).backend?.device as GPUDevice;
+            if (!device) {
+                this.threeRenderer.render(this.threeScene, camera);
+                return;
+            }
+
+            const canvas = this.threeRenderer.domElement;
+            const context = canvas.getContext('webgpu');
+            if (!context) {
+                this.threeRenderer.render(this.threeScene, camera);
+                return;
+            }
+
+            const currentTexture = context.getCurrentTexture();
+            const canvasView = currentTexture.createView();
+
+            const backend = (this.threeRenderer as any).backend;
+            const depthInfo = backend?.get?.(this.sceneDepthTexture);
+            const depthTexture = depthInfo?.texture as GPUTexture;
+            const colorInfo = backend?.get?.(this.sceneDepthRT.texture);
+            const colorTexture = colorInfo?.texture as GPUTexture;
+            if (!depthTexture || !colorTexture) {
+                this.blitRenderTargetToCanvas(camera);
+                return;
+            }
+
+            const near = Math.max(0.0001, (camera as any).near ?? 0.01);
+            const far = Math.max(near + 0.0001, (camera as any).far ?? 1000.0);
+            // Match Gaussian depth visualization mapping:
+            // scene_extend = sceneSize * scale; vis_far = min(zfar, znear + scene_extend * 3.0)
+            const sceneExtent = this.computeDepthExtentForPreview(camera);
+            const sceneExtend = Math.max(0.001, sceneExtent * this.sceneDepthRangeScale);
+            const localFar = near + Math.max(0.001, sceneExtend * 3.0);
+            const visFar = Math.min(far, localFar);
+            this.blitDepthWithRenderPass(device, depthTexture, colorTexture, canvasView, near, far, visFar);
+        } catch (_error) {
+            this.threeRenderer.render(this.threeScene, camera);
+        }
+    }
+
+    private computeGaussianSceneExtent(visibleGaussianModels?: GaussianModel[]): number {
+        let maxExtent = 0;
+        const gaussians = visibleGaussianModels ?? this.gaussianModels;
+        for (const gm of gaussians) {
+            const aabb = (gm as any).getLocalAABB?.() ?? gm.getWorldAABB();
+            if (!aabb) continue;
+            const min = (aabb as any).min as [number, number, number];
+            const max = (aabb as any).max as [number, number, number];
+            if (!min || !max) continue;
+            if (!Number.isFinite(min[0]) || !Number.isFinite(max[0])) continue;
+            const extent = Math.max(
+                Math.abs(max[0] - min[0]),
+                Math.abs(max[1] - min[1]),
+                Math.abs(max[2] - min[2]),
+            );
+            if (Number.isFinite(extent) && extent > maxExtent) maxExtent = extent;
+        }
+        return maxExtent > 0 ? Math.max(0.001, maxExtent) : 0;
+    }
+
+    private computeMeshSceneExtent(): number {
+        let maxExtent = 0;
+        this.threeScene.traverse((obj) => {
+            const mesh = obj as THREE.Mesh;
+            if (!mesh || !(mesh as any).isMesh || !mesh.visible) return;
+            if (mesh === this) return;
+            const cachedExtent = Number((mesh.userData as any)?.[EDITOR_DEPTH_BASE_EXTENT_KEY]);
+            if (Number.isFinite(cachedExtent) && cachedExtent > 0) {
+                if (cachedExtent > maxExtent) maxExtent = cachedExtent;
+                return;
+            }
+            const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
+            const position = geometry?.attributes?.position;
+            if (!geometry || !position || position.count <= 0) return;
+            if (!geometry.boundingBox) geometry.computeBoundingBox();
+            if (!geometry.boundingBox) return;
+            const size = geometry.boundingBox.getSize(new THREE.Vector3());
+            const extent = Math.max(size.x, size.y, size.z);
+            if (Number.isFinite(extent) && extent > maxExtent) {
+                maxExtent = extent;
+            }
+        });
+        return maxExtent > 0 ? Math.max(0.001, maxExtent) : 1.0;
+    }
+
+    private computeReferenceSceneExtent(camera?: THREE.Camera, visibleGaussianModels?: GaussianModel[]): number {
+        const visibleGaussians = visibleGaussianModels
+            ?? (camera ? this.gaussianModels.filter((model) => model.isVisible(camera)) : this.gaussianModels);
+        const gaussianExtent = this.computeGaussianSceneExtent(visibleGaussians);
+        const meshExtent = this.computeMeshSceneExtent();
+        const reference = Math.max(gaussianExtent, meshExtent, 1.0);
+        this.unifiedSceneExtent = reference;
+        return reference;
+    }
+
+    private computeDepthExtentForPreview(camera?: THREE.Camera): number {
+        return this.computeReferenceSceneExtent(camera);
+    }
+
+    private blitDepthWithRenderPass(
+        device: GPUDevice,
+        sourceDepthTexture: GPUTexture,
+        sourceColorTexture: GPUTexture,
+        targetView: GPUTextureView,
+        near: number,
+        far: number,
+        visFar: number
+    ): void {
+        const paramsBuffer = device.createBuffer({
+            size: 16,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(paramsBuffer, 0, new Float32Array([near, far, visFar, 0]));
+
+        const bindGroupLayout = device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: { sampleType: "depth", viewDimension: "2d" },
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: { sampleType: "float", viewDimension: "2d" },
+                },
+                {
+                    binding: 2,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: { type: "uniform" },
+                },
+            ],
+        });
+
+        const bindGroup = device.createBindGroup({
+            layout: bindGroupLayout,
+            entries: [
+                {
+                    binding: 0,
+                    resource: sourceDepthTexture.createView(),
+                },
+                {
+                    binding: 1,
+                    resource: sourceColorTexture.createView(),
+                },
+                {
+                    binding: 2,
+                    resource: { buffer: paramsBuffer },
+                },
+            ],
+        });
+
+        const pipeline = device.createRenderPipeline({
+            layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
+            vertex: {
+                module: device.createShaderModule({
+                    code: `
+                        @vertex
+                        fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+                            var pos = array<vec2f, 6>(
+                                vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+                                vec2f(-1.0, 1.0),  vec2f(1.0, -1.0), vec2f(1.0, 1.0)
+                            );
+                            return vec4f(pos[i], 0.0, 1.0);
+                        }
+                    `,
+                }),
+                entryPoint: "vs_main",
+            },
+            fragment: {
+                module: device.createShaderModule({
+                    code: `
+                        struct DepthParams {
+                            near: f32,
+                            far: f32,
+                            visFar: f32,
+                            pad: f32,
+                        };
+                        @group(0) @binding(0) var depthTex: texture_depth_2d;
+                        @group(0) @binding(1) var colorTex: texture_2d<f32>;
+                        @group(0) @binding(2) var<uniform> params: DepthParams;
+
+                        fn depthToViewZ(depth: f32, near: f32, far: f32) -> f32 {
+                            // Perspective denominator is negative in-range; clamp away from 0 without flipping sign.
+                            let denom = min((far - near) * depth - far, -0.000001);
+                            return abs((near * far) / denom);
+                        }
+
+                        fn linearToSRGB(linear: vec3<f32>) -> vec3<f32> {
+                            return select(
+                                linear * 12.92,
+                                pow(max(linear, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) * 1.055 - 0.055,
+                                linear > vec3<f32>(0.0031308)
+                            );
+                        }
+
+                        @fragment
+                        fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
+                            let xy = vec2<i32>(i32(fragCoord.x), i32(fragCoord.y));
+                            let depth = textureLoad(depthTex, xy, 0);
+                            // Preserve the current scene background for non-geometry pixels.
+                            if (depth >= 0.999999) {
+                                let bgLinear = textureLoad(colorTex, xy, 0).rgb;
+                                return vec4f(linearToSRGB(bgLinear), 1.0);
+                            }
+                            let viewZ = depthToViewZ(depth, params.near, params.far);
+                            let depthLinear = clamp((viewZ - params.near) / max(params.visFar - params.near, 0.000001), 0.0, 1.0);
+                            let depthVis = pow(1.0 - depthLinear, 0.9);
+                            return vec4f(vec3f(depthVis), 1.0);
+                        }
+                    `,
+                }),
+                entryPoint: "fs_main",
+                targets: [{ format: "bgra8unorm" }],
+            },
+            primitive: { topology: "triangle-list" },
+        });
+
+        const encoder = device.createCommandEncoder({ label: "Depth-to-Canvas render pass" });
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [
+                {
+                    view: targetView,
+                    loadOp: "clear",
+                    storeOp: "store",
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                },
+            ],
+        });
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.draw(6, 1, 0, 0);
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+
+        paramsBuffer.destroy();
     }
 
     /**
@@ -347,10 +599,13 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         const vh = db.y || (renderer.getSize(new THREE.Vector2()).y);
         // 单次调用，利用全局批处理优化
         // 每个模型的 gaussianScaling 参数现在存储在各自的 ModelParams 中
+        const referenceExtent = this.computeReferenceSceneExtent(camera, visibleModels);
+        const unifiedSceneExtend = Math.max(0.001, referenceExtent * this.sceneDepthRangeScale);
         this.renderer.prepareMulti(encoder, device.queue, this.pcs, {
             camera: cam,
             viewport: [vw, vh],
-            // 不再需要全局 gaussianScaling，每个模型使用自己的参数
+            // Use one shared sceneExtend reference for Gaussian and mesh depth preview.
+            sceneExtend: unifiedSceneExtend,
         } as any);
         device.queue.submit([encoder.finish()]);
 
@@ -695,6 +950,23 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         if ((globalThis as any).GS_DEPTH_DEBUG) {
             //console.log(`[Depth] Auto depth mode: ${enabled ? 'enabled (full scene)' : 'disabled (manual occluders)'}`);
         }
+    }
+
+    public setDepthRangeScale(scale: number): void {
+        const safe = Number.isFinite(scale) ? Math.max(0.01, Math.min(100, scale)) : 1.0;
+        this.sceneDepthRangeScale = safe;
+    }
+
+    public setPreviewMode(mode: ScenePreviewMode): void {
+        this.scenePreviewMode = mode;
+    }
+
+    public getPreviewMode(): ScenePreviewMode {
+        return this.scenePreviewMode;
+    }
+
+    public getDepthRangeScale(): number {
+        return this.sceneDepthRangeScale;
     }
 
     /**
