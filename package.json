@@ -48,6 +48,7 @@
   "dependencies": {
     "claude": "^0.1.1",
     "gl-matrix": "^3.4.3",
+    "mp4-muxer": "^5.2.2",
     "onnxruntime-web": "1.22.0",
     "three": "^0.171.0"
   }

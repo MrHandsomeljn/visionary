@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.0.7
+ * Visionary Editor UI Controller 0.0.8
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -27,6 +27,7 @@ const dom = {
 
     // 中部区域
     leftSidebar: document.getElementById('left-sidebar'),
+    centerViewport: document.getElementById('center-viewport'),
     modelCountBadge: document.getElementById('modelCountBadge'),
     modelList: document.getElementById('modelList'),
     btnAddModel: document.getElementById('btnAddModel'),
@@ -93,6 +94,14 @@ const dom = {
     modelModal: document.getElementById('modelModal'),
     modalCancel: document.getElementById('modalCancel'),
     modalConfirm: document.getElementById('modalConfirm'),
+    exportModal: document.getElementById('exportModal'),
+    exportModalTitle: document.getElementById('exportModalTitle'),
+    exportResolution: document.getElementById('exportResolution'),
+    exportMode: document.getElementById('exportMode'),
+    exportFov: document.getElementById('exportFov'),
+    exportTimelineHint: document.getElementById('exportTimelineHint'),
+    exportCancel: document.getElementById('exportCancel'),
+    exportConfirm: document.getElementById('exportConfirm'),
 
     // 版本标签
     versionLabel: document.getElementById('versionLabel'),
@@ -100,8 +109,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.0.7',
-    renderMode: 'video', // 'video' | 'image'
+    VERSION: '0.0.8',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     currentTime: 0,
@@ -125,10 +133,23 @@ let labelDragState = null;
 let isInputLabelDragging = false;
 let timelinePlaybackRaf = 0;
 let timelinePlaybackLastTime = 0;
+let imageExportApi = null;
+let videoExportApi = null;
+let pendingExportType = null;
+let isExporting = false;
+let keyframeMarkerDrag = null;
+let suppressMarkerClickOnce = false;
 const THEME_STORAGE_KEY = 'visionary_editor_theme';
 const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
 const TIMELINE_MIN_DURATION_SEC = 10;
 const TIMELINE_SLIDER_THUMB_PX = 16;
+const EXPORT_FALLBACK_FPS = 24;
+const EXPORT_PRESET_RESOLUTIONS = [
+    { width: 1280, height: 720, label: '1280 x 720 (720p)' },
+    { width: 1920, height: 1080, label: '1920 x 1080 (1080p)' },
+    { width: 2560, height: 1440, label: '2560 x 1440 (2K)' },
+    { width: 3840, height: 2160, label: '3840 x 2160 (4K)' },
+];
 
 const FALLBACK_SKY_PRESETS = [
     { id: 'studio', name: '工作室', colorHex: '#10131C' },
@@ -711,16 +732,6 @@ function updateSelectedModelAnimationSpeed() {
     }
 }
 
-/**
- * 设置渲染模式
- */
-function setRenderMode(mode) {
-    state.renderMode = mode;
-    if (dom.btnRenderVideo) dom.btnRenderVideo.classList.toggle('menu-btn-active', mode === 'video');
-    if (dom.btnRenderImage) dom.btnRenderImage.classList.toggle('menu-btn-active', mode === 'image');
-    showInfo(`渲染模式: ${mode}`);
-}
-
 function applyPreviewModeToAllModels(mode) {
     const modeMap = { color: 0, normal: 1, depth: 2 };
     const modeValue = modeMap[mode];
@@ -750,7 +761,7 @@ function applyPreviewModeToAllModels(mode) {
 /**
  * 设置导出模式
  */
-function setExportMode(mode) {
+function setExportMode(mode, silent = false) {
     state.exportMode = mode;
     if (dom.modeColor) dom.modeColor.classList.toggle('menu-btn-active', mode === 'color');
     if (dom.modeDepth) dom.modeDepth.classList.toggle('menu-btn-active', mode === 'depth');
@@ -763,7 +774,455 @@ function setExportMode(mode) {
     }
 
     const labelMap = { color: '颜色', depth: '深度图', normal: '法向图' };
-    showInfo(`显示模式: ${labelMap[mode] || mode}`);
+    if (!silent) {
+        showInfo(`显示模式: ${labelMap[mode] || mode}`);
+    }
+}
+
+function getViewportResolution() {
+    let width = 0;
+    let height = 0;
+
+    const viewportRect = dom.centerViewport?.getBoundingClientRect?.();
+    if (viewportRect && viewportRect.width > 1 && viewportRect.height > 1) {
+        width = viewportRect.width;
+        height = viewportRect.height;
+    }
+
+    if ((width <= 1 || height <= 1) && app?.getMeshRenderer) {
+        const renderer = app.getMeshRenderer();
+        const rendererCanvas = renderer?.domElement;
+        if (rendererCanvas) {
+            const dpr = Math.max(0.1, Number(renderer.getPixelRatio?.() || window.devicePixelRatio || 1));
+            const canvasW = Number(rendererCanvas.width || 0);
+            const canvasH = Number(rendererCanvas.height || 0);
+            if (canvasW > 1 && canvasH > 1) {
+                width = canvasW / dpr;
+                height = canvasH / dpr;
+            }
+        }
+    }
+
+    if (width <= 1 || height <= 1) {
+        const rect = dom.canvas?.getBoundingClientRect?.();
+        width = Number(rect?.width) || Number(dom.canvas?.clientWidth) || Number(dom.canvas?.width) || 1920;
+        height = Number(rect?.height) || Number(dom.canvas?.clientHeight) || Number(dom.canvas?.height) || 1080;
+    }
+
+    width = Math.round(width);
+    height = Math.round(height);
+    width = Math.max(2, width - (width % 2));
+    height = Math.max(2, height - (height % 2));
+    return { width, height };
+}
+
+function initPanelWheelScroll() {
+    const panelCandidates = [
+        dom.leftSidebar?.querySelector?.('.sidebar-content'),
+        dom.rightSidebar?.querySelector?.('.sidebar-content'),
+    ];
+
+    for (const panel of panelCandidates) {
+        if (!(panel instanceof HTMLElement)) continue;
+        panel.addEventListener('wheel', (e) => {
+            const maxScroll = panel.scrollHeight - panel.clientHeight;
+            if (maxScroll <= 0) return;
+
+            const target = e.target;
+            if (target instanceof HTMLInputElement && target.type === 'range') {
+                return;
+            }
+
+            const next = panel.scrollTop + e.deltaY;
+            panel.scrollTop = Math.max(0, Math.min(maxScroll, next));
+            e.preventDefault();
+            e.stopPropagation();
+        }, { passive: false });
+    }
+}
+
+function resolutionToValue(width, height) {
+    return `${Math.max(2, Math.round(width))}x${Math.max(2, Math.round(height))}`;
+}
+
+function parseResolutionValue(value) {
+    const matched = String(value || '').trim().match(/^(\d+)x(\d+)$/);
+    if (!matched) return null;
+    let width = Number(matched[1]);
+    let height = Number(matched[2]);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+    width = Math.max(2, Math.round(width));
+    height = Math.max(2, Math.round(height));
+    width -= width % 2;
+    height -= height % 2;
+    return { width, height };
+}
+
+function getExportModeLabel(mode) {
+    const labels = { color: '图片', depth: '深度图', normal: '法向图' };
+    return labels[mode] || mode;
+}
+
+function updateExportTimelineHint(type) {
+    if (!dom.exportTimelineHint) return;
+    if (type !== 'video') {
+        dom.exportTimelineHint.textContent = '将导出当前视角的单帧图像';
+        return;
+    }
+    const fps = Math.max(1, Number(state.timelineFps || EXPORT_FALLBACK_FPS));
+    const totalFrames = Math.max(1, getTimelineTotalFrames() + 1);
+    const duration = frameToTime(getTimelineTotalFrames());
+    const keyframes = state.keyframes.length;
+    dom.exportTimelineHint.textContent =
+        `时间轴导出: ${duration.toFixed(3)}s, ${fps} FPS, ${totalFrames} 帧, 关键帧 ${keyframes}`;
+}
+
+function buildExportResolutionOptions() {
+    if (!dom.exportResolution) return;
+
+    const options = [];
+    const seen = new Set();
+    const current = getViewportResolution();
+    const currentValue = resolutionToValue(current.width, current.height);
+    options.push({ value: currentValue, label: `${current.width} x ${current.height} (当前窗口)` });
+    seen.add(currentValue);
+
+    for (const preset of EXPORT_PRESET_RESOLUTIONS) {
+        const value = resolutionToValue(preset.width, preset.height);
+        if (seen.has(value)) continue;
+        seen.add(value);
+        options.push({ value, label: preset.label });
+    }
+
+    dom.exportResolution.innerHTML = options
+        .map((opt) => `<option value="${opt.value}">${opt.label}</option>`)
+        .join('');
+    dom.exportResolution.value = currentValue;
+}
+
+function setExportModalBusy(busy) {
+    if (dom.exportResolution) dom.exportResolution.disabled = busy;
+    if (dom.exportMode) dom.exportMode.disabled = busy;
+    if (dom.exportFov) dom.exportFov.disabled = busy;
+    if (dom.exportCancel) dom.exportCancel.disabled = busy;
+    if (dom.exportConfirm) dom.exportConfirm.disabled = busy;
+    if (dom.exportConfirm) dom.exportConfirm.textContent = busy ? '渲染中...' : '渲染';
+}
+
+function closeExportModal() {
+    if (!dom.exportModal) return;
+    if (isExporting) return;
+    dom.exportModal.classList.add('hidden');
+    pendingExportType = null;
+}
+
+function openExportModal(type) {
+    if (!dom.exportModal || !dom.exportModalTitle) {
+        showError('导出弹窗未初始化');
+        return;
+    }
+    if (!app) {
+        showError('编辑器尚未初始化，无法导出');
+        return;
+    }
+
+    pendingExportType = type === 'video' ? 'video' : 'image';
+    buildExportResolutionOptions();
+
+    if (dom.exportMode) {
+        dom.exportMode.value = state.exportMode;
+    }
+    if (dom.exportFov) {
+        dom.exportFov.value = Number(state.sceneCameraFov || 45).toFixed(3);
+    }
+
+    dom.exportModalTitle.textContent = pendingExportType === 'video' ? '渲染视频' : '渲染图片';
+    updateExportTimelineHint(pendingExportType);
+    setExportModalBusy(false);
+    dom.exportModal.classList.remove('hidden');
+}
+
+function readExportOptionsFromModal() {
+    const resolution = parseResolutionValue(dom.exportResolution?.value || '');
+    if (!resolution) {
+        throw new Error('分辨率格式错误');
+    }
+
+    const mode = String(dom.exportMode?.value || state.exportMode);
+    if (!['color', 'depth', 'normal'].includes(mode)) {
+        throw new Error(`渲染模式无效: ${mode}`);
+    }
+
+    const fov = clampSceneFov(dom.exportFov?.value);
+    if (fov === null) {
+        throw new Error('FOV 格式错误');
+    }
+
+    return { resolution, mode, fov };
+}
+
+async function ensureImageExportApiLoaded() {
+    if (imageExportApi) return imageExportApi;
+    imageExportApi = await import('../src/exportMedia/RecordingCamera.js');
+    return imageExportApi;
+}
+
+async function ensureVideoExportApiLoaded() {
+    if (videoExportApi) return videoExportApi;
+    const [cameraApi, videoApi] = await Promise.all([
+        import('../src/exportMedia/RecordingCamera.js'),
+        import('../src/exportMedia/exportVideo.js'),
+    ]);
+    videoExportApi = {
+        RecordingCamera: cameraApi.RecordingCamera,
+        exportVideoWithRecordingCamera: videoApi.exportVideoWithRecordingCamera,
+    };
+    return videoExportApi;
+}
+
+function applySnapshotToRecordingCamera(recordingCamera, snapshot, fovOverride) {
+    if (!recordingCamera?.camera || !snapshot) return false;
+    recordingCamera.camera.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
+    recordingCamera.camera.quaternion.set(
+        snapshot.quaternion.x,
+        snapshot.quaternion.y,
+        snapshot.quaternion.z,
+        snapshot.quaternion.w
+    );
+    const safeFov = clampSceneFov(fovOverride);
+    recordingCamera.camera.fov = safeFov ?? Number(snapshot.fovDegrees || 45);
+    recordingCamera.camera.near = Math.max(1e-4, Number(snapshot.near || 0.01));
+    recordingCamera.camera.far = Math.max(recordingCamera.camera.near + 1e-3, Number(snapshot.far || 2000));
+    recordingCamera.camera.aspect = Math.max(1e-6, Number(snapshot.aspect || 1));
+    recordingCamera.camera.updateProjectionMatrix();
+    recordingCamera.camera.updateMatrixWorld(true);
+    return true;
+}
+
+async function withTemporaryPreviewMode(mode, fn) {
+    const previousMode = state.exportMode;
+    const changed = mode !== previousMode;
+    if (changed) {
+        const ok = applyPreviewModeToAllModels(mode);
+        if (app && ok === false) {
+            throw new Error(`切换渲染模式失败: ${mode}`);
+        }
+    }
+    try {
+        return await fn();
+    } finally {
+        if (changed) {
+            applyPreviewModeToAllModels(previousMode);
+        }
+    }
+}
+
+function buildExportTimelineController(recordingCamera, exportFov) {
+    const callbacks = new Set();
+    const maxFrame = Math.max(0, getTimelineTotalFrames());
+    const totalFrames = Math.max(1, maxFrame + 1);
+    let currentIndex = 0;
+
+    return {
+        getTotalFrames() {
+            return totalFrames;
+        },
+        getFrameRate() {
+            return Math.max(1, Number(state.timelineFps || EXPORT_FALLBACK_FPS));
+        },
+        getCurrentIndex() {
+            return currentIndex;
+        },
+        getLastKeyframeIndex() {
+            if (!Array.isArray(state.keyframes) || state.keyframes.length === 0) return -1;
+            let max = -1;
+            for (const keyframe of state.keyframes) {
+                const frame = Number(keyframe?.frame);
+                if (Number.isFinite(frame)) {
+                    max = Math.max(max, Math.round(frame));
+                }
+            }
+            return Math.min(maxFrame, Math.max(-1, max));
+        },
+        async setFrameIndex(frameIndex) {
+            const safeFrame = Math.max(0, Math.min(maxFrame, Math.round(Number(frameIndex) || 0)));
+            currentIndex = safeFrame;
+            setTimelineFrame(safeFrame, { applyPose: true, syncSlider: true });
+            const snapshot = app?.getRenderCameraSnapshot?.();
+            if (snapshot) {
+                applySnapshotToRecordingCamera(recordingCamera, snapshot, exportFov);
+            }
+            for (const callback of Array.from(callbacks)) {
+                await callback();
+            }
+        },
+        registerFrameUpdateCallback(callback) {
+            callbacks.add(callback);
+            return () => callbacks.delete(callback);
+        },
+    };
+}
+
+async function downloadCanvasAsPng(canvas, filePrefix = 'Image') {
+    const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob((value) => {
+            if (value) {
+                resolve(value);
+                return;
+            }
+            reject(new Error('无法导出图片数据'));
+        }, 'image/png');
+    });
+
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${filePrefix}-${timestamp}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+}
+
+async function exportImageWithOfficialPipeline(options) {
+    const { RecordingCamera } = await ensureImageExportApiLoaded();
+    const renderer = app?.getMeshRenderer?.();
+    const scene = app?.getMeshScene?.();
+    const fusedRenderer = app?.getFusedRenderer?.();
+    const cameraSnapshot = app?.getRenderCameraSnapshot?.();
+
+    if (!renderer || !scene || !cameraSnapshot) {
+        throw new Error('渲染上下文不可用，无法导出图片');
+    }
+
+    const recordingCamera = new RecordingCamera(
+        `editor_export_image_${Date.now().toString(36)}`,
+        options.resolution.width,
+        options.resolution.height,
+        options.fov,
+        false,
+        'EditorExportImage'
+    );
+
+    try {
+        recordingCamera.setScenePreviewMode?.(options.mode);
+        recordingCamera.setSceneDepthRangeScale?.(state.sceneDepthRangeScale);
+        applySnapshotToRecordingCamera(recordingCamera, cameraSnapshot, options.fov);
+
+        const gaussianModels = fusedRenderer?.getGaussianModels?.() || [];
+        const initialized = await recordingCamera.initializeRenderer(renderer, scene, gaussianModels);
+        if (!initialized) {
+            throw new Error('录制相机初始化失败');
+        }
+
+        recordingCamera.setScenePreviewMode?.(options.mode);
+        recordingCamera.setSceneDepthRangeScale?.(state.sceneDepthRangeScale);
+        const renderedCanvas = await recordingCamera.renderToCanvas(scene);
+        await downloadCanvasAsPng(renderedCanvas, `Image-${getExportModeLabel(options.mode)}`);
+    } finally {
+        recordingCamera.dispose?.();
+    }
+}
+
+async function exportVideoWithOfficialPipeline(options) {
+    if (!Array.isArray(state.keyframes) || state.keyframes.length === 0) {
+        throw new Error('请先在时间轴添加至少 1 个相机关键帧');
+    }
+
+    const { RecordingCamera, exportVideoWithRecordingCamera } = await ensureVideoExportApiLoaded();
+    const renderer = app?.getMeshRenderer?.();
+    const scene = app?.getMeshScene?.();
+    const fusedRenderer = app?.getFusedRenderer?.();
+    const cameraSnapshot = app?.getRenderCameraSnapshot?.();
+
+    if (!renderer || !scene || !cameraSnapshot) {
+        throw new Error('渲染上下文不可用，无法导出视频');
+    }
+
+    const recordingCamera = new RecordingCamera(
+        `editor_export_video_${Date.now().toString(36)}`,
+        options.resolution.width,
+        options.resolution.height,
+        options.fov,
+        false,
+        'EditorExportVideo'
+    );
+
+    const restoreFrame = Number(state.selectedFrame || 0);
+    const wasPlaying = Boolean(state.isPlaying);
+    if (state.isPlaying) {
+        stopTimelinePlayback(false);
+    }
+
+    try {
+        recordingCamera.setScenePreviewMode?.(options.mode);
+        recordingCamera.setSceneDepthRangeScale?.(state.sceneDepthRangeScale);
+        applySnapshotToRecordingCamera(recordingCamera, cameraSnapshot, options.fov);
+
+        const timelineController = buildExportTimelineController(recordingCamera, options.fov);
+        (window).startTime = Date.now();
+        await exportVideoWithRecordingCamera(
+            renderer,
+            scene,
+            recordingCamera,
+            Math.max(0.1, frameToTime(getTimelineTotalFrames())),
+            Math.max(1, Number(state.timelineFps || EXPORT_FALLBACK_FPS)),
+            options.resolution,
+            fusedRenderer || undefined,
+            false,
+            {},
+            timelineController,
+            getExportModeLabel(options.mode)
+        );
+    } finally {
+        setTimelineFrame(restoreFrame, { applyPose: true, syncSlider: true });
+        if (wasPlaying) {
+            playCameraAnimation();
+        }
+        recordingCamera.dispose?.();
+    }
+}
+
+async function onConfirmExportModal() {
+    if (!pendingExportType || isExporting) return;
+    if (!app) {
+        showError('编辑器尚未初始化，无法导出');
+        return;
+    }
+
+    let options;
+    try {
+        options = readExportOptionsFromModal();
+    } catch (error) {
+        showError(error?.message || String(error));
+        return;
+    }
+
+    isExporting = true;
+    setExportModalBusy(true);
+    showLoading(true, pendingExportType === 'video' ? '渲染视频中...' : '渲染图片中...', 10);
+
+    try {
+        await withTemporaryPreviewMode(options.mode, async () => {
+            if (pendingExportType === 'image') {
+                await exportImageWithOfficialPipeline(options);
+                showInfo(`图片导出完成: ${options.resolution.width}x${options.resolution.height}, ${getExportModeLabel(options.mode)}`);
+                return;
+            }
+            await exportVideoWithOfficialPipeline(options);
+            showInfo(`视频导出完成: ${options.resolution.width}x${options.resolution.height}, ${getExportModeLabel(options.mode)}`);
+        });
+        isExporting = false;
+        setExportModalBusy(false);
+        showLoading(false);
+        closeExportModal();
+    } catch (error) {
+        console.error(`[Editor ${state.VERSION}] 导出失败:`, error);
+        isExporting = false;
+        setExportModalBusy(false);
+        showLoading(false);
+        showError(`导出失败: ${error?.message || String(error)}`);
+    }
 }
 
 function isHttpUrl(value) {
@@ -1234,6 +1693,9 @@ function setTimelineFps(nextFpsRaw) {
     }
 
     setTimelineFrame(timeToFrame(previousTime), { applyPose: false, syncSlider: true });
+    if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
+        updateExportTimelineHint('video');
+    }
 }
 
 function renderTimelineRuler() {
@@ -1263,6 +1725,115 @@ function renderTimelineRuler() {
     dom.timelineRuler.innerHTML = html.join('');
 }
 
+function timelineClientXToFrame(clientX, targetEl) {
+    const target = targetEl instanceof HTMLElement ? targetEl : dom.timelineTrack;
+    if (!(target instanceof HTMLElement)) {
+        return clampTimelineFrame(state.selectedFrame);
+    }
+    const rect = target.getBoundingClientRect();
+    if (rect.width <= 0) {
+        return clampTimelineFrame(state.selectedFrame);
+    }
+    const effectiveWidth = Math.max(1, rect.width - TIMELINE_SLIDER_THUMB_PX);
+    const local = (clientX - rect.left) - (TIMELINE_SLIDER_THUMB_PX / 2);
+    const ratio = Math.max(0, Math.min(1, local / effectiveWidth));
+    return clampTimelineFrame(Math.round(ratio * getTimelineTotalFrames()));
+}
+
+function getKeyframeDragBoundsByIndex(index) {
+    const total = getTimelineTotalFrames();
+    if (!Number.isFinite(index) || index < 0 || index >= state.keyframes.length) {
+        return { minFrame: 0, maxFrame: total };
+    }
+
+    const prevFrame = index > 0 ? clampTimelineFrame(state.keyframes[index - 1].frame) + 1 : 0;
+    const nextFrame = index < state.keyframes.length - 1 ? clampTimelineFrame(state.keyframes[index + 1].frame) - 1 : total;
+    const minFrame = Math.max(0, prevFrame);
+    const maxFrame = Math.min(total, nextFrame);
+
+    if (minFrame > maxFrame) {
+        const current = clampTimelineFrame(state.keyframes[index].frame);
+        return { minFrame: current, maxFrame: current };
+    }
+    return { minFrame, maxFrame };
+}
+
+function endKeyframeMarkerDrag() {
+    if (!keyframeMarkerDrag) return;
+    const drag = keyframeMarkerDrag;
+    keyframeMarkerDrag = null;
+
+    window.removeEventListener('mousemove', onKeyframeMarkerDragMove);
+    window.removeEventListener('mouseup', endKeyframeMarkerDrag);
+    window.removeEventListener('blur', endKeyframeMarkerDrag);
+    document.body.classList.remove('value-dragging');
+
+    if (drag.moved) {
+        const frame = clampTimelineFrame(drag.keyframe.frame);
+        state.keyframes.sort((a, b) => a.frame - b.frame);
+        setTimelineFrame(frame, { applyPose: false, syncSlider: true });
+        showInfo(`关键帧已调整: ${frameToTime(frame).toFixed(3)}s`);
+        setTimeout(() => {
+            suppressMarkerClickOnce = false;
+        }, 0);
+    }
+}
+
+function onKeyframeMarkerDragMove(event) {
+    if (!keyframeMarkerDrag) return;
+    const nextFrameRaw = timelineClientXToFrame(event.clientX, dom.timelineTrack);
+    const nextFrame = Math.max(
+        keyframeMarkerDrag.minFrame,
+        Math.min(keyframeMarkerDrag.maxFrame, nextFrameRaw)
+    );
+
+    if (nextFrame === keyframeMarkerDrag.keyframe.frame) return;
+
+    keyframeMarkerDrag.keyframe.frame = nextFrame;
+    keyframeMarkerDrag.keyframe.time = frameToTime(nextFrame);
+    state.keyframes.sort((a, b) => a.frame - b.frame);
+    keyframeMarkerDrag.moved = true;
+    suppressMarkerClickOnce = true;
+    setTimelineFrame(nextFrame, { applyPose: false, syncSlider: true });
+
+    if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
+        updateExportTimelineHint('video');
+    }
+
+    event.preventDefault();
+}
+
+function beginKeyframeMarkerDrag(event, marker) {
+    if (!(event instanceof MouseEvent)) return;
+    if (event.button !== 0) return;
+
+    const markerIndex = Number(marker.dataset.keyframeIndex);
+    if (!Number.isFinite(markerIndex) || markerIndex < 0 || markerIndex >= state.keyframes.length) return;
+
+    const keyframe = state.keyframes[markerIndex];
+    const bounds = getKeyframeDragBoundsByIndex(markerIndex);
+    keyframeMarkerDrag = {
+        keyframe,
+        minFrame: bounds.minFrame,
+        maxFrame: bounds.maxFrame,
+        moved: false,
+    };
+    suppressMarkerClickOnce = false;
+
+    if (state.isPlaying) {
+        stopTimelinePlayback(false);
+    }
+
+    setTimelineFrame(clampTimelineFrame(keyframe.frame), { applyPose: false, syncSlider: true });
+    document.body.classList.add('value-dragging');
+    window.addEventListener('mousemove', onKeyframeMarkerDragMove);
+    window.addEventListener('mouseup', endKeyframeMarkerDrag);
+    window.addEventListener('blur', endKeyframeMarkerDrag);
+
+    event.preventDefault();
+    event.stopPropagation();
+}
+
 function renderTimelineTrack() {
     if (!dom.timelineTrack) return;
     const totalFrames = getTimelineTotalFrames();
@@ -1276,20 +1847,28 @@ function renderTimelineTrack() {
     const cursorRatio = state.selectedFrame / totalFrames;
     html.push(`<span class="timeline-track-cursor" style="left:${timelineMappedLeftStyle(cursorRatio)}"></span>`);
 
-    for (const keyframe of state.keyframes) {
+    for (let i = 0; i < state.keyframes.length; i++) {
+        const keyframe = state.keyframes[i];
         const frame = clampTimelineFrame(keyframe.frame);
         const ratio = frame / totalFrames;
         const selectedClass = frame === state.selectedFrame ? 'selected' : '';
         html.push(
-            `<button type="button" class="timeline-keyframe-marker ${selectedClass}" data-frame="${frame}" style="left:${timelineMappedLeftStyle(ratio)}" title="${keyframe.time.toFixed(3)}s"></button>`
+            `<button type="button" class="timeline-keyframe-marker ${selectedClass}" data-frame="${frame}" data-keyframe-index="${i}" style="left:${timelineMappedLeftStyle(ratio)}" title="${keyframe.time.toFixed(3)}s"></button>`
         );
     }
 
     dom.timelineTrack.innerHTML = html.join('');
     dom.timelineTrack.querySelectorAll('.timeline-keyframe-marker').forEach((marker) => {
+        marker.addEventListener('mousedown', (e) => {
+            beginKeyframeMarkerDrag(e, marker);
+        });
         marker.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
+            if (suppressMarkerClickOnce) {
+                suppressMarkerClickOnce = false;
+                return;
+            }
             const frame = Number(marker.dataset.frame);
             setTimelineFrame(frame, { applyPose: true, syncSlider: true });
         });
@@ -1350,6 +1929,9 @@ function addKeyframe() {
 
     state.currentKeyframeIndex = findKeyframeIndexByFrame(frame);
     updateTimelineUI();
+    if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
+        updateExportTimelineHint('video');
+    }
 }
 
 /**
@@ -1366,6 +1948,9 @@ function removeKeyframe() {
     const removed = state.keyframes.splice(index, 1)[0];
     state.currentKeyframeIndex = findKeyframeIndexByFrame(frame);
     updateTimelineUI();
+    if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
+        updateExportTimelineHint('video');
+    }
     showInfo(`关键帧已删除: ${removed.time.toFixed(3)}s`);
 }
 
@@ -1553,14 +2138,13 @@ function updateTimeDisplay() {
 }
 
 function handleTimelinePointerSelection(event) {
+    if (keyframeMarkerDrag) return;
+    if (suppressMarkerClickOnce) {
+        suppressMarkerClickOnce = false;
+        return;
+    }
     const target = event.currentTarget;
-    if (!(target instanceof HTMLElement)) return;
-    const rect = target.getBoundingClientRect();
-    if (rect.width <= 0) return;
-    const effectiveWidth = Math.max(1, rect.width - TIMELINE_SLIDER_THUMB_PX);
-    const local = (event.clientX - rect.left) - (TIMELINE_SLIDER_THUMB_PX / 2);
-    const ratio = Math.max(0, Math.min(1, local / effectiveWidth));
-    const frame = Math.round(ratio * getTimelineTotalFrames());
+    const frame = timelineClientXToFrame(event.clientX, target);
     setTimelineFrame(frame, { applyPose: true, syncSlider: true });
 }
 
@@ -1632,6 +2216,7 @@ function handleGlobalShortcuts(e) {
 function initEventListeners() {
     console.log(`[Editor ${state.VERSION}] Initializing event listeners...`);
     setupInputLabelDrag();
+    initPanelWheelScroll();
 
     // 场景菜单
     dom.btnSaveScene?.addEventListener('click', saveScene);
@@ -1643,9 +2228,9 @@ function initEventListeners() {
     dom.modeDepth?.addEventListener('click', () => setExportMode('depth'));
     dom.modeNormal?.addEventListener('click', () => setExportMode('normal'));
 
-    // 渲染模式
-    dom.btnRenderVideo?.addEventListener('click', () => setRenderMode('video'));
-    dom.btnRenderImage?.addEventListener('click', () => setRenderMode('image'));
+    // 渲染导出
+    dom.btnRenderVideo?.addEventListener('click', () => openExportModal('video'));
+    dom.btnRenderImage?.addEventListener('click', () => openExportModal('image'));
     dom.btnThemeToggle?.addEventListener('click', toggleTheme);
 
     // 模型操作 - 添加模型按钮（打开文件选择器）
@@ -1681,6 +2266,17 @@ function initEventListeners() {
     });
     dom.modalConfirm?.addEventListener('click', () => {
         openModelFileSelector();
+    });
+    dom.exportCancel?.addEventListener('click', () => {
+        closeExportModal();
+    });
+    dom.exportConfirm?.addEventListener('click', () => {
+        onConfirmExportModal();
+    });
+    dom.exportModal?.addEventListener('click', (e) => {
+        if (e.target === dom.exportModal) {
+            closeExportModal();
+        }
     });
 
     // 模型编辑器 - 编辑器控件
@@ -1783,6 +2379,11 @@ function initEventListeners() {
 
     // 全局快捷键
     document.addEventListener('keydown', handleGlobalShortcuts);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
+            closeExportModal();
+        }
+    });
 
     console.log(`[Editor ${state.VERSION}] Event listeners initialized`);
 }

@@ -1,5 +1,5 @@
 /**
- * Visionary Editor Application 0.0.7
+ * Visionary Editor Application 0.0.8
  * Editor version of main app with UI controls
  */
 
@@ -109,6 +109,15 @@ interface EditorCameraPose {
   fovDegrees: number;
 }
 
+interface EditorRenderCameraSnapshot {
+  position: { x: number; y: number; z: number };
+  quaternion: { x: number; y: number; z: number; w: number };
+  fovDegrees: number;
+  near: number;
+  far: number;
+  aspect: number;
+}
+
 /**
  * Editor Application
  */
@@ -157,7 +166,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = "0.0.7";
+  readonly VERSION = "0.0.8";
 
   constructor() {
     this.modelManager = new ModelManager(MAX_MODELS);
@@ -1431,6 +1440,54 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
    */
   getSceneDepthRangeScale(): number {
     return this.sceneDepthRangeScale;
+  }
+
+  /**
+   * Get Three.js renderer used by editor viewport.
+   */
+  getMeshRenderer(): THREE.WebGPURenderer | null {
+    return this.meshRenderer;
+  }
+
+  /**
+   * Get Three.js scene used by editor viewport.
+   */
+  getMeshScene(): THREE.Scene | null {
+    return this.meshScene;
+  }
+
+  /**
+   * Get fused renderer used by editor viewport.
+   */
+  getFusedRenderer(): GaussianThreeJSRenderer | null {
+    return this.fusedRenderer;
+  }
+
+  /**
+   * Get render camera snapshot (Three.js world-space pose).
+   * This is used by export pipeline to keep captured frames aligned with current editor camera.
+   */
+  getRenderCameraSnapshot(): EditorRenderCameraSnapshot | null {
+    if (!this.meshCamera) return null;
+    this.syncMeshCameraFromCoreCamera();
+    this.meshCamera.updateMatrixWorld(true);
+    return {
+      position: {
+        x: this.meshCamera.position.x,
+        y: this.meshCamera.position.y,
+        z: this.meshCamera.position.z,
+      },
+      quaternion: {
+        x: this.meshCamera.quaternion.x,
+        y: this.meshCamera.quaternion.y,
+        z: this.meshCamera.quaternion.z,
+        w: this.meshCamera.quaternion.w,
+      },
+      fovDegrees: this.meshCamera.fov,
+      near: this.meshCamera.near,
+      far: this.meshCamera.far,
+      aspect: this.meshCamera.aspect,
+    };
   }
 
   /**

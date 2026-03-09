@@ -1,4 +1,4 @@
-/* Visionary Editor Styles 0.0.7 */
+/* Visionary Editor Styles 0.0.8 */
 
 :root {
     --bg-color: #0a0a0f;
@@ -367,18 +367,24 @@ body {
 
 .sidebar-content {
     flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 12px;
 }
 
 #right-sidebar .sidebar-content {
-    display: flex;
-    flex-direction: column;
     gap: 12px;
+    overflow-y: auto;
 }
 
 .model-list {
-    max-height: calc(100vh - 200px);
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    max-height: none;
 }
 
 .empty-list {
@@ -949,13 +955,13 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 16px;
+    padding: 8px 16px;
     background: var(--panel-header-bg);
     border-bottom: 1px solid var(--panel-border);
 }
 
 .timeline-header h2 {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     margin: 0;
     color: var(--text-primary);
@@ -966,7 +972,7 @@ body {
 .timeline-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
 }
 
 .timeline-fps-control {
@@ -985,7 +991,7 @@ body {
 
 #timelineFps {
     min-width: 70px;
-    height: 30px;
+    height: 28px;
     padding: 0 8px;
     background: var(--input-bg);
     border: 1px solid var(--input-border);
@@ -1010,7 +1016,7 @@ body {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 12px;
+    padding: 6px 10px;
     background: var(--input-bg);
     border: 1px solid var(--input-border);
     border-radius: 6px;
@@ -1164,7 +1170,7 @@ body {
     border: 1px solid var(--accent);
     background: var(--panel-bg);
     transform: translate(-50%, -50%);
-    cursor: pointer;
+    cursor: ew-resize;
     transition: all 0.15s ease;
 }
 
@@ -1291,6 +1297,52 @@ body {
     display: flex;
     justify-content: flex-end;
     gap: 12px;
+}
+
+.export-modal-content {
+    width: min(460px, calc(100vw - 32px));
+}
+
+.export-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.export-form-row {
+    display: grid;
+    grid-template-columns: 88px 1fr;
+    align-items: center;
+    gap: 10px;
+}
+
+.export-form-row label {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.export-form-row select,
+.export-form-row input {
+    width: 100%;
+    min-height: 34px;
+    border: 1px solid var(--input-border);
+    border-radius: 6px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    padding: 0 10px;
+    font-size: 13px;
+}
+
+.export-form-row input:focus,
+.export-form-row select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.export-timeline-hint {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
 }
 
 /* Buttons */

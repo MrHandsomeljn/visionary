@@ -21,6 +21,8 @@ export class RecordingCamera {
     private height: number;
     private showPreview: boolean;
     private sceneWrapper: THREE.Group | null = null;
+    private scenePreviewMode: "color" | "normal" | "depth" = "color";
+    private sceneDepthRangeScale: number = 1.0;
     private tempPosition: THREE.Vector3 = new THREE.Vector3();
     private tempQuaternion: THREE.Quaternion = new THREE.Quaternion();
     private tempScale: THREE.Vector3 = new THREE.Vector3();
@@ -52,8 +54,10 @@ export class RecordingCamera {
             console.log("overlayContainer----", this.overlayContainer, this.canvas);
             this.titleDom = this.overlayContainer.querySelector('.recording-overlay-title') as HTMLElement;
         }
-        // 创建渲染目标
-        // this.ensureCanvas();
+        // 创建渲染目标（无预览模式也必须有可用 canvas）
+        if (!this.canvas) {
+            this.ensureCanvas();
+        }
     }
 
     public isInitialized(): boolean {
@@ -119,6 +123,17 @@ export class RecordingCamera {
         if (this.titleDom) {
             this.titleDom.textContent = `录制预览 - ${this.cameraName}`;
         }
+    }
+
+    public setScenePreviewMode(mode: "color" | "normal" | "depth") {
+        this.scenePreviewMode = mode;
+        this.gaussianRenderer?.setPreviewMode(mode);
+    }
+
+    public setSceneDepthRangeScale(scale: number) {
+        if (!Number.isFinite(scale)) return;
+        this.sceneDepthRangeScale = Math.max(0.01, Math.min(100, scale));
+        this.gaussianRenderer?.setDepthRangeScale(this.sceneDepthRangeScale);
     }
 
     public isPreviewVisible(): boolean {
@@ -308,6 +323,7 @@ export class RecordingCamera {
             font-size: 14px;
             z-index: 10000;
             pointer-events: none;
+            display: none;
         `;
         this.overlayContainer.textContent = '录制中...';
         document.body.appendChild(this.overlayContainer);
@@ -765,6 +781,13 @@ export class RecordingCamera {
         originalTexture?: THREE.DataTexture
     ) {
         try {
+            if (!this.canvas) {
+                this.ensureCanvas();
+            }
+            if (!this.canvas) {
+                throw new Error('录制相机 Canvas 未初始化');
+            }
+
             // 获取主渲染器的WebGPU设备
             const backend = (mainRenderer as any).backend;
             const device = backend?.device;
@@ -836,6 +859,8 @@ export class RecordingCamera {
                 // 必须传入 forceUpdate=true，确保在录制场景下更新深度纹理
                 console.log('[RecordingCamera] 调用 onResize...', this.canvas.width, this.canvas.height);
                 this.gaussianRenderer.onResize(this.canvas.width, this.canvas.height, true);
+                this.gaussianRenderer.setDepthRangeScale(this.sceneDepthRangeScale);
+                this.gaussianRenderer.setPreviewMode(this.scenePreviewMode);
 
                 console.log('[RecordingCamera] 录制相机Gaussian渲染器初始化成功');
             } else {
@@ -1111,8 +1136,8 @@ export class RecordingCamera {
      * @returns A Promise that resolves with an HTMLCanvasElement containing the rendered image.
      */
     public async renderToCanvas(scene: THREE.Scene): Promise<HTMLCanvasElement> {
-        if (!this.renderer || !this.sceneWrapper) {
-            throw new Error("RecordingCamera is not fully initialized. Renderer or Scene is missing.");
+        if (!this.renderer) {
+            throw new Error("RecordingCamera is not fully initialized. Renderer is missing.");
         }
 
         const renderer = this.renderer;
@@ -1142,25 +1167,31 @@ export class RecordingCamera {
             if (this.recordingBackground) {
                 scene.background = this.recordingBackground;
             }
-            var render_success = false;
+            let render_success = false;
             // 执行渲染
             if (this.gaussianRenderer) {
-                const currentTime = (Date.now() - (window as any).startTime) / 1000.0;
-                await this.gaussianRenderer.updateDynamicModels(camera, currentTime);
-                this.gaussianRenderer.onBeforeRender(
-                    renderer,  // 录制渲染器
-                    scene,          // 共享场景
-                    camera     // 录制相机
-                );
+                try {
+                    const currentTime = (Date.now() - (window as any).startTime) / 1000.0;
+                    await this.gaussianRenderer.updateDynamicModels(camera, currentTime);
+                    this.gaussianRenderer.onBeforeRender(
+                        renderer,  // 录制渲染器
+                        scene,     // 共享场景
+                        camera     // 录制相机
+                    );
 
-                const backend = (this.renderer as any).backend;
-                const device = backend?.device as GPUDevice;
-                if (device && device.queue) {
-                    await device.queue.onSubmittedWorkDone();
+                    const backend = (this.renderer as any).backend;
+                    const device = backend?.device as GPUDevice;
+                    if (device && device.queue) {
+                        await device.queue.onSubmittedWorkDone();
+                    }
+
+                    this.gaussianRenderer.renderThreeScene(camera);
+                    render_success = this.gaussianRenderer.drawSplats(renderer, scene, camera);
+                } catch (gaussianError) {
+                    // 导出过程中某一帧高斯路径失败时，回退到 Three.js 直渲染，避免整次导出中断。
+                    console.warn('[RecordingCamera] Gaussian render failed in export frame, fallback to Three.js:', gaussianError);
+                    render_success = false;
                 }
-
-                this.gaussianRenderer.renderThreeScene(camera);
-                render_success = this.gaussianRenderer.drawSplats(renderer, scene, camera);
             } 
             
             if (!render_success) {
