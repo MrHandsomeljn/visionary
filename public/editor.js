@@ -80,6 +80,7 @@ const dom = {
     btnRemoveKeyframe: document.getElementById('btnRemoveKeyframe'),
     btnPlayCamera: document.getElementById('btnPlayCamera'),
     btnLoopCamera: document.getElementById('btnLoopCamera'),
+    timelineSpeed: document.getElementById('timelineSpeed'),
     timelineFps: document.getElementById('timelineFps'),
     timelineRuler: document.getElementById('timelineRuler'),
     timelineTrack: document.getElementById('timelineTrack'),
@@ -120,6 +121,7 @@ const state = {
     currentKeyframeIndex: -1,
     selectedFrame: 0,
     timelineFps: 24,
+    timelinePlaybackSpeed: 1.0,
     timelineDurationSec: 10,
     sceneBackgroundHex: '#050814',
     sceneSkyPresetId: 'night',
@@ -2404,7 +2406,8 @@ function tickTimelinePlayback(timestamp) {
     if (!state.isPlaying) return;
 
     const now = Number(timestamp) || performance.now();
-    const dt = Math.max(0, Math.min(0.1, (now - timelinePlaybackLastTime) / 1000));
+    let dt = Math.max(0, Math.min(0.1, (now - timelinePlaybackLastTime) / 1000));
+    dt *= state.timelinePlaybackSpeed;
     timelinePlaybackLastTime = now;
 
     const duration = frameToTime(getTimelineTotalFrames());
@@ -2677,6 +2680,10 @@ function initEventListeners() {
     dom.btnLoopCamera?.addEventListener('click', toggleCameraLoop);
     dom.timelineFps?.addEventListener('change', (e) => {
         setTimelineFps(e.target.value);
+    });
+    dom.timelineSpeed?.addEventListener('change', (e) => {
+        state.timelinePlaybackSpeed = Number(e.target.value) || 1.0;
+        showInfo(`全局播放倍速: ${state.timelinePlaybackSpeed}x`);
     });
     dom.timelineRuler?.addEventListener('click', handleTimelinePointerSelection);
     dom.timelineTrack?.addEventListener('click', handleTimelinePointerSelection);
