@@ -2554,6 +2554,12 @@ function handleGlobalShortcuts(e) {
     if (e.repeat) return;
     if (isEditingText()) return;
 
+    if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        playCameraAnimation();
+        return;
+    }
+
     if (e.key.toLowerCase() === 'f') {
         if (!app || !state.selectedModelId) return;
         e.preventDefault();
