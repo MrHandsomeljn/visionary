@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.0.9
+ * Visionary Editor UI Controller 0.0.10
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -16,6 +16,7 @@ const dom = {
     btnSaveScene: document.getElementById('btnSaveScene'),
     btnLoadScene: document.getElementById('btnLoadScene'),
     btnClearScene: document.getElementById('btnClearScene'),
+    btnHelpTips: document.getElementById('btnHelpTips'),
     btnThemeToggle: document.getElementById('btnThemeToggle'),
 
     // 模式按钮
@@ -65,8 +66,6 @@ const dom = {
 
     // 模型动画
     onnxAnimSection: document.getElementById('onnxAnimSection'),
-    btnModelAnimPlayPause: document.getElementById('btnModelAnimPlayPause'),
-    btnModelAnimLoop: document.getElementById('btnModelAnimLoop'),
     modelAnimSpeed: document.getElementById('modelAnimSpeed'),
     modelAnimSpeedValue: document.getElementById('modelAnimSpeedValue'),
 
@@ -103,6 +102,9 @@ const dom = {
     exportTimelineHint: document.getElementById('exportTimelineHint'),
     exportCancel: document.getElementById('exportCancel'),
     exportConfirm: document.getElementById('exportConfirm'),
+    helpTipsModal: document.getElementById('helpTipsModal'),
+    helpTipsClose: document.getElementById('helpTipsClose'),
+    helpTipsConfirm: document.getElementById('helpTipsConfirm'),
 
     // 版本标签
     versionLabel: document.getElementById('versionLabel'),
@@ -110,7 +112,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.0.9',
+    VERSION: '0.0.10',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     cameraSequenceVisible: true,
@@ -343,6 +345,14 @@ function initTheme() {
 function toggleTheme() {
     const isLight = document.body.classList.contains('theme-light');
     applyTheme(isLight ? 'dark' : 'light', true);
+}
+
+function openHelpTipsModal() {
+    dom.helpTipsModal?.classList.remove('hidden');
+}
+
+function closeHelpTipsModal() {
+    dom.helpTipsModal?.classList.add('hidden');
 }
 
 function getInputStep(input) {
@@ -730,50 +740,12 @@ function updateModelAnimationControls(id = state.selectedModelId) {
 
     if (dom.onnxAnimSection) dom.onnxAnimSection.classList.remove('hidden');
 
-    if (dom.btnModelAnimPlayPause) {
-        const icon = dom.btnModelAnimPlayPause.querySelector('.btn-icon');
-        const text = dom.btnModelAnimPlayPause.querySelector('.btn-text');
-        if (anim.isPlaying) {
-            dom.btnModelAnimPlayPause.classList.add('active');
-            if (text) text.textContent = '暂停';
-        } else {
-            dom.btnModelAnimPlayPause.classList.remove('active');
-            if (text) text.textContent = '播放';
-        }
-    }
-
-    if (dom.btnModelAnimLoop) {
-        dom.btnModelAnimLoop.classList.toggle('active', anim.isLooping);
-    }
-
     if (dom.modelAnimSpeed) {
         dom.modelAnimSpeed.value = Number(anim.speed || 1).toFixed(3);
     }
     if (dom.modelAnimSpeedValue) {
         dom.modelAnimSpeedValue.textContent = `${Number(anim.speed || 1).toFixed(3)}x`;
     }
-}
-
-function toggleSelectedModelAnimationPlayPause() {
-    if (!app || !state.selectedModelId) return;
-    const anim = getSelectedModelAnimationState();
-    if (!anim || !anim.supported) return;
-
-    const targetPlaying = !anim.isPlaying;
-    app.setModelAnimationPlaying(state.selectedModelId, targetPlaying);
-    updateModelAnimationControls(state.selectedModelId);
-    showInfo(`模型动画: ${targetPlaying ? '播放' : '暂停'}`);
-}
-
-function toggleSelectedModelAnimationLoop() {
-    if (!app || !state.selectedModelId) return;
-    const anim = getSelectedModelAnimationState();
-    if (!anim || !anim.supported) return;
-
-    const targetLooping = !anim.isLooping;
-    app.setModelAnimationLoop(state.selectedModelId, targetLooping);
-    updateModelAnimationControls(state.selectedModelId);
-    showInfo(`模型动画循环: ${targetLooping ? '开启' : '关闭'}`);
 }
 
 function updateSelectedModelAnimationSpeed() {
@@ -870,28 +842,8 @@ function getViewportResolution() {
 }
 
 function initPanelWheelScroll() {
-    const panelCandidates = [
-        dom.leftSidebar?.querySelector?.('.sidebar-content'),
-        dom.rightSidebar?.querySelector?.('.sidebar-content'),
-    ];
-
-    for (const panel of panelCandidates) {
-        if (!(panel instanceof HTMLElement)) continue;
-        panel.addEventListener('wheel', (e) => {
-            const maxScroll = panel.scrollHeight - panel.clientHeight;
-            if (maxScroll <= 0) return;
-
-            const target = e.target;
-            if (target instanceof HTMLInputElement && target.type === 'range') {
-                return;
-            }
-
-            const next = panel.scrollTop + e.deltaY;
-            panel.scrollTop = Math.max(0, Math.min(maxScroll, next));
-            e.preventDefault();
-            e.stopPropagation();
-        }, { passive: false });
-    }
+    // Use native browser scrolling for side panels.
+    // Manual wheel forwarding was interfering with normal scroll behavior.
 }
 
 function resolutionToValue(width, height) {
@@ -2531,6 +2483,12 @@ function handleGlobalShortcuts(e) {
     if (e.repeat) return;
     if (isEditingText()) return;
 
+    if (e.key === '?') {
+        e.preventDefault();
+        openHelpTipsModal();
+        return;
+    }
+
     if (e.key.toLowerCase() === 'f') {
         if (!app || !state.selectedModelId) return;
         e.preventDefault();
@@ -2564,6 +2522,7 @@ function initEventListeners() {
     dom.btnSaveScene?.addEventListener('click', saveScene);
     dom.btnLoadScene?.addEventListener('click', loadScene);
     dom.btnClearScene?.addEventListener('click', clearScene);
+    dom.btnHelpTips?.addEventListener('click', openHelpTipsModal);
 
     // 模式按钮
     dom.modeColor?.addEventListener('click', () => setExportMode('color'));
@@ -2620,6 +2579,13 @@ function initEventListeners() {
             closeExportModal();
         }
     });
+    dom.helpTipsClose?.addEventListener('click', closeHelpTipsModal);
+    dom.helpTipsConfirm?.addEventListener('click', closeHelpTipsModal);
+    dom.helpTipsModal?.addEventListener('click', (e) => {
+        if (e.target === dom.helpTipsModal) {
+            closeHelpTipsModal();
+        }
+    });
 
     // 模型编辑器 - 编辑器控件
     dom.btnCloseEditor?.addEventListener('click', closeEditor);
@@ -2662,8 +2628,6 @@ function initEventListeners() {
     // 缩放
     dom.scaleS?.addEventListener('input', updateModelFromEditor);
 
-    dom.btnModelAnimPlayPause?.addEventListener('click', toggleSelectedModelAnimationPlayPause);
-    dom.btnModelAnimLoop?.addEventListener('click', toggleSelectedModelAnimationLoop);
     dom.modelAnimSpeed?.addEventListener('input', updateSelectedModelAnimationSpeed);
 
     // 相机模式
@@ -2726,6 +2690,10 @@ function initEventListeners() {
     // 全局快捷键
     document.addEventListener('keydown', handleGlobalShortcuts);
     document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && dom.helpTipsModal && !dom.helpTipsModal.classList.contains('hidden')) {
+            closeHelpTipsModal();
+            return;
+        }
         if (e.key === 'Escape' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
             closeExportModal();
         }
