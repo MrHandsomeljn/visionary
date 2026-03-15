@@ -1332,10 +1332,13 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const dynamicPC = this.getDynamicPointCloudForModel(model);
     if (!dynamicPC) return false;
 
-    const safeSpeed = Math.max(0, speed);
+    const safeSpeed = Math.max(0.001, speed);
     dynamicPC.setAnimationSpeed(safeSpeed);
     if (model.modelEntry) {
       model.modelEntry.animSpeed = safeSpeed;
+      if (model.modelEntry.animDuration !== undefined && model.modelEntry.animStartTime !== undefined) {
+         model.modelEntry.animEndTime = model.modelEntry.animStartTime + (model.modelEntry.animDuration / safeSpeed);
+      }
       this.notifyModelsChanged();
     }
     return true;

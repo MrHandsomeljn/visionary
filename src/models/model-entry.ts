@@ -27,6 +27,10 @@ export interface ModelEntry {
     modelType: ModelType;
     colorMode?: 'sh' | 'rgb';
     colorChannels?: number;
+    animStartTime?: number;
+    animEndTime?: number;
+    animDuration?: number;
+    animSpeed?: number;
 }
 
 /**

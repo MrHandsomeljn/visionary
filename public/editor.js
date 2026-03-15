@@ -68,7 +68,7 @@ const dom = {
     btnModelAnimPlayPause: document.getElementById('btnModelAnimPlayPause'),
     btnModelAnimLoop: document.getElementById('btnModelAnimLoop'),
     modelAnimSpeed: document.getElementById('modelAnimSpeed'),
-    modelAnimSpeedValue: document.getElementById('modelAnimSpeedValue'),
+    modelAnimSpeedNumber: document.getElementById('modelAnimSpeedNumber'),
 
     // 相机模式
     cameraMode: document.getElementById('cameraMode'),
@@ -746,11 +746,11 @@ function updateModelAnimationControls(id = state.selectedModelId) {
         dom.btnModelAnimLoop.classList.toggle('active', anim.isLooping);
     }
 
-    if (dom.modelAnimSpeed) {
+    if (dom.modelAnimSpeed && document.activeElement !== dom.modelAnimSpeed) {
         dom.modelAnimSpeed.value = Number(anim.speed || 1).toFixed(3);
     }
-    if (dom.modelAnimSpeedValue) {
-        dom.modelAnimSpeedValue.textContent = `${Number(anim.speed || 1).toFixed(3)}x`;
+    if (dom.modelAnimSpeedNumber && document.activeElement !== dom.modelAnimSpeedNumber) {
+        dom.modelAnimSpeedNumber.value = Number(anim.speed || 1).toFixed(3);
     }
 }
 
@@ -776,13 +776,35 @@ function toggleSelectedModelAnimationLoop() {
     showInfo(`模型动画循环: ${targetLooping ? '开启' : '关闭'}`);
 }
 
-function updateSelectedModelAnimationSpeed() {
-    if (!app || !state.selectedModelId || !dom.modelAnimSpeed) return;
-    const speed = Math.max(0.001, parseFloat(dom.modelAnimSpeed.value || '1'));
-    app.setModelAnimationSpeed(state.selectedModelId, speed);
-    if (dom.modelAnimSpeedValue) {
-        dom.modelAnimSpeedValue.textContent = `${speed.toFixed(3)}x`;
+function updateSelectedModelAnimationSpeed(e) {
+    if (!app || !state.selectedModelId) return;
+
+    let speedVal = 1.0;
+    if (e && e.target) {
+        speedVal = parseFloat(e.target.value);
+    } else if (dom.modelAnimSpeed) {
+        speedVal = parseFloat(dom.modelAnimSpeed.value || '1');
     }
+    const speed = Math.max(0.001, speedVal || 1);
+
+    if (dom.modelAnimSpeed && e?.target !== dom.modelAnimSpeed) dom.modelAnimSpeed.value = speed.toFixed(3);
+    if (dom.modelAnimSpeedNumber && e?.target !== dom.modelAnimSpeedNumber) dom.modelAnimSpeedNumber.value = speed.toFixed(3);
+
+    app.setModelAnimationSpeed(state.selectedModelId, speed);
+
+    let maxEnd = TIMELINE_MIN_DURATION_SEC;
+    for (const model of app.getModels()) {
+        if (model.isDynamic && model.modelEntry && model.modelEntry.animEndTime) {
+            maxEnd = Math.max(maxEnd, model.modelEntry.animEndTime);
+        }
+    }
+
+    if (Number.isFinite(maxEnd)) {
+        state.timelineDurationSec = maxEnd;
+    }
+
+    if (typeof renderModelTracks === 'function') renderModelTracks();
+    if (typeof updateTimelineUI === 'function') updateTimelineUI();
 }
 
 function applyPreviewModeToAllModels(mode) {
@@ -2005,11 +2027,12 @@ function renderModelTracks() {
         const leftStyle = timelineMappedLeftStyle(startRatio);
         const widthStyle = `calc((100% - ${TIMELINE_SLIDER_THUMB_PX}px) * ${widthRatio})`;
         
+        const speedText = (model.modelEntry.animSpeed !== undefined && model.modelEntry.animSpeed !== 1) ? ` ${model.modelEntry.animSpeed.toFixed(2)}x` : '';
         const trackHtml = `
             <div class="model-track" data-model-id="${model.id}">
                 <div class="model-track-clip" style="left: ${leftStyle}; width: ${widthStyle};" title="${model.name}">
                     <div class="model-track-handle left" data-action="resize-left"></div>
-                    <span class="model-track-clip-label">${model.name}</span>
+                    <span class="model-track-clip-label">${model.name}<span style="opacity: 0.7; font-size: 0.9em; margin-left: 4px;">${speedText}</span></span>
                     <div class="model-track-handle right" data-action="resize-right"></div>
                 </div>
             </div>
@@ -2665,6 +2688,7 @@ function initEventListeners() {
     dom.btnModelAnimPlayPause?.addEventListener('click', toggleSelectedModelAnimationPlayPause);
     dom.btnModelAnimLoop?.addEventListener('click', toggleSelectedModelAnimationLoop);
     dom.modelAnimSpeed?.addEventListener('input', updateSelectedModelAnimationSpeed);
+    dom.modelAnimSpeedNumber?.addEventListener('change', updateSelectedModelAnimationSpeed);
 
     // 相机模式
     dom.cameraMode?.addEventListener('change', (e) => {
