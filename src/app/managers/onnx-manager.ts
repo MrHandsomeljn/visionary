@@ -114,7 +114,8 @@ export class ONNXManager {
       isDynamic: !staticInference,
       modelType: 'onnx',
       colorMode,
-      colorChannels
+      colorChannels,
+      animDuration: gen.getAnimationDuration()
     });
     
     // Store the isolated instances for proper resource management

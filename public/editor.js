@@ -1784,6 +1784,10 @@ function setTimelineFrame(frame, options = {}) {
         applyCameraPoseForTime(state.currentTime);
     }
 
+    if (app && typeof app.setGlobalTimelineTime === 'function') {
+        app.setGlobalTimelineTime(state.currentTime);
+    }
+
     if (dom.timelineSlider && options.syncSlider !== false) {
         dom.timelineSlider.value = String(safeFrame);
     }
@@ -1969,6 +1973,167 @@ function beginKeyframeMarkerDrag(event, marker) {
     event.stopPropagation();
 }
 
+// --- Model Tracks Logic ---
+let activeModelTrackDrag = null;
+let suppressModelClickOnce = false;
+
+function renderModelTracks() {
+    const container = document.getElementById('modelTracksContainer');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    if (!app || typeof app.setGlobalTimelineTime !== 'function') return;
+    
+    const totalFrames = getTimelineTotalFrames();
+    const durationSec = frameToTime(totalFrames);
+    const models = Array.from(app.editorModels?.values() || []);
+    let hasTracks = false;
+    
+    for (const model of models) {
+        if (!model.isDynamic || !model.modelEntry) continue;
+        
+        hasTracks = true;
+        const startSec = model.modelEntry.animStartTime ?? 0;
+        const endSec = model.modelEntry.animEndTime ?? 10;
+        
+        const startRatio = Math.max(0, Math.min(1, startSec / durationSec));
+        const endRatio = Math.max(0, Math.min(1, endSec / durationSec));
+        const widthRatio = Math.max(0, endRatio - startRatio);
+        
+        const leftStyle = timelineMappedLeftStyle(startRatio);
+        const widthStyle = `calc((100% - ${TIMELINE_SLIDER_THUMB_PX}px) * ${widthRatio})`;
+        
+        const trackHtml = `
+            <div class="model-track" data-model-id="${model.id}">
+                <div class="model-track-clip" style="left: ${leftStyle}; width: ${widthStyle};" title="${model.name}">
+                    <div class="model-track-handle left" data-action="resize-left"></div>
+                    <span class="model-track-clip-label">${model.name}</span>
+                    <div class="model-track-handle right" data-action="resize-right"></div>
+                </div>
+            </div>
+        `;
+        container.insertAdjacentHTML('beforeend', trackHtml);
+    }
+    
+    if (hasTracks) {
+        container.style.display = 'flex';
+        container.querySelectorAll('.model-track-clip').forEach(clip => {
+            clip.addEventListener('mousedown', beginModelTrackDrag);
+            clip.addEventListener('click', (e) => {
+                if (suppressModelClickOnce) {
+                    suppressModelClickOnce = false;
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            });
+        });
+    } else {
+        container.style.display = 'none';
+    }
+}
+
+function beginModelTrackDrag(e) {
+    if (e.button !== 0) return;
+    
+    const clip = e.currentTarget;
+    const track = clip.parentElement;
+    const modelId = track.dataset.modelId;
+    
+    const model = app.editorModels.get(modelId);
+    if (!model || !model.modelEntry) return;
+
+    const action = e.target.dataset.action || 'move';
+    const startSec = model.modelEntry.animStartTime ?? 0;
+    const endSec = model.modelEntry.animEndTime ?? 10;
+
+    activeModelTrackDrag = {
+        modelId,
+        action,
+        initialClientX: e.clientX,
+        initialStartSec: startSec,
+        initialEndSec: endSec,
+        moved: false
+    };
+
+    suppressModelClickOnce = false;
+    document.body.classList.add('value-dragging');
+    window.addEventListener('mousemove', onModelTrackDragMove);
+    window.addEventListener('mouseup', endModelTrackDrag);
+    window.addEventListener('blur', endModelTrackDrag);
+    
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function onModelTrackDragMove(e) {
+    if (!activeModelTrackDrag) return;
+    e.preventDefault();
+
+    const container = document.getElementById('timelineTrack');
+    if (!container) return;
+    
+    activeModelTrackDrag.moved = true;
+    suppressModelClickOnce = true;
+
+    const rect = container.getBoundingClientRect();
+    const effectiveWidth = Math.max(1, rect.width - TIMELINE_SLIDER_THUMB_PX);
+    const durationSec = frameToTime(getTimelineTotalFrames());
+    
+    const dx = e.clientX - activeModelTrackDrag.initialClientX;
+    const timeDiff = (dx / effectiveWidth) * durationSec;
+
+    let newStart = activeModelTrackDrag.initialStartSec;
+    let newEnd = activeModelTrackDrag.initialEndSec;
+
+    if (activeModelTrackDrag.action === 'move') {
+        const span = newEnd - newStart;
+        newStart += timeDiff;
+        newEnd += timeDiff;
+        if (newStart < 0) { newStart = 0; newEnd = span; }
+        if (newEnd > durationSec) { newEnd = durationSec; newStart = durationSec - span; }
+    } else if (activeModelTrackDrag.action === 'resize-left') {
+        newStart += timeDiff;
+        if (newStart < 0) newStart = 0;
+        if (newStart > newEnd - 0.1) newStart = newEnd - 0.1;
+    } else if (activeModelTrackDrag.action === 'resize-right') {
+        newEnd += timeDiff;
+        if (newEnd > durationSec) newEnd = durationSec;
+        if (newEnd < newStart + 0.1) newEnd = newStart + 0.1;
+    }
+
+    if (app && typeof app.setModelAnimTimeBounds === 'function') {
+        app.setModelAnimTimeBounds(activeModelTrackDrag.modelId, newStart, newEnd);
+        renderModelTracks();
+        
+        if (activeModelTrackDrag.action === 'resize-left' || activeModelTrackDrag.action === 'move') {
+            setTimelineFrame(timeToFrame(newStart), { applyPose: true, syncSlider: true });
+        } else {
+            setTimelineFrame(timeToFrame(newEnd), { applyPose: true, syncSlider: true });
+        }
+    }
+}
+
+function endModelTrackDrag(e) {
+    if (!activeModelTrackDrag) return;
+    
+    window.removeEventListener('mousemove', onModelTrackDragMove);
+    window.removeEventListener('mouseup', endModelTrackDrag);
+    window.removeEventListener('blur', endModelTrackDrag);
+    document.body.classList.remove('value-dragging');
+    
+    if (activeModelTrackDrag.moved) {
+        showInfo('模型动画片段已更新');
+    }
+    
+    activeModelTrackDrag = null;
+    updateTimelineUI();
+    
+    setTimeout(() => {
+        suppressModelClickOnce = false;
+    }, 0);
+}
+// --- End Model Tracks Logic ---
+
 function renderTimelineTrack() {
     if (!dom.timelineTrack) return;
     const totalFrames = getTimelineTotalFrames();
@@ -2057,6 +2222,7 @@ function updateTimelineUI() {
 
     renderTimelineRuler();
     renderTimelineTrack();
+    renderModelTracks();
     updateTimeDisplay();
 }
 
@@ -2613,6 +2779,20 @@ async function init() {
     app.onModelsChanged((models) => {
         updateModelList();
         updateModelAnimationControls(state.selectedModelId);
+        
+        let maxEnd = state.timelineDurationSec;
+        for (const model of models) {
+             if (model.isDynamic && model.modelEntry && model.modelEntry.animEndTime) {
+                  maxEnd = Math.max(maxEnd, model.modelEntry.animEndTime);
+             }
+        }
+        if (maxEnd > state.timelineDurationSec && Number.isFinite(maxEnd)) {
+            state.timelineDurationSec = maxEnd;
+            if (typeof updateTimelineUI === 'function') updateTimelineUI();
+            showInfo(`时间轴已自动适配到 ${maxEnd.toFixed(1)}s`);
+        }
+        
+        if (typeof renderModelTracks === 'function') renderModelTracks();
     });
     app.onCameraInteraction?.((kind) => {
         if (!state.isPlaying) return;
