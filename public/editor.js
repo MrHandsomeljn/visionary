@@ -2049,6 +2049,11 @@ function renderModelTracks() {
                     suppressModelClickOnce = false;
                     e.preventDefault();
                     e.stopPropagation();
+                } else {
+                    const track = e.currentTarget.parentElement;
+                    if (track && track.dataset.modelId) {
+                        selectModel(track.dataset.modelId);
+                    }
                 }
             });
         });
@@ -2066,6 +2071,10 @@ function beginModelTrackDrag(e) {
     
     const model = app.editorModels.get(modelId);
     if (!model || !model.modelEntry) return;
+
+    if (state.selectedModelId !== modelId) {
+        selectModel(modelId);
+    }
 
     const action = e.target.dataset.action || 'move';
     const startSec = model.modelEntry.animStartTime ?? 0;
@@ -2092,6 +2101,12 @@ function beginModelTrackDrag(e) {
 
 function onModelTrackDragMove(e) {
     if (!activeModelTrackDrag) return;
+    const dx = e.clientX - activeModelTrackDrag.initialClientX;
+
+    if (!activeModelTrackDrag.moved && Math.abs(dx) < 3) {
+        return;
+    }
+
     e.preventDefault();
 
     const container = document.getElementById('timelineTrack');
@@ -2104,7 +2119,6 @@ function onModelTrackDragMove(e) {
     const effectiveWidth = Math.max(1, rect.width - TIMELINE_SLIDER_THUMB_PX);
     const durationSec = frameToTime(getTimelineTotalFrames());
     
-    const dx = e.clientX - activeModelTrackDrag.initialClientX;
     const timeDiff = (dx / effectiveWidth) * durationSec;
 
     let newStart = activeModelTrackDrag.initialStartSec;
