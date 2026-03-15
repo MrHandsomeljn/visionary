@@ -61,6 +61,28 @@ body {
     flex-direction: column;
 }
 
+/* Custom Webkit Scrollbars for Editor */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(161, 161, 168, 0.25);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(161, 161, 168, 0.45);
+}
+body.theme-light ::-webkit-scrollbar-thumb {
+    background: rgba(95, 107, 122, 0.25);
+}
+body.theme-light ::-webkit-scrollbar-thumb:hover {
+    background: rgba(95, 107, 122, 0.45);
+}
+
 /* Canvas Container */
 #canvas-container {
     flex: 1;
@@ -484,7 +506,6 @@ body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    overflow-y: auto;
 }
 
 #right-sidebar.hidden {
@@ -566,6 +587,7 @@ body {
     border: 1px solid var(--panel-border);
     border-radius: 10px;
     overflow: hidden;
+    flex-shrink: 0;
 }
 
 .settings-card-header {
