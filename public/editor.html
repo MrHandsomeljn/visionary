@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visionary Editor 0.0.9</title>
+    <title>Visionary Editor 0.0.10</title>
     <link rel="stylesheet" href="./editor.css">
 </head>
 <body class="theme-light">
@@ -83,10 +83,13 @@
                 </div>
                 <div class="menu-spacer"></div>
                 <div class="menu-section menu-section-right">
+                    <button id="btnHelpTips" class="help-tips-btn" title="查看操作提示">
+                        <span aria-hidden="true">i</span>
+                    </button>
                     <button id="btnThemeToggle" class="theme-toggle-btn" title="切换白天/夜间">
                         白天
                     </button>
-                    <span class="version-label" id="versionLabel">0.0.9</span>
+                    <span class="version-label" id="versionLabel">0.0.10</span>
                 </div>
             </div>
 
@@ -253,20 +256,6 @@
 
                                 <div class="property-row">
                                     <label class="property-label">
-                                        <span>控制</span>
-                                    </label>
-                                    <div class="property-inputs model-anim-actions">
-                                        <button id="btnModelAnimPlayPause" class="timeline-action-btn model-anim-btn">
-                                            <span class="btn-text">暂停</span>
-                                        </button>
-                                        <button id="btnModelAnimLoop" class="timeline-action-btn model-anim-btn active">
-                                            <span class="btn-text">循环</span>
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div class="property-row">
-                                    <label class="property-label">
                                         <span>速率</span>
                                     </label>
                                     <div class="property-inputs model-anim-speed-row">
@@ -300,6 +289,17 @@
                             <span class="btn-icon">循环</span>
                         </button>
                         <div class="timeline-fps-control">
+                            <label for="timelineSpeed">倍速</label>
+                            <select id="timelineSpeed">
+                                <option value="0.25">0.25x</option>
+                                <option value="0.5">0.5x</option>
+                                <option value="1.0" selected>1.0x</option>
+                                <option value="1.5">1.5x</option>
+                                <option value="2.0">2.0x</option>
+                                <option value="4.0">4.0x</option>
+                            </select>
+                        </div>
+                        <div class="timeline-fps-control">
                             <label for="timelineFps">FPS</label>
                             <select id="timelineFps">
                                 <option value="12">12</option>
@@ -319,6 +319,7 @@
                             <span class="placeholder-text">添加关键帧开始录制相机运动</span>
                         </div>
                     </div>
+                    <div id="modelTracksContainer" class="model-tracks-container"></div>
                     <div class="timeline-slider-container">
                         <input type="range" id="timelineSlider" min="0" max="1" step="0.001" value="0">
                     </div>
@@ -369,6 +370,47 @@
                 <div class="modal-footer">
                     <button id="exportCancel" class="button button-secondary">取消</button>
                     <button id="exportConfirm" class="button button-primary">渲染</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="helpTipsModal" class="modal hidden">
+            <div class="modal-content help-modal-content">
+                <div class="help-modal-header">
+                    <h3>操作提示</h3>
+                    <button id="helpTipsClose" class="icon-btn help-modal-close-btn" title="关闭操作提示">×</button>
+                </div>
+                <div class="modal-body help-modal-body">
+                    <div class="help-section">
+                        <h4>鼠标操作</h4>
+                        <ul class="help-list">
+                            <li><kbd>左键拖拽</kbd><span>旋转视角</span></li>
+                            <li><kbd>右键拖拽</kbd><span>平移视角</span></li>
+                            <li><kbd>滚轮</kbd><span>缩放视角</span></li>
+                            <li><kbd>拖拽文件</kbd><span>导入模型到场景</span></li>
+                        </ul>
+                    </div>
+                    <div class="help-section">
+                        <h4>键盘快捷键</h4>
+                        <ul class="help-list">
+                            <li><kbd>F</kbd><span>聚焦当前选中模型</span></li>
+                            <li><kbd>X</kbd><span>相机回正</span></li>
+                            <li><kbd>?</kbd><span>打开操作提示</span></li>
+                            <li><kbd>Esc</kbd><span>关闭操作提示或导出窗口</span></li>
+                        </ul>
+                    </div>
+                    <div class="help-section">
+                        <h4>相机移动</h4>
+                        <ul class="help-list">
+                            <li><kbd>W / A / S / D</kbd><span>前后左右移动</span></li>
+                            <li><kbd>方向键</kbd><span>前后左右移动</span></li>
+                            <li><kbd>PageUp / PageDown</kbd><span>上升 / 下降</span></li>
+                            <li><kbd>Shift</kbd><span>加速移动</span></li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="helpTipsConfirm" class="button button-primary">知道了</button>
                 </div>
             </div>
         </div>

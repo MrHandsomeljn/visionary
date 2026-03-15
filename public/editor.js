@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.0.9
+ * Visionary Editor UI Controller 0.0.10
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -16,6 +16,7 @@ const dom = {
     btnSaveScene: document.getElementById('btnSaveScene'),
     btnLoadScene: document.getElementById('btnLoadScene'),
     btnClearScene: document.getElementById('btnClearScene'),
+    btnHelpTips: document.getElementById('btnHelpTips'),
     btnThemeToggle: document.getElementById('btnThemeToggle'),
 
     // 模式按钮
@@ -65,8 +66,6 @@ const dom = {
 
     // 模型动画
     onnxAnimSection: document.getElementById('onnxAnimSection'),
-    btnModelAnimPlayPause: document.getElementById('btnModelAnimPlayPause'),
-    btnModelAnimLoop: document.getElementById('btnModelAnimLoop'),
     modelAnimSpeed: document.getElementById('modelAnimSpeed'),
     modelAnimSpeedValue: document.getElementById('modelAnimSpeedValue'),
 
@@ -80,6 +79,7 @@ const dom = {
     btnRemoveKeyframe: document.getElementById('btnRemoveKeyframe'),
     btnPlayCamera: document.getElementById('btnPlayCamera'),
     btnLoopCamera: document.getElementById('btnLoopCamera'),
+    timelineSpeed: document.getElementById('timelineSpeed'),
     timelineFps: document.getElementById('timelineFps'),
     timelineRuler: document.getElementById('timelineRuler'),
     timelineTrack: document.getElementById('timelineTrack'),
@@ -102,6 +102,9 @@ const dom = {
     exportTimelineHint: document.getElementById('exportTimelineHint'),
     exportCancel: document.getElementById('exportCancel'),
     exportConfirm: document.getElementById('exportConfirm'),
+    helpTipsModal: document.getElementById('helpTipsModal'),
+    helpTipsClose: document.getElementById('helpTipsClose'),
+    helpTipsConfirm: document.getElementById('helpTipsConfirm'),
 
     // 版本标签
     versionLabel: document.getElementById('versionLabel'),
@@ -109,7 +112,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.0.9',
+    VERSION: '0.0.10',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     cameraSequenceVisible: true,
@@ -120,6 +123,7 @@ const state = {
     currentKeyframeIndex: -1,
     selectedFrame: 0,
     timelineFps: 24,
+    timelinePlaybackSpeed: 1.0,
     timelineDurationSec: 10,
     sceneBackgroundHex: '#050814',
     sceneSkyPresetId: 'night',
@@ -341,6 +345,14 @@ function initTheme() {
 function toggleTheme() {
     const isLight = document.body.classList.contains('theme-light');
     applyTheme(isLight ? 'dark' : 'light', true);
+}
+
+function openHelpTipsModal() {
+    dom.helpTipsModal?.classList.remove('hidden');
+}
+
+function closeHelpTipsModal() {
+    dom.helpTipsModal?.classList.add('hidden');
 }
 
 function getInputStep(input) {
@@ -728,50 +740,12 @@ function updateModelAnimationControls(id = state.selectedModelId) {
 
     if (dom.onnxAnimSection) dom.onnxAnimSection.classList.remove('hidden');
 
-    if (dom.btnModelAnimPlayPause) {
-        const icon = dom.btnModelAnimPlayPause.querySelector('.btn-icon');
-        const text = dom.btnModelAnimPlayPause.querySelector('.btn-text');
-        if (anim.isPlaying) {
-            dom.btnModelAnimPlayPause.classList.add('active');
-            if (text) text.textContent = '暂停';
-        } else {
-            dom.btnModelAnimPlayPause.classList.remove('active');
-            if (text) text.textContent = '播放';
-        }
-    }
-
-    if (dom.btnModelAnimLoop) {
-        dom.btnModelAnimLoop.classList.toggle('active', anim.isLooping);
-    }
-
     if (dom.modelAnimSpeed) {
         dom.modelAnimSpeed.value = Number(anim.speed || 1).toFixed(3);
     }
     if (dom.modelAnimSpeedValue) {
         dom.modelAnimSpeedValue.textContent = `${Number(anim.speed || 1).toFixed(3)}x`;
     }
-}
-
-function toggleSelectedModelAnimationPlayPause() {
-    if (!app || !state.selectedModelId) return;
-    const anim = getSelectedModelAnimationState();
-    if (!anim || !anim.supported) return;
-
-    const targetPlaying = !anim.isPlaying;
-    app.setModelAnimationPlaying(state.selectedModelId, targetPlaying);
-    updateModelAnimationControls(state.selectedModelId);
-    showInfo(`模型动画: ${targetPlaying ? '播放' : '暂停'}`);
-}
-
-function toggleSelectedModelAnimationLoop() {
-    if (!app || !state.selectedModelId) return;
-    const anim = getSelectedModelAnimationState();
-    if (!anim || !anim.supported) return;
-
-    const targetLooping = !anim.isLooping;
-    app.setModelAnimationLoop(state.selectedModelId, targetLooping);
-    updateModelAnimationControls(state.selectedModelId);
-    showInfo(`模型动画循环: ${targetLooping ? '开启' : '关闭'}`);
 }
 
 function updateSelectedModelAnimationSpeed() {
@@ -868,28 +842,8 @@ function getViewportResolution() {
 }
 
 function initPanelWheelScroll() {
-    const panelCandidates = [
-        dom.leftSidebar?.querySelector?.('.sidebar-content'),
-        dom.rightSidebar?.querySelector?.('.sidebar-content'),
-    ];
-
-    for (const panel of panelCandidates) {
-        if (!(panel instanceof HTMLElement)) continue;
-        panel.addEventListener('wheel', (e) => {
-            const maxScroll = panel.scrollHeight - panel.clientHeight;
-            if (maxScroll <= 0) return;
-
-            const target = e.target;
-            if (target instanceof HTMLInputElement && target.type === 'range') {
-                return;
-            }
-
-            const next = panel.scrollTop + e.deltaY;
-            panel.scrollTop = Math.max(0, Math.min(maxScroll, next));
-            e.preventDefault();
-            e.stopPropagation();
-        }, { passive: false });
-    }
+    // Use native browser scrolling for side panels.
+    // Manual wheel forwarding was interfering with normal scroll behavior.
 }
 
 function resolutionToValue(width, height) {
@@ -1784,6 +1738,10 @@ function setTimelineFrame(frame, options = {}) {
         applyCameraPoseForTime(state.currentTime);
     }
 
+    if (app && typeof app.setGlobalTimelineTime === 'function') {
+        app.setGlobalTimelineTime(state.currentTime);
+    }
+
     if (dom.timelineSlider && options.syncSlider !== false) {
         dom.timelineSlider.value = String(safeFrame);
     }
@@ -1969,6 +1927,167 @@ function beginKeyframeMarkerDrag(event, marker) {
     event.stopPropagation();
 }
 
+// --- Model Tracks Logic ---
+let activeModelTrackDrag = null;
+let suppressModelClickOnce = false;
+
+function renderModelTracks() {
+    const container = document.getElementById('modelTracksContainer');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    if (!app || typeof app.setGlobalTimelineTime !== 'function') return;
+    
+    const totalFrames = getTimelineTotalFrames();
+    const durationSec = frameToTime(totalFrames);
+    const models = Array.from(app.editorModels?.values() || []);
+    let hasTracks = false;
+    
+    for (const model of models) {
+        if (!model.isDynamic || !model.modelEntry) continue;
+        
+        hasTracks = true;
+        const startSec = model.modelEntry.animStartTime ?? 0;
+        const endSec = model.modelEntry.animEndTime ?? 10;
+        
+        const startRatio = Math.max(0, Math.min(1, startSec / durationSec));
+        const endRatio = Math.max(0, Math.min(1, endSec / durationSec));
+        const widthRatio = Math.max(0, endRatio - startRatio);
+        
+        const leftStyle = timelineMappedLeftStyle(startRatio);
+        const widthStyle = `calc((100% - ${TIMELINE_SLIDER_THUMB_PX}px) * ${widthRatio})`;
+        
+        const trackHtml = `
+            <div class="model-track" data-model-id="${model.id}">
+                <div class="model-track-clip" style="left: ${leftStyle}; width: ${widthStyle};" title="${model.name}">
+                    <div class="model-track-handle left" data-action="resize-left"></div>
+                    <span class="model-track-clip-label">${model.name}</span>
+                    <div class="model-track-handle right" data-action="resize-right"></div>
+                </div>
+            </div>
+        `;
+        container.insertAdjacentHTML('beforeend', trackHtml);
+    }
+    
+    if (hasTracks) {
+        container.style.display = 'flex';
+        container.querySelectorAll('.model-track-clip').forEach(clip => {
+            clip.addEventListener('mousedown', beginModelTrackDrag);
+            clip.addEventListener('click', (e) => {
+                if (suppressModelClickOnce) {
+                    suppressModelClickOnce = false;
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            });
+        });
+    } else {
+        container.style.display = 'none';
+    }
+}
+
+function beginModelTrackDrag(e) {
+    if (e.button !== 0) return;
+    
+    const clip = e.currentTarget;
+    const track = clip.parentElement;
+    const modelId = track.dataset.modelId;
+    
+    const model = app.editorModels.get(modelId);
+    if (!model || !model.modelEntry) return;
+
+    const action = e.target.dataset.action || 'move';
+    const startSec = model.modelEntry.animStartTime ?? 0;
+    const endSec = model.modelEntry.animEndTime ?? 10;
+
+    activeModelTrackDrag = {
+        modelId,
+        action,
+        initialClientX: e.clientX,
+        initialStartSec: startSec,
+        initialEndSec: endSec,
+        moved: false
+    };
+
+    suppressModelClickOnce = false;
+    document.body.classList.add('value-dragging');
+    window.addEventListener('mousemove', onModelTrackDragMove);
+    window.addEventListener('mouseup', endModelTrackDrag);
+    window.addEventListener('blur', endModelTrackDrag);
+    
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function onModelTrackDragMove(e) {
+    if (!activeModelTrackDrag) return;
+    e.preventDefault();
+
+    const container = document.getElementById('timelineTrack');
+    if (!container) return;
+    
+    activeModelTrackDrag.moved = true;
+    suppressModelClickOnce = true;
+
+    const rect = container.getBoundingClientRect();
+    const effectiveWidth = Math.max(1, rect.width - TIMELINE_SLIDER_THUMB_PX);
+    const durationSec = frameToTime(getTimelineTotalFrames());
+    
+    const dx = e.clientX - activeModelTrackDrag.initialClientX;
+    const timeDiff = (dx / effectiveWidth) * durationSec;
+
+    let newStart = activeModelTrackDrag.initialStartSec;
+    let newEnd = activeModelTrackDrag.initialEndSec;
+
+    if (activeModelTrackDrag.action === 'move') {
+        const span = newEnd - newStart;
+        newStart += timeDiff;
+        newEnd += timeDiff;
+        if (newStart < 0) { newStart = 0; newEnd = span; }
+        if (newEnd > durationSec) { newEnd = durationSec; newStart = durationSec - span; }
+    } else if (activeModelTrackDrag.action === 'resize-left') {
+        newStart += timeDiff;
+        if (newStart < 0) newStart = 0;
+        if (newStart > newEnd - 0.1) newStart = newEnd - 0.1;
+    } else if (activeModelTrackDrag.action === 'resize-right') {
+        newEnd += timeDiff;
+        if (newEnd > durationSec) newEnd = durationSec;
+        if (newEnd < newStart + 0.1) newEnd = newStart + 0.1;
+    }
+
+    if (app && typeof app.setModelAnimTimeBounds === 'function') {
+        app.setModelAnimTimeBounds(activeModelTrackDrag.modelId, newStart, newEnd);
+        renderModelTracks();
+        
+        if (activeModelTrackDrag.action === 'resize-left' || activeModelTrackDrag.action === 'move') {
+            setTimelineFrame(timeToFrame(newStart), { applyPose: true, syncSlider: true });
+        } else {
+            setTimelineFrame(timeToFrame(newEnd), { applyPose: true, syncSlider: true });
+        }
+    }
+}
+
+function endModelTrackDrag(e) {
+    if (!activeModelTrackDrag) return;
+    
+    window.removeEventListener('mousemove', onModelTrackDragMove);
+    window.removeEventListener('mouseup', endModelTrackDrag);
+    window.removeEventListener('blur', endModelTrackDrag);
+    document.body.classList.remove('value-dragging');
+    
+    if (activeModelTrackDrag.moved) {
+        showInfo('模型动画片段已更新');
+    }
+    
+    activeModelTrackDrag = null;
+    updateTimelineUI();
+    
+    setTimeout(() => {
+        suppressModelClickOnce = false;
+    }, 0);
+}
+// --- End Model Tracks Logic ---
+
 function renderTimelineTrack() {
     if (!dom.timelineTrack) return;
     const totalFrames = getTimelineTotalFrames();
@@ -2057,6 +2176,7 @@ function updateTimelineUI() {
 
     renderTimelineRuler();
     renderTimelineTrack();
+    renderModelTracks();
     updateTimeDisplay();
 }
 
@@ -2238,7 +2358,8 @@ function tickTimelinePlayback(timestamp) {
     if (!state.isPlaying) return;
 
     const now = Number(timestamp) || performance.now();
-    const dt = Math.max(0, Math.min(0.1, (now - timelinePlaybackLastTime) / 1000));
+    let dt = Math.max(0, Math.min(0.1, (now - timelinePlaybackLastTime) / 1000));
+    dt *= state.timelinePlaybackSpeed;
     timelinePlaybackLastTime = now;
 
     const duration = frameToTime(getTimelineTotalFrames());
@@ -2362,6 +2483,12 @@ function handleGlobalShortcuts(e) {
     if (e.repeat) return;
     if (isEditingText()) return;
 
+    if (e.key === '?') {
+        e.preventDefault();
+        openHelpTipsModal();
+        return;
+    }
+
     if (e.key.toLowerCase() === 'f') {
         if (!app || !state.selectedModelId) return;
         e.preventDefault();
@@ -2395,6 +2522,7 @@ function initEventListeners() {
     dom.btnSaveScene?.addEventListener('click', saveScene);
     dom.btnLoadScene?.addEventListener('click', loadScene);
     dom.btnClearScene?.addEventListener('click', clearScene);
+    dom.btnHelpTips?.addEventListener('click', openHelpTipsModal);
 
     // 模式按钮
     dom.modeColor?.addEventListener('click', () => setExportMode('color'));
@@ -2451,6 +2579,13 @@ function initEventListeners() {
             closeExportModal();
         }
     });
+    dom.helpTipsClose?.addEventListener('click', closeHelpTipsModal);
+    dom.helpTipsConfirm?.addEventListener('click', closeHelpTipsModal);
+    dom.helpTipsModal?.addEventListener('click', (e) => {
+        if (e.target === dom.helpTipsModal) {
+            closeHelpTipsModal();
+        }
+    });
 
     // 模型编辑器 - 编辑器控件
     dom.btnCloseEditor?.addEventListener('click', closeEditor);
@@ -2493,8 +2628,6 @@ function initEventListeners() {
     // 缩放
     dom.scaleS?.addEventListener('input', updateModelFromEditor);
 
-    dom.btnModelAnimPlayPause?.addEventListener('click', toggleSelectedModelAnimationPlayPause);
-    dom.btnModelAnimLoop?.addEventListener('click', toggleSelectedModelAnimationLoop);
     dom.modelAnimSpeed?.addEventListener('input', updateSelectedModelAnimationSpeed);
 
     // 相机模式
@@ -2511,6 +2644,10 @@ function initEventListeners() {
     dom.btnLoopCamera?.addEventListener('click', toggleCameraLoop);
     dom.timelineFps?.addEventListener('change', (e) => {
         setTimelineFps(e.target.value);
+    });
+    dom.timelineSpeed?.addEventListener('change', (e) => {
+        state.timelinePlaybackSpeed = Number(e.target.value) || 1.0;
+        showInfo(`全局播放倍速: ${state.timelinePlaybackSpeed}x`);
     });
     dom.timelineRuler?.addEventListener('click', handleTimelinePointerSelection);
     dom.timelineTrack?.addEventListener('click', handleTimelinePointerSelection);
@@ -2553,6 +2690,10 @@ function initEventListeners() {
     // 全局快捷键
     document.addEventListener('keydown', handleGlobalShortcuts);
     document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && dom.helpTipsModal && !dom.helpTipsModal.classList.contains('hidden')) {
+            closeHelpTipsModal();
+            return;
+        }
         if (e.key === 'Escape' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
             closeExportModal();
         }
@@ -2613,6 +2754,20 @@ async function init() {
     app.onModelsChanged((models) => {
         updateModelList();
         updateModelAnimationControls(state.selectedModelId);
+        
+        let maxEnd = state.timelineDurationSec;
+        for (const model of models) {
+             if (model.isDynamic && model.modelEntry && model.modelEntry.animEndTime) {
+                  maxEnd = Math.max(maxEnd, model.modelEntry.animEndTime);
+             }
+        }
+        if (maxEnd > state.timelineDurationSec && Number.isFinite(maxEnd)) {
+            state.timelineDurationSec = maxEnd;
+            if (typeof updateTimelineUI === 'function') updateTimelineUI();
+            showInfo(`时间轴已自动适配到 ${maxEnd.toFixed(1)}s`);
+        }
+        
+        if (typeof renderModelTracks === 'function') renderModelTracks();
     });
     app.onCameraInteraction?.((kind) => {
         if (!state.isPlaying) return;
