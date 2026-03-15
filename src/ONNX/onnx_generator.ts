@@ -51,6 +51,7 @@ export class ONNXGenerator {
   getDetectedColorMode(): 'sh' | 'rgb' { return this.io.detectedColorMode; }
   getDetectedColorDim(): number { return this.io.detectedColorDim; }
   getActualMaxPoints(): number { return this.io.maxPoints; }
+  getAnimationDuration(): number | undefined { return this.io.getAnimationDuration?.(); }
 
   // 精度信息
   getGaussianPrecision(): PrecisionMetadata { return (this.io as any).gaussianPrecisionInfo ?? (this.io as any).gaussianPrecision; }
