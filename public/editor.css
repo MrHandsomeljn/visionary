@@ -61,6 +61,28 @@ body {
     flex-direction: column;
 }
 
+/* Custom Webkit Scrollbars for Editor */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(161, 161, 168, 0.25);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(161, 161, 168, 0.45);
+}
+body.theme-light ::-webkit-scrollbar-thumb {
+    background: rgba(95, 107, 122, 0.25);
+}
+body.theme-light ::-webkit-scrollbar-thumb:hover {
+    background: rgba(95, 107, 122, 0.45);
+}
+
 /* Canvas Container */
 #canvas-container {
     flex: 1;
@@ -484,7 +506,6 @@ body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    overflow-y: auto;
 }
 
 #right-sidebar.hidden {
@@ -566,6 +587,7 @@ body {
     border: 1px solid var(--panel-border);
     border-radius: 10px;
     overflow: hidden;
+    flex-shrink: 0;
 }
 
 .settings-card-header {
@@ -1180,6 +1202,76 @@ body {
 
 .timeline-keyframe-marker.selected {
     background: var(--accent);
+}
+
+.model-tracks-container {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 4px;
+    margin-bottom: 2px;
+}
+
+.model-track {
+    position: relative;
+    height: 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+}
+
+.model-track-clip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgba(74, 144, 226, 0.4);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 10px;
+    box-sizing: border-box;
+}
+
+.model-track-clip:active {
+    cursor: grabbing;
+    background: rgba(74, 144, 226, 0.6);
+}
+
+.model-track-clip-label {
+    font-size: 10px;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0 4px;
+    pointer-events: none;
+}
+
+.model-track-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    background: rgba(255,255,255,0.3);
+    cursor: ew-resize;
+}
+
+.model-track-handle.left {
+    left: 0;
+    border-right: 1px solid var(--accent);
+    border-radius: 3px 0 0 3px;
+}
+
+.model-track-handle.right {
+    right: 0;
+    border-left: 1px solid var(--accent);
+    border-radius: 0 3px 3px 0;
+}
+
+.model-track-handle:hover {
+    background: rgba(255,255,255,0.7);
 }
 
 .timeline-slider-container {

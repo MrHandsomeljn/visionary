@@ -107,6 +107,8 @@ interface EditorModel {
   gaussianModel?: GaussianModel;
   sourceFile?: File;
   sourcePath?: string;
+  animStartTime?: number;
+  animEndTime?: number;
 }
 
 interface EditorCameraPose {
@@ -189,6 +191,23 @@ export class EditorApp {
 
   // Version
   readonly VERSION = "0.0.9";
+
+  private globalTimelineTime: number = 0;
+
+  public setGlobalTimelineTime(timeSec: number): void {
+    this.globalTimelineTime = timeSec;
+  }
+
+  public setModelAnimTimeBounds(id: string, start: number, end: number): void {
+    const model = this.editorModels.get(id);
+    if (model && model.modelEntry) {
+      model.modelEntry.animStartTime = start;
+      model.modelEntry.animEndTime = end;
+      if (this.onModelsChangedCallback) {
+        this.onModelsChangedCallback(Array.from(this.editorModels.values()));
+      }
+    }
+  }
 
   constructor() {
     this.modelManager = new ModelManager(MAX_MODELS);
@@ -422,6 +441,27 @@ export class EditorApp {
         this.updateCameraSequenceCurrentMarkerFromMeshCamera();
 
         if (this.fusedRenderer) {
+          let modelIndex = 0;
+          for (const model of this.editorModels.values()) {
+            if (model.gaussianModel) {
+              const rendererId = `model_${modelIndex}`;
+              if (model.isDynamic && model.modelEntry) {
+                const start = model.modelEntry.animStartTime ?? 0;
+                const end = model.modelEntry.animEndTime ?? 10;
+                
+                if (this.globalTimelineTime >= start && this.globalTimelineTime <= end) {
+                  this.fusedRenderer.setModelVisible(rendererId, model.visible);
+                  this.fusedRenderer.pauseModelAnimation(rendererId);
+                  const localTime = (this.globalTimelineTime - start) * (model.modelEntry.animSpeed ?? 1.0);
+                  this.fusedRenderer.setModelAnimationTime(rendererId, localTime);
+                } else {
+                  this.fusedRenderer.setModelVisible(rendererId, false);
+                }
+              }
+              modelIndex++;
+            }
+          }
+
           await this.fusedRenderer.updateDynamicModels(this.meshCamera, (now - this.fusionStartTime) / 500.0);
           this.fusedRenderer.onBeforeRender(this.meshRenderer, this.meshScene, this.meshCamera);
           this.fusedRenderer.renderThreeScene(this.meshCamera);
@@ -779,6 +819,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       }
 
       if (modelEntry) {
+        if (isDynamic) {
+          modelEntry.animStartTime = 0;
+          modelEntry.animEndTime = modelEntry.animDuration ?? 10;
+        }
         if (!this.meshScene || !this.meshRenderer) {
           throw new Error("Fusion renderer not initialized");
         }
@@ -1290,6 +1334,13 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
     const safeSpeed = Math.max(0.001, speed);
     dynamicPC.setAnimationSpeed(safeSpeed);
+    if (model.modelEntry) {
+      model.modelEntry.animSpeed = safeSpeed;
+      if (model.modelEntry.animDuration !== undefined && model.modelEntry.animStartTime !== undefined) {
+         model.modelEntry.animEndTime = model.modelEntry.animStartTime + (model.modelEntry.animDuration / safeSpeed);
+      }
+      this.notifyModelsChanged();
+    }
     return true;
   }
 

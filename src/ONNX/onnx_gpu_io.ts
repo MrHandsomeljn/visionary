@@ -96,6 +96,32 @@ export class OnnxGpuIO {
   public get detectedColorDim(): number { return this.colorDim; }
   public get detectedColorOutputName(): string | null { return this.colorOutputName; }
 
+  public getAnimationDuration(): number | undefined {
+    if (!this.session) return undefined;
+    try {
+      let meta = (this.session as any).modelMetadata?.customMetadataMap;
+      if (!meta && (this.session as any).metadata) {
+         meta = (this.session as any).metadata.customMetadataMap || (this.session as any).metadata;
+      }
+      if (!meta) return undefined;
+      
+      if (meta.duration) {
+        const d = parseFloat(meta.duration);
+        if (Number.isFinite(d) && d > 0) return d;
+      }
+      if (meta.fps && meta.frames) {
+        const f = parseInt(meta.frames);
+        const fps = parseFloat(meta.fps);
+        if (Number.isFinite(f) && Number.isFinite(fps) && fps > 0) {
+          return f / fps;
+        }
+      }
+    } catch (e) {
+      this.warn("Failed to extract animation duration from metadata", e);
+    }
+    return undefined;
+  }
+
   // Conditional logging helpers
   private log(...args: any[]) {
     // this.verbose = true;

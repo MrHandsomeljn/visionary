@@ -271,7 +271,7 @@
                                     </label>
                                     <div class="property-inputs model-anim-speed-row">
                                         <input type="range" id="modelAnimSpeed" min="0.001" max="10.0" step="0.001" value="1.000">
-                                        <span id="modelAnimSpeedValue" class="time-value">1.000x</span>
+                                        <input type="number" id="modelAnimSpeedNumber" min="0.001" max="10.0" step="0.001" value="1.000">
                                     </div>
                                 </div>
                             </div>
@@ -300,6 +300,17 @@
                             <span class="btn-icon">循环</span>
                         </button>
                         <div class="timeline-fps-control">
+                            <label for="timelineSpeed">倍速</label>
+                            <select id="timelineSpeed">
+                                <option value="0.25">0.25x</option>
+                                <option value="0.5">0.5x</option>
+                                <option value="1.0" selected>1.0x</option>
+                                <option value="1.5">1.5x</option>
+                                <option value="2.0">2.0x</option>
+                                <option value="4.0">4.0x</option>
+                            </select>
+                        </div>
+                        <div class="timeline-fps-control">
                             <label for="timelineFps">FPS</label>
                             <select id="timelineFps">
                                 <option value="12">12</option>
@@ -319,6 +330,7 @@
                             <span class="placeholder-text">添加关键帧开始录制相机运动</span>
                         </div>
                     </div>
+                    <div id="modelTracksContainer" class="model-tracks-container"></div>
                     <div class="timeline-slider-container">
                         <input type="range" id="timelineSlider" min="0" max="1" step="0.001" value="0">
                     </div>

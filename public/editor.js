@@ -68,7 +68,7 @@ const dom = {
     btnModelAnimPlayPause: document.getElementById('btnModelAnimPlayPause'),
     btnModelAnimLoop: document.getElementById('btnModelAnimLoop'),
     modelAnimSpeed: document.getElementById('modelAnimSpeed'),
-    modelAnimSpeedValue: document.getElementById('modelAnimSpeedValue'),
+    modelAnimSpeedNumber: document.getElementById('modelAnimSpeedNumber'),
 
     // 相机模式
     cameraMode: document.getElementById('cameraMode'),
@@ -80,6 +80,7 @@ const dom = {
     btnRemoveKeyframe: document.getElementById('btnRemoveKeyframe'),
     btnPlayCamera: document.getElementById('btnPlayCamera'),
     btnLoopCamera: document.getElementById('btnLoopCamera'),
+    timelineSpeed: document.getElementById('timelineSpeed'),
     timelineFps: document.getElementById('timelineFps'),
     timelineRuler: document.getElementById('timelineRuler'),
     timelineTrack: document.getElementById('timelineTrack'),
@@ -120,6 +121,7 @@ const state = {
     currentKeyframeIndex: -1,
     selectedFrame: 0,
     timelineFps: 24,
+    timelinePlaybackSpeed: 1.0,
     timelineDurationSec: 10,
     sceneBackgroundHex: '#050814',
     sceneSkyPresetId: 'night',
@@ -744,11 +746,11 @@ function updateModelAnimationControls(id = state.selectedModelId) {
         dom.btnModelAnimLoop.classList.toggle('active', anim.isLooping);
     }
 
-    if (dom.modelAnimSpeed) {
+    if (dom.modelAnimSpeed && document.activeElement !== dom.modelAnimSpeed) {
         dom.modelAnimSpeed.value = Number(anim.speed || 1).toFixed(3);
     }
-    if (dom.modelAnimSpeedValue) {
-        dom.modelAnimSpeedValue.textContent = `${Number(anim.speed || 1).toFixed(3)}x`;
+    if (dom.modelAnimSpeedNumber && document.activeElement !== dom.modelAnimSpeedNumber) {
+        dom.modelAnimSpeedNumber.value = Number(anim.speed || 1).toFixed(3);
     }
 }
 
@@ -774,13 +776,35 @@ function toggleSelectedModelAnimationLoop() {
     showInfo(`模型动画循环: ${targetLooping ? '开启' : '关闭'}`);
 }
 
-function updateSelectedModelAnimationSpeed() {
-    if (!app || !state.selectedModelId || !dom.modelAnimSpeed) return;
-    const speed = Math.max(0.001, parseFloat(dom.modelAnimSpeed.value || '1'));
-    app.setModelAnimationSpeed(state.selectedModelId, speed);
-    if (dom.modelAnimSpeedValue) {
-        dom.modelAnimSpeedValue.textContent = `${speed.toFixed(3)}x`;
+function updateSelectedModelAnimationSpeed(e) {
+    if (!app || !state.selectedModelId) return;
+
+    let speedVal = 1.0;
+    if (e && e.target) {
+        speedVal = parseFloat(e.target.value);
+    } else if (dom.modelAnimSpeed) {
+        speedVal = parseFloat(dom.modelAnimSpeed.value || '1');
     }
+    const speed = Math.max(0.001, speedVal || 1);
+
+    if (dom.modelAnimSpeed && e?.target !== dom.modelAnimSpeed) dom.modelAnimSpeed.value = speed.toFixed(3);
+    if (dom.modelAnimSpeedNumber && e?.target !== dom.modelAnimSpeedNumber) dom.modelAnimSpeedNumber.value = speed.toFixed(3);
+
+    app.setModelAnimationSpeed(state.selectedModelId, speed);
+
+    let maxEnd = TIMELINE_MIN_DURATION_SEC;
+    for (const model of app.getModels()) {
+        if (model.isDynamic && model.modelEntry && model.modelEntry.animEndTime) {
+            maxEnd = Math.max(maxEnd, model.modelEntry.animEndTime);
+        }
+    }
+
+    if (Number.isFinite(maxEnd)) {
+        state.timelineDurationSec = maxEnd;
+    }
+
+    if (typeof renderModelTracks === 'function') renderModelTracks();
+    if (typeof updateTimelineUI === 'function') updateTimelineUI();
 }
 
 function applyPreviewModeToAllModels(mode) {
@@ -1784,6 +1808,10 @@ function setTimelineFrame(frame, options = {}) {
         applyCameraPoseForTime(state.currentTime);
     }
 
+    if (app && typeof app.setGlobalTimelineTime === 'function') {
+        app.setGlobalTimelineTime(state.currentTime);
+    }
+
     if (dom.timelineSlider && options.syncSlider !== false) {
         dom.timelineSlider.value = String(safeFrame);
     }
@@ -1969,6 +1997,182 @@ function beginKeyframeMarkerDrag(event, marker) {
     event.stopPropagation();
 }
 
+// --- Model Tracks Logic ---
+let activeModelTrackDrag = null;
+let suppressModelClickOnce = false;
+
+function renderModelTracks() {
+    const container = document.getElementById('modelTracksContainer');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    if (!app || typeof app.setGlobalTimelineTime !== 'function') return;
+    
+    const totalFrames = getTimelineTotalFrames();
+    const durationSec = frameToTime(totalFrames);
+    const models = Array.from(app.editorModels?.values() || []);
+    let hasTracks = false;
+    
+    for (const model of models) {
+        if (!model.isDynamic || !model.modelEntry) continue;
+        
+        hasTracks = true;
+        const startSec = model.modelEntry.animStartTime ?? 0;
+        const endSec = model.modelEntry.animEndTime ?? 10;
+        
+        const startRatio = Math.max(0, Math.min(1, startSec / durationSec));
+        const endRatio = Math.max(0, Math.min(1, endSec / durationSec));
+        const widthRatio = Math.max(0, endRatio - startRatio);
+        
+        const leftStyle = timelineMappedLeftStyle(startRatio);
+        const widthStyle = `calc((100% - ${TIMELINE_SLIDER_THUMB_PX}px) * ${widthRatio})`;
+        
+        const speedText = (model.modelEntry.animSpeed !== undefined && model.modelEntry.animSpeed !== 1) ? ` ${model.modelEntry.animSpeed.toFixed(2)}x` : '';
+        const trackHtml = `
+            <div class="model-track" data-model-id="${model.id}">
+                <div class="model-track-clip" style="left: ${leftStyle}; width: ${widthStyle};" title="${model.name}">
+                    <div class="model-track-handle left" data-action="resize-left"></div>
+                    <span class="model-track-clip-label">${model.name}<span style="opacity: 0.7; font-size: 0.9em; margin-left: 4px;">${speedText}</span></span>
+                    <div class="model-track-handle right" data-action="resize-right"></div>
+                </div>
+            </div>
+        `;
+        container.insertAdjacentHTML('beforeend', trackHtml);
+    }
+    
+    if (hasTracks) {
+        container.style.display = 'flex';
+        container.querySelectorAll('.model-track-clip').forEach(clip => {
+            clip.addEventListener('mousedown', beginModelTrackDrag);
+            clip.addEventListener('click', (e) => {
+                if (suppressModelClickOnce) {
+                    suppressModelClickOnce = false;
+                    e.preventDefault();
+                    e.stopPropagation();
+                } else {
+                    const track = e.currentTarget.parentElement;
+                    if (track && track.dataset.modelId) {
+                        selectModel(track.dataset.modelId);
+                    }
+                }
+            });
+        });
+    } else {
+        container.style.display = 'none';
+    }
+}
+
+function beginModelTrackDrag(e) {
+    if (e.button !== 0) return;
+    
+    const clip = e.currentTarget;
+    const track = clip.parentElement;
+    const modelId = track.dataset.modelId;
+    
+    const model = app.editorModels.get(modelId);
+    if (!model || !model.modelEntry) return;
+
+    if (state.selectedModelId !== modelId) {
+        selectModel(modelId);
+    }
+
+    const action = e.target.dataset.action || 'move';
+    const startSec = model.modelEntry.animStartTime ?? 0;
+    const endSec = model.modelEntry.animEndTime ?? 10;
+
+    activeModelTrackDrag = {
+        modelId,
+        action,
+        initialClientX: e.clientX,
+        initialStartSec: startSec,
+        initialEndSec: endSec,
+        moved: false
+    };
+
+    suppressModelClickOnce = false;
+    document.body.classList.add('value-dragging');
+    window.addEventListener('mousemove', onModelTrackDragMove);
+    window.addEventListener('mouseup', endModelTrackDrag);
+    window.addEventListener('blur', endModelTrackDrag);
+    
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function onModelTrackDragMove(e) {
+    if (!activeModelTrackDrag) return;
+    const dx = e.clientX - activeModelTrackDrag.initialClientX;
+
+    if (!activeModelTrackDrag.moved && Math.abs(dx) < 3) {
+        return;
+    }
+
+    e.preventDefault();
+
+    const container = document.getElementById('timelineTrack');
+    if (!container) return;
+    
+    activeModelTrackDrag.moved = true;
+    suppressModelClickOnce = true;
+
+    const rect = container.getBoundingClientRect();
+    const effectiveWidth = Math.max(1, rect.width - TIMELINE_SLIDER_THUMB_PX);
+    const durationSec = frameToTime(getTimelineTotalFrames());
+    
+    const timeDiff = (dx / effectiveWidth) * durationSec;
+
+    let newStart = activeModelTrackDrag.initialStartSec;
+    let newEnd = activeModelTrackDrag.initialEndSec;
+
+    if (activeModelTrackDrag.action === 'move') {
+        const span = newEnd - newStart;
+        newStart += timeDiff;
+        newEnd += timeDiff;
+        if (newStart < 0) { newStart = 0; newEnd = span; }
+        if (newEnd > durationSec) { newEnd = durationSec; newStart = durationSec - span; }
+    } else if (activeModelTrackDrag.action === 'resize-left') {
+        newStart += timeDiff;
+        if (newStart < 0) newStart = 0;
+        if (newStart > newEnd - 0.1) newStart = newEnd - 0.1;
+    } else if (activeModelTrackDrag.action === 'resize-right') {
+        newEnd += timeDiff;
+        if (newEnd > durationSec) newEnd = durationSec;
+        if (newEnd < newStart + 0.1) newEnd = newStart + 0.1;
+    }
+
+    if (app && typeof app.setModelAnimTimeBounds === 'function') {
+        app.setModelAnimTimeBounds(activeModelTrackDrag.modelId, newStart, newEnd);
+        renderModelTracks();
+        
+        if (activeModelTrackDrag.action === 'resize-left' || activeModelTrackDrag.action === 'move') {
+            setTimelineFrame(timeToFrame(newStart), { applyPose: true, syncSlider: true });
+        } else {
+            setTimelineFrame(timeToFrame(newEnd), { applyPose: true, syncSlider: true });
+        }
+    }
+}
+
+function endModelTrackDrag(e) {
+    if (!activeModelTrackDrag) return;
+    
+    window.removeEventListener('mousemove', onModelTrackDragMove);
+    window.removeEventListener('mouseup', endModelTrackDrag);
+    window.removeEventListener('blur', endModelTrackDrag);
+    document.body.classList.remove('value-dragging');
+    
+    if (activeModelTrackDrag.moved) {
+        showInfo('模型动画片段已更新');
+    }
+    
+    activeModelTrackDrag = null;
+    updateTimelineUI();
+    
+    setTimeout(() => {
+        suppressModelClickOnce = false;
+    }, 0);
+}
+// --- End Model Tracks Logic ---
+
 function renderTimelineTrack() {
     if (!dom.timelineTrack) return;
     const totalFrames = getTimelineTotalFrames();
@@ -2057,6 +2261,7 @@ function updateTimelineUI() {
 
     renderTimelineRuler();
     renderTimelineTrack();
+    renderModelTracks();
     updateTimeDisplay();
 }
 
@@ -2238,7 +2443,8 @@ function tickTimelinePlayback(timestamp) {
     if (!state.isPlaying) return;
 
     const now = Number(timestamp) || performance.now();
-    const dt = Math.max(0, Math.min(0.1, (now - timelinePlaybackLastTime) / 1000));
+    let dt = Math.max(0, Math.min(0.1, (now - timelinePlaybackLastTime) / 1000));
+    dt *= state.timelinePlaybackSpeed;
     timelinePlaybackLastTime = now;
 
     const duration = frameToTime(getTimelineTotalFrames());
@@ -2361,6 +2567,12 @@ function isEditingText() {
 function handleGlobalShortcuts(e) {
     if (e.repeat) return;
     if (isEditingText()) return;
+
+    if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        playCameraAnimation();
+        return;
+    }
 
     if (e.key.toLowerCase() === 'f') {
         if (!app || !state.selectedModelId) return;
@@ -2496,6 +2708,7 @@ function initEventListeners() {
     dom.btnModelAnimPlayPause?.addEventListener('click', toggleSelectedModelAnimationPlayPause);
     dom.btnModelAnimLoop?.addEventListener('click', toggleSelectedModelAnimationLoop);
     dom.modelAnimSpeed?.addEventListener('input', updateSelectedModelAnimationSpeed);
+    dom.modelAnimSpeedNumber?.addEventListener('change', updateSelectedModelAnimationSpeed);
 
     // 相机模式
     dom.cameraMode?.addEventListener('change', (e) => {
@@ -2511,6 +2724,10 @@ function initEventListeners() {
     dom.btnLoopCamera?.addEventListener('click', toggleCameraLoop);
     dom.timelineFps?.addEventListener('change', (e) => {
         setTimelineFps(e.target.value);
+    });
+    dom.timelineSpeed?.addEventListener('change', (e) => {
+        state.timelinePlaybackSpeed = Number(e.target.value) || 1.0;
+        showInfo(`全局播放倍速: ${state.timelinePlaybackSpeed}x`);
     });
     dom.timelineRuler?.addEventListener('click', handleTimelinePointerSelection);
     dom.timelineTrack?.addEventListener('click', handleTimelinePointerSelection);
@@ -2613,6 +2830,20 @@ async function init() {
     app.onModelsChanged((models) => {
         updateModelList();
         updateModelAnimationControls(state.selectedModelId);
+        
+        let maxEnd = state.timelineDurationSec;
+        for (const model of models) {
+             if (model.isDynamic && model.modelEntry && model.modelEntry.animEndTime) {
+                  maxEnd = Math.max(maxEnd, model.modelEntry.animEndTime);
+             }
+        }
+        if (maxEnd > state.timelineDurationSec && Number.isFinite(maxEnd)) {
+            state.timelineDurationSec = maxEnd;
+            if (typeof updateTimelineUI === 'function') updateTimelineUI();
+            showInfo(`时间轴已自动适配到 ${maxEnd.toFixed(1)}s`);
+        }
+        
+        if (typeof renderModelTracks === 'function') renderModelTracks();
     });
     app.onCameraInteraction?.((kind) => {
         if (!state.isPlaying) return;
