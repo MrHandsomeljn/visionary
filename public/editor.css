@@ -740,7 +740,8 @@ body {
     background: rgba(107, 159, 249, 0.16);
 }
 
-.property-inputs input[type="number"] {
+.property-inputs input[type="number"],
+.property-inputs input[type="text"] {
     width: 78px;
     padding: 6px 6px;
     background: var(--input-bg);
@@ -763,12 +764,14 @@ body {
     appearance: textfield;
 }
 
-.property-inputs .input-group input[type="number"] {
+.property-inputs .input-group input[type="number"],
+.property-inputs .input-group input[type="text"] {
     width: 100%;
     min-width: 0;
 }
 
-.property-inputs input[type="number"]:focus {
+.property-inputs input[type="number"]:focus,
+.property-inputs input[type="text"]:focus {
     border-color: var(--accent);
     box-shadow: 0 0 2px rgba(107, 159, 249, 0.2);
 }
@@ -800,6 +803,16 @@ body {
 .model-anim-speed-row {
     align-items: center;
     width: 100%;
+}
+
+#modelAnimSpeed {
+    flex: 1;
+}
+
+#modelAnimSpeedValue {
+    width: 78px;
+    min-width: 78px;
+    text-align: right;
 }
 
 .depth-scale-row {
@@ -1020,7 +1033,8 @@ body {
     color: var(--text-secondary);
 }
 
-#timelineFps {
+#timelineFps,
+#timelineSpeed {
     min-width: 70px;
     height: 28px;
     padding: 0 8px;
@@ -1032,7 +1046,8 @@ body {
     outline: none;
 }
 
-#timelineFps:focus {
+#timelineFps:focus,
+#timelineSpeed:focus {
     border-color: var(--accent);
 }
 
@@ -1249,6 +1264,8 @@ body {
 }
 
 .model-track-clip-label {
+    position: relative;
+    z-index: 2;
     font-size: 10px;
     color: #fff;
     white-space: nowrap;
@@ -1258,11 +1275,23 @@ body {
     pointer-events: none;
 }
 
+.model-track-loop-marker {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    width: 2px;
+    transform: translateX(-1px);
+    z-index: 1;
+    background: rgba(0, 0, 0, 0.3);
+    pointer-events: none;
+}
+
 .model-track-handle {
     position: absolute;
     top: 0;
     bottom: 0;
     width: 6px;
+    z-index: 3;
     background: rgba(255,255,255,0.3);
     cursor: ew-resize;
 }

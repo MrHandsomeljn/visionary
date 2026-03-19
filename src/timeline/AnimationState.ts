@@ -54,7 +54,7 @@ export class AnimationState {
    * @param speed 动画速度倍数
    */
   play(speed: number = 1.0): void {
-    this._animationSpeed = Math.max(0.1, speed); // 防止负值或零值
+    this._animationSpeed = Number.isFinite(speed) ? speed : 1.0;
     this._playbackState = AnimationPlaybackState.PLAYING;
     this._emitEvent({
       type: 'play',
@@ -114,7 +114,7 @@ export class AnimationState {
    */
   setSpeed(speed: number): void {
     const oldSpeed = this._animationSpeed;
-    this._animationSpeed = Math.max(0.1, speed);
+    this._animationSpeed = Number.isFinite(speed) ? speed : oldSpeed;
     
     if (oldSpeed !== this._animationSpeed) {
       this._emitEvent({
