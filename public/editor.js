@@ -27,13 +27,16 @@ const dom = {
     btnRenderImage: document.getElementById('renderImage'),
 
     // 中部区域
+    middleSection: document.getElementById('middle-section'),
     leftSidebar: document.getElementById('left-sidebar'),
+    leftSidebarResizer: document.getElementById('left-sidebar-resizer'),
     centerViewport: document.getElementById('center-viewport'),
     modelCountBadge: document.getElementById('modelCountBadge'),
     modelList: document.getElementById('modelList'),
     btnAddModel: document.getElementById('btnAddModel'),
 
     // 右侧边栏 - 模型编辑器
+    rightSidebarResizer: document.getElementById('right-sidebar-resizer'),
     rightSidebar: document.getElementById('right-sidebar'),
     modelSettingsCard: document.getElementById('modelSettingsCard'),
     modelTransformSection: document.getElementById('modelTransformSection'),
@@ -144,7 +147,10 @@ let pendingExportType = null;
 let isExporting = false;
 let keyframeMarkerDrag = null;
 let suppressMarkerClickOnce = false;
+let sidebarResizeState = null;
 const THEME_STORAGE_KEY = 'visionary_editor_theme';
+const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_left_sidebar_width';
+const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_right_sidebar_width';
 const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
 const TIMELINE_MIN_DURATION_SEC = 10;
 const TIMELINE_SLIDER_THUMB_PX = 16;
@@ -157,6 +163,14 @@ const MODEL_ANIM_SPEED_MIN_LOG = Math.log10(MODEL_ANIM_SPEED_MIN);
 const MODEL_ANIM_SPEED_MAX_LOG = Math.log10(MODEL_ANIM_SPEED_MAX);
 const MODEL_ANIM_SPEED_ONE_LOG = Math.log10(1);
 const MODEL_ANIM_DURATION_FALLBACK_SEC = 2.5;
+const LEFT_SIDEBAR_DEFAULT_WIDTH = 236;
+const LEFT_SIDEBAR_MIN_WIDTH = 220;
+const LEFT_SIDEBAR_COMPACT_WIDTH = 230;
+const RIGHT_SIDEBAR_DEFAULT_WIDTH = 380;
+const RIGHT_SIDEBAR_MIN_WIDTH = 272;
+const RIGHT_SIDEBAR_NARROW_WIDTH = 360;
+const RIGHT_SIDEBAR_XNARROW_WIDTH = 330;
+const CENTER_VIEWPORT_MIN_WIDTH = 420;
 const EXPORT_PRESET_RESOLUTIONS = [
     { width: 1280, height: 720, label: '1280 x 720 (720p)' },
     { width: 1920, height: 1080, label: '1920 x 1080 (1080p)' },
@@ -178,6 +192,145 @@ function normalizeHexColor(value) {
     const matched = text.match(/^#?([0-9a-fA-F]{6})$/);
     if (!matched) return null;
     return `#${matched[1].toUpperCase()}`;
+}
+
+function clampSidebarWidth(value, fallback, min) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.round(n));
+}
+
+function getSidebarHandleWidth(handle) {
+    return handle instanceof HTMLElement ? handle.offsetWidth || 10 : 10;
+}
+
+function isRightSidebarVisible() {
+    return !!dom.rightSidebar && !dom.rightSidebar.classList.contains('hidden');
+}
+
+function getCurrentSidebarWidths() {
+    return {
+        left: clampSidebarWidth(dom.leftSidebar?.offsetWidth, LEFT_SIDEBAR_DEFAULT_WIDTH, LEFT_SIDEBAR_MIN_WIDTH),
+        right: clampSidebarWidth(dom.rightSidebar?.offsetWidth, RIGHT_SIDEBAR_DEFAULT_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH),
+    };
+}
+
+function getSidebarLayoutBounds() {
+    const containerWidth = dom.middleSection?.clientWidth || window.innerWidth;
+    const leftHandleWidth = getSidebarHandleWidth(dom.leftSidebarResizer);
+    const rightHandleWidth = isRightSidebarVisible() ? getSidebarHandleWidth(dom.rightSidebarResizer) : 0;
+    const rightWidth = isRightSidebarVisible()
+        ? clampSidebarWidth(dom.rightSidebar?.offsetWidth, RIGHT_SIDEBAR_DEFAULT_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH)
+        : 0;
+    const leftWidth = clampSidebarWidth(dom.leftSidebar?.offsetWidth, LEFT_SIDEBAR_DEFAULT_WIDTH, LEFT_SIDEBAR_MIN_WIDTH);
+
+    return {
+        containerWidth,
+        leftHandleWidth,
+        rightHandleWidth,
+        currentLeftWidth: leftWidth,
+        currentRightWidth: rightWidth,
+    };
+}
+
+function applySidebarWidthClasses(leftWidth, rightWidth) {
+    dom.leftSidebar?.classList.toggle('sidebar-compact', leftWidth <= LEFT_SIDEBAR_COMPACT_WIDTH);
+    if (dom.rightSidebar) {
+        dom.rightSidebar.classList.toggle('sidebar-narrow', rightWidth <= RIGHT_SIDEBAR_NARROW_WIDTH);
+        dom.rightSidebar.classList.toggle('sidebar-xnarrow', rightWidth <= RIGHT_SIDEBAR_XNARROW_WIDTH);
+    }
+}
+
+function applySidebarWidths(nextLeftWidth, nextRightWidth, persist = true) {
+    const bounds = getSidebarLayoutBounds();
+    let leftWidth = clampSidebarWidth(nextLeftWidth, LEFT_SIDEBAR_DEFAULT_WIDTH, LEFT_SIDEBAR_MIN_WIDTH);
+    let rightWidth = isRightSidebarVisible()
+        ? clampSidebarWidth(nextRightWidth, RIGHT_SIDEBAR_DEFAULT_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH)
+        : 0;
+
+    const totalReserved = bounds.leftHandleWidth + bounds.rightHandleWidth;
+    const maxLeft = Math.max(LEFT_SIDEBAR_MIN_WIDTH, bounds.containerWidth - totalReserved - rightWidth - CENTER_VIEWPORT_MIN_WIDTH);
+    leftWidth = Math.min(leftWidth, maxLeft);
+
+    if (isRightSidebarVisible()) {
+        const maxRight = Math.max(RIGHT_SIDEBAR_MIN_WIDTH, bounds.containerWidth - totalReserved - leftWidth - CENTER_VIEWPORT_MIN_WIDTH);
+        rightWidth = Math.min(rightWidth, maxRight);
+
+        const minCenter = bounds.containerWidth - totalReserved - leftWidth - rightWidth;
+        if (minCenter < CENTER_VIEWPORT_MIN_WIDTH) {
+            const deficit = CENTER_VIEWPORT_MIN_WIDTH - minCenter;
+            rightWidth = Math.max(RIGHT_SIDEBAR_MIN_WIDTH, rightWidth - deficit);
+        }
+    }
+
+    if (dom.leftSidebar) {
+        dom.leftSidebar.style.width = `${leftWidth}px`;
+    }
+    if (dom.rightSidebar) {
+        dom.rightSidebar.style.width = isRightSidebarVisible() ? `${rightWidth}px` : '';
+    }
+    document.documentElement.style.setProperty('--left-sidebar-width', `${leftWidth}px`);
+    document.documentElement.style.setProperty('--right-sidebar-width', `${Math.max(RIGHT_SIDEBAR_MIN_WIDTH, rightWidth || RIGHT_SIDEBAR_DEFAULT_WIDTH)}px`);
+    dom.rightSidebarResizer?.classList.toggle('hidden', !isRightSidebarVisible());
+    applySidebarWidthClasses(leftWidth, rightWidth || RIGHT_SIDEBAR_DEFAULT_WIDTH);
+
+    if (persist) {
+        localStorage.setItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY, String(leftWidth));
+        if (isRightSidebarVisible()) {
+            localStorage.setItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY, String(rightWidth));
+        }
+    }
+}
+
+function beginSidebarResize(kind, event) {
+    if (event.button !== 0) return;
+    const current = getCurrentSidebarWidths();
+    sidebarResizeState = {
+        kind,
+        startX: event.clientX,
+        leftWidth: current.left,
+        rightWidth: current.right,
+    };
+    document.body.classList.add('sidebar-resizing');
+    if (kind === 'left') {
+        dom.leftSidebarResizer?.classList.add('is-active');
+    } else {
+        dom.rightSidebarResizer?.classList.add('is-active');
+    }
+    window.addEventListener('mousemove', onSidebarResizeMove);
+    window.addEventListener('mouseup', endSidebarResize);
+    window.addEventListener('blur', endSidebarResize);
+    event.preventDefault();
+}
+
+function onSidebarResizeMove(event) {
+    if (!sidebarResizeState) return;
+    const deltaX = event.clientX - sidebarResizeState.startX;
+    if (sidebarResizeState.kind === 'left') {
+        applySidebarWidths(sidebarResizeState.leftWidth + deltaX, getCurrentSidebarWidths().right, true);
+    } else {
+        applySidebarWidths(getCurrentSidebarWidths().left, sidebarResizeState.rightWidth - deltaX, true);
+    }
+    event.preventDefault();
+}
+
+function endSidebarResize() {
+    if (!sidebarResizeState) return;
+    sidebarResizeState = null;
+    document.body.classList.remove('sidebar-resizing');
+    dom.leftSidebarResizer?.classList.remove('is-active');
+    dom.rightSidebarResizer?.classList.remove('is-active');
+    window.removeEventListener('mousemove', onSidebarResizeMove);
+    window.removeEventListener('mouseup', endSidebarResize);
+    window.removeEventListener('blur', endSidebarResize);
+}
+
+function initializeSidebarLayout() {
+    const savedLeft = localStorage.getItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY);
+    const savedRight = localStorage.getItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY);
+    const leftWidth = clampSidebarWidth(savedLeft, LEFT_SIDEBAR_DEFAULT_WIDTH, LEFT_SIDEBAR_MIN_WIDTH);
+    const rightWidth = clampSidebarWidth(savedRight, RIGHT_SIDEBAR_DEFAULT_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH);
+    applySidebarWidths(leftWidth, rightWidth, false);
 }
 
 function clampModelAnimationSpeed(value) {
@@ -508,6 +661,15 @@ function registerDebugHooks() {
         setDepthScale: (value) => applySceneDepthRangeScale(value),
         getModelTrackLoopMarkerDebugInfo,
         getModelTracksDomDebugInfo,
+        getSidebarLayoutDebugInfo: () => ({
+            leftWidth: dom.leftSidebar?.offsetWidth ?? null,
+            rightWidth: dom.rightSidebar?.offsetWidth ?? null,
+            leftCompact: dom.leftSidebar?.classList.contains('sidebar-compact') ?? false,
+            rightNarrow: dom.rightSidebar?.classList.contains('sidebar-narrow') ?? false,
+            rightXNarrow: dom.rightSidebar?.classList.contains('sidebar-xnarrow') ?? false,
+            rightVisible: isRightSidebarVisible(),
+            centerWidth: dom.centerViewport?.clientWidth ?? null,
+        }),
         rerenderTimeline: () => {
             updateTimelineUI();
             return {
@@ -2055,6 +2217,26 @@ function buildModelTrackLoopMarkers(model, startSec, endSec) {
     return markers.join('');
 }
 
+function buildModelTrackOverflowIndicator(model, startSec, endSec) {
+    const rawDuration = Number(model?.animDuration ?? model?.modelEntry?.animDuration);
+    const duration = Number.isFinite(rawDuration) && rawDuration > 0
+        ? rawDuration
+        : MODEL_ANIM_DURATION_FALLBACK_SEC;
+    const speed = Math.abs(Number(model?.modelEntry?.animSpeed ?? 1));
+    const clipDuration = Math.max(0, endSec - startSec);
+
+    if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(speed) || speed <= 0 || clipDuration <= 0) {
+        return '';
+    }
+
+    const cycleDuration = duration / speed;
+    if (!(cycleDuration > clipDuration)) {
+        return '';
+    }
+
+    return '<span class="model-track-overflow-indicator" title="ONNX 播放时长超过当前 clip 时长">&gt;</span>';
+}
+
 function getModelTrackLoopMarkerDebugInfo() {
     const models = Array.from(app?.editorModels?.values?.() || []);
     return models
@@ -2135,11 +2317,13 @@ function renderModelTracks() {
         const leftStyle = timelineMappedLeftStyle(startRatio);
         const widthStyle = `calc((100% - ${TIMELINE_SLIDER_THUMB_PX}px) * ${widthRatio})`;
         const loopMarkersHtml = buildModelTrackLoopMarkers(model, startSec, endSec);
+        const overflowIndicatorHtml = buildModelTrackOverflowIndicator(model, startSec, endSec);
         
         const trackHtml = `
             <div class="model-track" data-model-id="${model.id}">
                 <div class="model-track-clip" style="left: ${leftStyle}; width: ${widthStyle};" title="${model.name}">
                     ${loopMarkersHtml}
+                    ${overflowIndicatorHtml}
                     <div class="model-track-handle left" data-action="resize-left"></div>
                     <span class="model-track-clip-label">${model.name}</span>
                     <div class="model-track-handle right" data-action="resize-right"></div>
@@ -2807,6 +2991,8 @@ function initEventListeners() {
 
     // 缩放
     dom.scaleS?.addEventListener('input', updateModelFromEditor);
+    dom.leftSidebarResizer?.addEventListener('mousedown', (e) => beginSidebarResize('left', e));
+    dom.rightSidebarResizer?.addEventListener('mousedown', (e) => beginSidebarResize('right', e));
 
     dom.modelAnimSpeed?.addEventListener('input', updateSelectedModelAnimationSpeedFromSlider);
     dom.modelAnimSpeedValue?.addEventListener('input', updateSelectedModelAnimationSpeedFromInput);
@@ -2972,6 +3158,11 @@ async function init() {
 
     // 初始化事件监听
     initEventListeners();
+    initializeSidebarLayout();
+    window.addEventListener('resize', () => {
+        const current = getCurrentSidebarWidths();
+        applySidebarWidths(current.left, current.right, false);
+    });
     initSceneSettingsUI();
     initTimelineUI();
     closeEditor();
