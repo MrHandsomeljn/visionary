@@ -1,5 +1,5 @@
 /**
- * Visionary Editor Application 0.1.0
+ * Visionary Editor Application 0.1.1
  * Editor version of main app with UI controls
  */
 
@@ -191,7 +191,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = "0.1.0";
+  readonly VERSION = "0.1.1";
 
   private globalTimelineTime: number = 0;
 
