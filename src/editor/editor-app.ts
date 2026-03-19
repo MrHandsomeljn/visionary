@@ -107,6 +107,7 @@ interface EditorModel {
   gaussianModel?: GaussianModel;
   sourceFile?: File;
   sourcePath?: string;
+  animDuration?: number;
   animStartTime?: number;
   animEndTime?: number;
 }
@@ -451,7 +452,6 @@ export class EditorApp {
                 
                 if (this.globalTimelineTime >= start && this.globalTimelineTime <= end) {
                   this.fusedRenderer.setModelVisible(rendererId, model.visible);
-                  this.fusedRenderer.pauseModelAnimation(rendererId);
                   const localTime = (this.globalTimelineTime - start) * (model.modelEntry.animSpeed ?? 1.0);
                   this.fusedRenderer.setModelAnimationTime(rendererId, localTime);
                 } else {
@@ -864,7 +864,8 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         object3D: meshObject || undefined,
         gaussianModel: gaussianModel || undefined,
         sourceFile: file,
-        sourcePath: options.sourcePath || file.name
+        sourcePath: options.sourcePath || file.name,
+        animDuration: Number.isFinite(Number(modelEntry?.animDuration)) ? Number(modelEntry?.animDuration) : undefined
       };
 
       this.editorModels.set(editorModel.id, editorModel);
@@ -1332,7 +1333,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const dynamicPC = this.getDynamicPointCloudForModel(model);
     if (!dynamicPC) return false;
 
-    const safeSpeed = Math.max(0, speed);
+    const safeSpeed = Number.isFinite(speed) ? speed : 1.0;
     dynamicPC.setAnimationSpeed(safeSpeed);
     if (model.modelEntry) {
       model.modelEntry.animSpeed = safeSpeed;

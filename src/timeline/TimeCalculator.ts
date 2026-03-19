@@ -108,7 +108,7 @@ export class TimeCalculator {
    * @param speed 动画速度倍数
    */
   setAnimationSpeed(speed: number): void {
-    this._config.animationSpeed = Math.max(0.1, speed);
+    this._config.animationSpeed = Number.isFinite(speed) ? speed : this._config.animationSpeed;
     console.log(`[TimeCalculator] Animation speed set to: ${this._config.animationSpeed}`);
   }
 

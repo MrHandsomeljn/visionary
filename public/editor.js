@@ -150,6 +150,13 @@ const TIMELINE_MIN_DURATION_SEC = 10;
 const TIMELINE_SLIDER_THUMB_PX = 16;
 const EXPORT_FALLBACK_FPS = 24;
 const CAMERA_SEQUENCE_LIST_ITEM_ID = '__editor_camera_sequence__';
+const MODEL_ANIM_SPEED_MIN = 0.001;
+const MODEL_ANIM_SPEED_MAX = 10;
+const MODEL_ANIM_SPEED_STEP = 0.001;
+const MODEL_ANIM_SPEED_MIN_LOG = Math.log10(MODEL_ANIM_SPEED_MIN);
+const MODEL_ANIM_SPEED_MAX_LOG = Math.log10(MODEL_ANIM_SPEED_MAX);
+const MODEL_ANIM_SPEED_ONE_LOG = Math.log10(1);
+const MODEL_ANIM_DURATION_FALLBACK_SEC = 2.5;
 const EXPORT_PRESET_RESOLUTIONS = [
     { width: 1280, height: 720, label: '1280 x 720 (720p)' },
     { width: 1920, height: 1080, label: '1920 x 1080 (1080p)' },
@@ -171,6 +178,51 @@ function normalizeHexColor(value) {
     const matched = text.match(/^#?([0-9a-fA-F]{6})$/);
     if (!matched) return null;
     return `#${matched[1].toUpperCase()}`;
+}
+
+function clampModelAnimationSpeed(value) {
+    if (!Number.isFinite(value)) return 1;
+    const stepped = Math.round(value / MODEL_ANIM_SPEED_STEP) * MODEL_ANIM_SPEED_STEP;
+    return Math.min(MODEL_ANIM_SPEED_MAX, Math.max(MODEL_ANIM_SPEED_MIN, stepped));
+}
+
+function clampModelAnimationSpeedForSlider(value) {
+    if (!Number.isFinite(value)) return 1;
+    return Math.min(MODEL_ANIM_SPEED_MAX, Math.max(MODEL_ANIM_SPEED_MIN, value));
+}
+
+function extractNumericValue(value) {
+    const text = String(value ?? '').trim();
+    if (!text) return null;
+    const matched = text.match(/[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/);
+    if (!matched) return null;
+    const parsed = Number(matched[0]);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function speedToSliderValue(speed) {
+    const safeSpeed = clampModelAnimationSpeedForSlider(speed);
+    const logSpeed = Math.log10(safeSpeed);
+    if (safeSpeed <= 1) {
+        const leftRatio = (logSpeed - MODEL_ANIM_SPEED_MIN_LOG) / (MODEL_ANIM_SPEED_ONE_LOG - MODEL_ANIM_SPEED_MIN_LOG);
+        return Math.min(0.5, Math.max(0, leftRatio * 0.5));
+    }
+
+    const rightRatio = (logSpeed - MODEL_ANIM_SPEED_ONE_LOG) / (MODEL_ANIM_SPEED_MAX_LOG - MODEL_ANIM_SPEED_ONE_LOG);
+    return Math.min(1, Math.max(0.5, 0.5 + rightRatio * 0.5));
+}
+
+function sliderValueToSpeed(value) {
+    const ratio = Math.min(1, Math.max(0, Number(value) || 0));
+    let logSpeed;
+    if (ratio <= 0.5) {
+        const leftRatio = ratio / 0.5;
+        logSpeed = MODEL_ANIM_SPEED_MIN_LOG + leftRatio * (MODEL_ANIM_SPEED_ONE_LOG - MODEL_ANIM_SPEED_MIN_LOG);
+    } else {
+        const rightRatio = (ratio - 0.5) / 0.5;
+        logSpeed = MODEL_ANIM_SPEED_ONE_LOG + rightRatio * (MODEL_ANIM_SPEED_MAX_LOG - MODEL_ANIM_SPEED_ONE_LOG);
+    }
+    return clampModelAnimationSpeed(10 ** logSpeed);
 }
 
 function renderSkyPresetGrid() {
@@ -454,6 +506,15 @@ function registerDebugHooks() {
         setPreviewMode: (mode) => setExportMode(mode),
         getDepthScale: () => state.sceneDepthRangeScale,
         setDepthScale: (value) => applySceneDepthRangeScale(value),
+        getModelTrackLoopMarkerDebugInfo,
+        getModelTracksDomDebugInfo,
+        rerenderTimeline: () => {
+            updateTimelineUI();
+            return {
+                markers: getModelTrackLoopMarkerDebugInfo(),
+                dom: getModelTracksDomDebugInfo(),
+            };
+        },
         dumpRenderModes: () => {
             const models = app?.getModels?.() || [];
             const rows = models.map((model) => ({
@@ -740,21 +801,54 @@ function updateModelAnimationControls(id = state.selectedModelId) {
 
     if (dom.onnxAnimSection) dom.onnxAnimSection.classList.remove('hidden');
 
+    const speed = Number(anim.speed || 1);
     if (dom.modelAnimSpeed) {
-        dom.modelAnimSpeed.value = Number(anim.speed || 1).toFixed(3);
+        dom.modelAnimSpeed.value = speedToSliderValue(speed).toFixed(3);
     }
-    if (dom.modelAnimSpeedValue) {
-        dom.modelAnimSpeedValue.textContent = `${Number(anim.speed || 1).toFixed(3)}x`;
+    if (dom.modelAnimSpeedValue && document.activeElement !== dom.modelAnimSpeedValue) {
+        dom.modelAnimSpeedValue.value = speed.toFixed(3);
     }
 }
 
-function updateSelectedModelAnimationSpeed() {
-    if (!app || !state.selectedModelId || !dom.modelAnimSpeed) return;
-    const speed = Math.max(0.001, parseFloat(dom.modelAnimSpeed.value || '1'));
+function applySelectedModelAnimationSpeed(speed, syncInputText = true) {
+    if (!app || !state.selectedModelId) return;
+    if (!Number.isFinite(speed)) return;
     app.setModelAnimationSpeed(state.selectedModelId, speed);
-    if (dom.modelAnimSpeedValue) {
-        dom.modelAnimSpeedValue.textContent = `${speed.toFixed(3)}x`;
+    if (dom.modelAnimSpeed) {
+        dom.modelAnimSpeed.value = speedToSliderValue(speed).toFixed(3);
     }
+    if (syncInputText && dom.modelAnimSpeedValue) {
+        dom.modelAnimSpeedValue.value = String(speed);
+    }
+}
+
+function updateSelectedModelAnimationSpeedFromSlider() {
+    if (!dom.modelAnimSpeed) return;
+    applySelectedModelAnimationSpeed(sliderValueToSpeed(dom.modelAnimSpeed.value), true);
+}
+
+function updateSelectedModelAnimationSpeedFromInput() {
+    if (!dom.modelAnimSpeedValue) return;
+    const rawValue = dom.modelAnimSpeedValue.value;
+    const parsed = extractNumericValue(rawValue);
+    if (parsed === null) return;
+    applySelectedModelAnimationSpeed(parsed, false);
+}
+
+function commitSelectedModelAnimationSpeedFromInput() {
+    if (!dom.modelAnimSpeedValue) return;
+    const parsed = extractNumericValue(dom.modelAnimSpeedValue.value);
+    if (parsed === null) {
+        const anim = getSelectedModelAnimationState();
+        if (anim && anim.supported) {
+            dom.modelAnimSpeedValue.value = Number(anim.speed || 1).toFixed(3);
+        } else {
+            dom.modelAnimSpeedValue.value = '1.000';
+        }
+        return;
+    }
+    applySelectedModelAnimationSpeed(parsed, false);
+    dom.modelAnimSpeedValue.value = parsed.toFixed(3);
 }
 
 function applyPreviewModeToAllModels(mode) {
@@ -1931,6 +2025,90 @@ function beginKeyframeMarkerDrag(event, marker) {
 let activeModelTrackDrag = null;
 let suppressModelClickOnce = false;
 
+function buildModelTrackLoopMarkers(model, startSec, endSec) {
+    const rawDuration = Number(model?.animDuration ?? model?.modelEntry?.animDuration);
+    const duration = Number.isFinite(rawDuration) && rawDuration > 0
+        ? rawDuration
+        : MODEL_ANIM_DURATION_FALLBACK_SEC;
+    const speed = Math.abs(Number(model?.modelEntry?.animSpeed ?? 1));
+    const clipDuration = Math.max(0, endSec - startSec);
+
+    if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(speed) || speed <= 0 || clipDuration <= 0) {
+        return '';
+    }
+
+    const cycleDuration = duration / speed;
+    if (!Number.isFinite(cycleDuration) || cycleDuration <= 0) {
+        return '';
+    }
+
+    const markers = [];
+    const epsilon = 1e-6;
+    for (let markerSec = cycleDuration; markerSec <= clipDuration + epsilon; markerSec += cycleDuration) {
+        if (Math.abs(markerSec - clipDuration) <= epsilon) continue;
+        const ratio = Math.min(1, Math.max(0, markerSec / clipDuration));
+        markers.push(
+            `<span class="model-track-loop-marker" style="left:${(ratio * 100).toFixed(4)}%;" title="循环结束 ${markerSec.toFixed(3)}s"></span>`
+        );
+    }
+
+    return markers.join('');
+}
+
+function getModelTrackLoopMarkerDebugInfo() {
+    const models = Array.from(app?.editorModels?.values?.() || []);
+    return models
+        .filter((model) => model?.isDynamic && model?.modelEntry)
+        .map((model) => {
+            const startSec = Number(model.modelEntry.animStartTime ?? 0);
+            const endSec = Number(model.modelEntry.animEndTime ?? 10);
+            const rawDuration = Number(model.animDuration ?? model.modelEntry.animDuration);
+            const hasMetadataDuration = Number.isFinite(rawDuration) && rawDuration > 0;
+            const duration = hasMetadataDuration ? rawDuration : MODEL_ANIM_DURATION_FALLBACK_SEC;
+            const speed = Math.abs(Number(model.modelEntry.animSpeed ?? 1));
+            const clipDuration = Math.max(0, endSec - startSec);
+            const cycleDuration = Number.isFinite(duration) && duration > 0 && Number.isFinite(speed) && speed > 0
+                ? duration / speed
+                : null;
+            const markerTimes = [];
+
+            if (cycleDuration && clipDuration > 0) {
+                const epsilon = 1e-6;
+                for (let markerSec = cycleDuration; markerSec <= clipDuration + epsilon; markerSec += cycleDuration) {
+                    if (Math.abs(markerSec - clipDuration) <= epsilon) continue;
+                    markerTimes.push(Number(markerSec.toFixed(6)));
+                }
+            }
+
+            return {
+                id: model.id,
+                name: model.name,
+                animDuration: hasMetadataDuration ? duration : null,
+                effectiveAnimDuration: duration,
+                durationSource: hasMetadataDuration ? 'metadata' : 'runtime-fallback',
+                animSpeed: Number.isFinite(speed) ? speed : null,
+                clipStart: startSec,
+                clipEnd: endSec,
+                clipDuration,
+                cycleDuration,
+                markerTimes,
+                markerCount: markerTimes.length,
+                markerHtml: buildModelTrackLoopMarkers(model, startSec, endSec),
+            };
+        });
+}
+
+function getModelTracksDomDebugInfo() {
+    const container = document.getElementById('modelTracksContainer');
+    return {
+        exists: !!container,
+        display: container?.style?.display ?? null,
+        html: container?.innerHTML ?? '',
+        clipCount: container?.querySelectorAll('.model-track-clip').length ?? 0,
+        markerCount: container?.querySelectorAll('.model-track-loop-marker').length ?? 0,
+    };
+}
+
 function renderModelTracks() {
     const container = document.getElementById('modelTracksContainer');
     if (!container) return;
@@ -1956,10 +2134,12 @@ function renderModelTracks() {
         
         const leftStyle = timelineMappedLeftStyle(startRatio);
         const widthStyle = `calc((100% - ${TIMELINE_SLIDER_THUMB_PX}px) * ${widthRatio})`;
+        const loopMarkersHtml = buildModelTrackLoopMarkers(model, startSec, endSec);
         
         const trackHtml = `
             <div class="model-track" data-model-id="${model.id}">
                 <div class="model-track-clip" style="left: ${leftStyle}; width: ${widthStyle};" title="${model.name}">
+                    ${loopMarkersHtml}
                     <div class="model-track-handle left" data-action="resize-left"></div>
                     <span class="model-track-clip-label">${model.name}</span>
                     <div class="model-track-handle right" data-action="resize-right"></div>
@@ -2628,7 +2808,16 @@ function initEventListeners() {
     // 缩放
     dom.scaleS?.addEventListener('input', updateModelFromEditor);
 
-    dom.modelAnimSpeed?.addEventListener('input', updateSelectedModelAnimationSpeed);
+    dom.modelAnimSpeed?.addEventListener('input', updateSelectedModelAnimationSpeedFromSlider);
+    dom.modelAnimSpeedValue?.addEventListener('input', updateSelectedModelAnimationSpeedFromInput);
+    dom.modelAnimSpeedValue?.addEventListener('change', commitSelectedModelAnimationSpeedFromInput);
+    dom.modelAnimSpeedValue?.addEventListener('blur', commitSelectedModelAnimationSpeedFromInput);
+    dom.modelAnimSpeedValue?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            commitSelectedModelAnimationSpeedFromInput();
+            dom.modelAnimSpeedValue?.blur();
+        }
+    });
 
     // 相机模式
     dom.cameraMode?.addEventListener('change', (e) => {
