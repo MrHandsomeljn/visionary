@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.0.10
+ * Visionary Editor UI Controller 0.1.0
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -112,7 +112,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.0.10',
+    VERSION: '0.1.0',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     cameraSequenceVisible: true,
