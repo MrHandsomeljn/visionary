@@ -1,11 +1,12 @@
 /**
- * Visionary Editor UI Controller 0.1.1
+ * Visionary Editor UI Controller 0.1.2
  * Handles UI interactions and connects to EditorApp
  */
 
 // DOM 元素引用
 const dom = {
     // Canvas 相关
+    canvasContainer: document.getElementById('canvas-container'),
     canvas: document.getElementById('canvas'),
     loadingOverlay: document.getElementById('loadingOverlay'),
     progressFill: document.querySelector('#loadingOverlay .progress-fill'),
@@ -115,7 +116,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.1.1',
+    VERSION: '0.1.2',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     cameraSequenceVisible: true,
@@ -156,12 +157,16 @@ const TIMELINE_MIN_DURATION_SEC = 10;
 const TIMELINE_SLIDER_THUMB_PX = 16;
 const EXPORT_FALLBACK_FPS = 24;
 const CAMERA_SEQUENCE_LIST_ITEM_ID = '__editor_camera_sequence__';
-const MODEL_ANIM_SPEED_MIN = 0.001;
-const MODEL_ANIM_SPEED_MAX = 10;
+const MODEL_ANIM_SPEED_MIN = 0.01;
+const MODEL_ANIM_SPEED_MAX = 100;
 const MODEL_ANIM_SPEED_STEP = 0.001;
 const MODEL_ANIM_SPEED_MIN_LOG = Math.log10(MODEL_ANIM_SPEED_MIN);
 const MODEL_ANIM_SPEED_MAX_LOG = Math.log10(MODEL_ANIM_SPEED_MAX);
-const MODEL_ANIM_SPEED_ONE_LOG = Math.log10(1);
+const SCENE_DEPTH_SCALE_MIN = 0.01;
+const SCENE_DEPTH_SCALE_MAX = 100;
+const SCENE_DEPTH_SCALE_STEP = 0.001;
+const SCENE_DEPTH_SCALE_MIN_LOG = Math.log10(SCENE_DEPTH_SCALE_MIN);
+const SCENE_DEPTH_SCALE_MAX_LOG = Math.log10(SCENE_DEPTH_SCALE_MAX);
 const MODEL_ANIM_DURATION_FALLBACK_SEC = 2.5;
 const LEFT_SIDEBAR_DEFAULT_WIDTH = 236;
 const LEFT_SIDEBAR_MIN_WIDTH = 220;
@@ -273,6 +278,7 @@ function applySidebarWidths(nextLeftWidth, nextRightWidth, persist = true) {
     document.documentElement.style.setProperty('--right-sidebar-width', `${Math.max(RIGHT_SIDEBAR_MIN_WIDTH, rightWidth || RIGHT_SIDEBAR_DEFAULT_WIDTH)}px`);
     dom.rightSidebarResizer?.classList.toggle('hidden', !isRightSidebarVisible());
     applySidebarWidthClasses(leftWidth, rightWidth || RIGHT_SIDEBAR_DEFAULT_WIDTH);
+    syncCanvasContainerToViewport();
 
     if (persist) {
         localStorage.setItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY, String(leftWidth));
@@ -333,6 +339,25 @@ function initializeSidebarLayout() {
     applySidebarWidths(leftWidth, rightWidth, false);
 }
 
+function syncCanvasContainerToViewport() {
+    if (!dom.canvasContainer || !dom.centerViewport) return;
+    const viewportRect = dom.centerViewport.getBoundingClientRect();
+    const appRect = document.getElementById('app')?.getBoundingClientRect?.();
+    const hostLeft = appRect?.left || 0;
+    const hostTop = appRect?.top || 0;
+    const width = Math.max(1, Math.round(viewportRect.width || 0));
+    const height = Math.max(1, Math.round(viewportRect.height || 0));
+
+    dom.canvasContainer.style.left = `${Math.round(viewportRect.left - hostLeft)}px`;
+    dom.canvasContainer.style.top = `${Math.round(viewportRect.top - hostTop)}px`;
+    dom.canvasContainer.style.width = `${width}px`;
+    dom.canvasContainer.style.height = `${height}px`;
+    dom.canvasContainer.style.right = 'auto';
+    dom.canvasContainer.style.bottom = 'auto';
+
+    app?.refreshViewportLayout?.();
+}
+
 function clampModelAnimationSpeed(value) {
     if (!Number.isFinite(value)) return 1;
     const stepped = Math.round(value / MODEL_ANIM_SPEED_STEP) * MODEL_ANIM_SPEED_STEP;
@@ -353,29 +378,49 @@ function extractNumericValue(value) {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
+function nudgeNumericInputValue(rawValue, step, fallbackValue, direction) {
+    const parsed = extractNumericValue(rawValue);
+    const baseValue = parsed === null ? fallbackValue : parsed;
+    const safeBase = Number.isFinite(baseValue) ? baseValue : 0;
+    const nextValue = safeBase + step * direction;
+    return Number(nextValue.toFixed(3));
+}
+
 function speedToSliderValue(speed) {
     const safeSpeed = clampModelAnimationSpeedForSlider(speed);
     const logSpeed = Math.log10(safeSpeed);
-    if (safeSpeed <= 1) {
-        const leftRatio = (logSpeed - MODEL_ANIM_SPEED_MIN_LOG) / (MODEL_ANIM_SPEED_ONE_LOG - MODEL_ANIM_SPEED_MIN_LOG);
-        return Math.min(0.5, Math.max(0, leftRatio * 0.5));
-    }
-
-    const rightRatio = (logSpeed - MODEL_ANIM_SPEED_ONE_LOG) / (MODEL_ANIM_SPEED_MAX_LOG - MODEL_ANIM_SPEED_ONE_LOG);
-    return Math.min(1, Math.max(0.5, 0.5 + rightRatio * 0.5));
+    const ratio = (logSpeed - MODEL_ANIM_SPEED_MIN_LOG) / (MODEL_ANIM_SPEED_MAX_LOG - MODEL_ANIM_SPEED_MIN_LOG);
+    return Math.min(1, Math.max(0, ratio));
 }
 
 function sliderValueToSpeed(value) {
     const ratio = Math.min(1, Math.max(0, Number(value) || 0));
-    let logSpeed;
-    if (ratio <= 0.5) {
-        const leftRatio = ratio / 0.5;
-        logSpeed = MODEL_ANIM_SPEED_MIN_LOG + leftRatio * (MODEL_ANIM_SPEED_ONE_LOG - MODEL_ANIM_SPEED_MIN_LOG);
-    } else {
-        const rightRatio = (ratio - 0.5) / 0.5;
-        logSpeed = MODEL_ANIM_SPEED_ONE_LOG + rightRatio * (MODEL_ANIM_SPEED_MAX_LOG - MODEL_ANIM_SPEED_ONE_LOG);
-    }
+    const logSpeed = MODEL_ANIM_SPEED_MIN_LOG + ratio * (MODEL_ANIM_SPEED_MAX_LOG - MODEL_ANIM_SPEED_MIN_LOG);
     return clampModelAnimationSpeed(10 ** logSpeed);
+}
+
+function clampSceneDepthRangeScale(value) {
+    if (!Number.isFinite(value)) return 1;
+    const stepped = Math.round(value / SCENE_DEPTH_SCALE_STEP) * SCENE_DEPTH_SCALE_STEP;
+    return Math.min(SCENE_DEPTH_SCALE_MAX, Math.max(SCENE_DEPTH_SCALE_MIN, stepped));
+}
+
+function clampSceneDepthRangeScaleForSlider(value) {
+    if (!Number.isFinite(value)) return 1;
+    return Math.min(SCENE_DEPTH_SCALE_MAX, Math.max(SCENE_DEPTH_SCALE_MIN, value));
+}
+
+function depthScaleToSliderValue(scale) {
+    const safeScale = clampSceneDepthRangeScaleForSlider(scale);
+    const logScale = Math.log10(safeScale);
+    const ratio = (logScale - SCENE_DEPTH_SCALE_MIN_LOG) / (SCENE_DEPTH_SCALE_MAX_LOG - SCENE_DEPTH_SCALE_MIN_LOG);
+    return Math.min(1, Math.max(0, ratio));
+}
+
+function sliderValueToDepthScale(value) {
+    const ratio = Math.min(1, Math.max(0, Number(value) || 0));
+    const logScale = SCENE_DEPTH_SCALE_MIN_LOG + ratio * (SCENE_DEPTH_SCALE_MAX_LOG - SCENE_DEPTH_SCALE_MIN_LOG);
+    return clampSceneDepthRangeScale(10 ** logScale);
 }
 
 function renderSkyPresetGrid() {
@@ -394,21 +439,17 @@ function syncSceneBackgroundInputs() {
     if (dom.sceneBgColorHex) dom.sceneBgColorHex.value = state.sceneBackgroundHex;
 }
 
-function clampDepthRangeScale(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return null;
-    return Math.max(0.01, Math.min(100, n));
-}
-
 function syncSceneDepthRangeInputs() {
-    const fixed = Number(state.sceneDepthRangeScale || 1).toFixed(3);
-    if (dom.sceneDepthScale) dom.sceneDepthScale.value = fixed;
-    if (dom.sceneDepthScaleNumber) dom.sceneDepthScaleNumber.value = fixed;
+    const scale = Number(state.sceneDepthRangeScale || 1);
+    if (dom.sceneDepthScale) dom.sceneDepthScale.value = depthScaleToSliderValue(scale).toFixed(3);
+    if (dom.sceneDepthScaleNumber && document.activeElement !== dom.sceneDepthScaleNumber) {
+        dom.sceneDepthScaleNumber.value = scale.toFixed(3);
+    }
 }
 
-function applySceneDepthRangeScale(value, silent = false) {
-    const safe = clampDepthRangeScale(value);
-    if (safe === null) {
+function applySceneDepthRangeScale(value, silent = false, syncInputText = true) {
+    const safe = Number(value);
+    if (!Number.isFinite(safe)) {
         showError('深度倍率格式错误');
         return;
     }
@@ -419,11 +460,61 @@ function applySceneDepthRangeScale(value, silent = false) {
         return;
     }
 
-    state.sceneDepthRangeScale = safe;
-    syncSceneDepthRangeInputs();
-    if (!silent) {
-        showInfo(`深度倍率: ${safe.toFixed(3)}x`);
+    state.sceneDepthRangeScale = clampSceneDepthRangeScale(safe);
+    if (dom.sceneDepthScale) {
+        dom.sceneDepthScale.value = depthScaleToSliderValue(state.sceneDepthRangeScale).toFixed(3);
     }
+    if (syncInputText && dom.sceneDepthScaleNumber) {
+        dom.sceneDepthScaleNumber.value = String(safe);
+    }
+    if (!silent) {
+        showInfo(`深度倍率: ${state.sceneDepthRangeScale.toFixed(3)}x`);
+    }
+}
+
+function updateSceneDepthRangeScaleFromSlider() {
+    if (!dom.sceneDepthScale) return;
+    applySceneDepthRangeScale(sliderValueToDepthScale(dom.sceneDepthScale.value), true, true);
+}
+
+function updateSceneDepthRangeScaleFromInput() {
+    if (!dom.sceneDepthScaleNumber) return;
+    const rawValue = dom.sceneDepthScaleNumber.value;
+    const parsed = extractNumericValue(rawValue);
+    if (parsed === null) return;
+    applySceneDepthRangeScale(parsed, false, false);
+}
+
+function commitSceneDepthRangeScaleFromInput() {
+    if (!dom.sceneDepthScaleNumber) return;
+    const parsed = extractNumericValue(dom.sceneDepthScaleNumber.value);
+    if (parsed === null) {
+        dom.sceneDepthScaleNumber.value = Number(state.sceneDepthRangeScale || 1).toFixed(3);
+        return;
+    }
+    applySceneDepthRangeScale(parsed, false, false);
+    dom.sceneDepthScaleNumber.value = Number(state.sceneDepthRangeScale || 1).toFixed(3);
+}
+
+function handleSceneDepthRangeScaleInputKeydown(e) {
+    if (!dom.sceneDepthScaleNumber) return;
+    if (e.key === 'Enter') {
+        commitSceneDepthRangeScaleFromInput();
+        dom.sceneDepthScaleNumber.blur();
+        return;
+    }
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+
+    e.preventDefault();
+    const direction = e.key === 'ArrowUp' ? 1 : -1;
+    const nextValue = nudgeNumericInputValue(
+        dom.sceneDepthScaleNumber.value,
+        SCENE_DEPTH_SCALE_STEP,
+        Number(state.sceneDepthRangeScale || 1),
+        direction
+    );
+    dom.sceneDepthScaleNumber.value = nextValue.toFixed(3);
+    applySceneDepthRangeScale(nextValue, false, false);
 }
 
 function clampSceneFov(value) {
@@ -669,6 +760,9 @@ function registerDebugHooks() {
             rightXNarrow: dom.rightSidebar?.classList.contains('sidebar-xnarrow') ?? false,
             rightVisible: isRightSidebarVisible(),
             centerWidth: dom.centerViewport?.clientWidth ?? null,
+            centerViewportRect: dom.centerViewport?.getBoundingClientRect?.() ?? null,
+            canvasRect: dom.canvas?.getBoundingClientRect?.() ?? null,
+            canvasContainerRect: dom.canvasContainer?.getBoundingClientRect?.() ?? null,
         }),
         rerenderTimeline: () => {
             updateTimelineUI();
@@ -689,6 +783,23 @@ function registerDebugHooks() {
             }));
             console.table(rows);
             return rows;
+        },
+        pickScenePointAtClient: (clientX, clientY) => app?.pickScenePointAtClient?.(clientX, clientY) ?? null,
+        getScenePointPickDebugInfo: (clientX, clientY) => app?.getScenePointPickDebugInfo?.(clientX, clientY) ?? null,
+        lookAtScenePointAtClient: (clientX, clientY) => app?.lookAtScenePointFromClient?.(clientX, clientY) ?? false,
+        showRawDepthPreview: (source = 'combined') => app?.showRawDepthPreview?.(source) ?? null,
+        downloadRawDepth: (source = 'combined', format = 'json') => app?.downloadRawDepth?.(source, format) ?? false,
+        getRawDepthFrameInfo: async (source = 'combined') => {
+            const frame = await app?.getRawDepthFrame?.(source);
+            if (!frame) return null;
+            return {
+                source: frame.source,
+                width: frame.width,
+                height: frame.height,
+                minDepth: frame.minDepth,
+                maxDepth: frame.maxDepth,
+                sampleCount: frame.data?.length ?? 0,
+            };
         },
     };
 
@@ -1010,7 +1121,30 @@ function commitSelectedModelAnimationSpeedFromInput() {
         return;
     }
     applySelectedModelAnimationSpeed(parsed, false);
-    dom.modelAnimSpeedValue.value = parsed.toFixed(3);
+    dom.modelAnimSpeedValue.value = clampModelAnimationSpeed(parsed).toFixed(3);
+}
+
+function handleSelectedModelAnimationSpeedInputKeydown(e) {
+    if (!dom.modelAnimSpeedValue) return;
+    if (e.key === 'Enter') {
+        commitSelectedModelAnimationSpeedFromInput();
+        dom.modelAnimSpeedValue.blur();
+        return;
+    }
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+
+    e.preventDefault();
+    const anim = getSelectedModelAnimationState();
+    const fallbackValue = anim && anim.supported ? Number(anim.speed || 1) : 1;
+    const direction = e.key === 'ArrowUp' ? 1 : -1;
+    const nextValue = nudgeNumericInputValue(
+        dom.modelAnimSpeedValue.value,
+        MODEL_ANIM_SPEED_STEP,
+        fallbackValue,
+        direction
+    );
+    dom.modelAnimSpeedValue.value = nextValue.toFixed(3);
+    applySelectedModelAnimationSpeed(nextValue, false);
 }
 
 function applyPreviewModeToAllModels(mode) {
@@ -1605,6 +1739,12 @@ function parseSceneAssets(raw) {
     return [];
 }
 
+function parseSceneTimeline(raw) {
+    const timeline = raw?.timeline;
+    if (!timeline || typeof timeline !== 'object') return null;
+    return timeline;
+}
+
 /**
  * 保存场景（Visionary 原生流程：文件夹 + scene.json + 资源文件）
  */
@@ -1666,10 +1806,16 @@ async function saveScene() {
                 name: saveName,
                 type: model.modelType || inferAssetType(saveName),
                 path: saveName,
+                visible: model.visible !== false,
             };
 
             if (asset.type === 'onnx' && model.isDynamic) {
                 asset.dynamic = true;
+                asset.animation = {
+                    speed: Number(model.modelEntry?.animSpeed ?? 1),
+                    startTime: Number(model.modelEntry?.animStartTime ?? 0),
+                    endTime: Number(model.modelEntry?.animEndTime ?? model.modelEntry?.animDuration ?? 10),
+                };
             }
 
             const position = [model.position.x || 0, model.position.y || 0, model.position.z || 0];
@@ -1689,7 +1835,7 @@ async function saveScene() {
         }
 
         const manifest = {
-            version: 1,
+            version: 2,
             meta: {
                 app: 'WebGaussianJS',
                 createdAt: new Date().toISOString(),
@@ -1697,8 +1843,40 @@ async function saveScene() {
             },
             env: {
                 bgColor: [r, g, b, 1],
+                skyPresetId: state.sceneSkyPresetId || 'custom',
                 gaussianScale: 1,
                 depthRangeScale: Number(state.sceneDepthRangeScale || 1.0),
+                cameraFov: Number(state.sceneCameraFov || 45.0),
+                cameraPose: captureCurrentCameraPose(),
+                cameraMode: String(dom.cameraMode?.value || 'orbit'),
+                renderMode: state.exportMode || 'color',
+                cameraSequenceVisible: Boolean(state.cameraSequenceVisible),
+            },
+            timeline: {
+                fps: Number(state.timelineFps || 24),
+                durationSec: Number(state.timelineDurationSec || TIMELINE_MIN_DURATION_SEC),
+                playbackSpeed: Number(state.timelinePlaybackSpeed || 1),
+                selectedFrame: Number(state.selectedFrame || 0),
+                currentTime: Number(state.currentTime || 0),
+                isLooping: Boolean(state.isLooping),
+                keyframes: (Array.isArray(state.keyframes) ? state.keyframes : []).map((keyframe) => ({
+                    frame: Number(keyframe.frame || 0),
+                    time: Number(keyframe.time || 0),
+                    camera: {
+                        position: {
+                            x: Number(keyframe.camera?.position?.x || 0),
+                            y: Number(keyframe.camera?.position?.y || 0),
+                            z: Number(keyframe.camera?.position?.z || 0),
+                        },
+                        rotation: {
+                            x: Number(keyframe.camera?.rotation?.x || 0),
+                            y: Number(keyframe.camera?.rotation?.y || 0),
+                            z: Number(keyframe.camera?.rotation?.z || 0),
+                            w: Number(keyframe.camera?.rotation?.w || 1),
+                        },
+                        fovDegrees: Number(keyframe.camera?.fovDegrees || 45),
+                    },
+                })),
             },
             assets,
         };
@@ -1742,6 +1920,7 @@ async function loadScene() {
         const sceneFile = await sceneHandle.getFile();
         const raw = JSON.parse(await sceneFile.text());
         const assets = parseSceneAssets(raw);
+        const timeline = parseSceneTimeline(raw);
 
         if (!Array.isArray(assets) || assets.length === 0) {
             throw new Error('scene.json 中没有可加载的 assets/scenes 模型条目');
@@ -1763,11 +1942,29 @@ async function loadScene() {
         closeEditor();
 
         const envBgHex = toHexFromBgColor(raw?.env?.bgColor);
-        if (envBgHex) {
+        if (raw?.env?.skyPresetId && raw.env.skyPresetId !== 'custom') {
+            applySkyPreset(raw.env.skyPresetId);
+        } else if (envBgHex) {
             applySceneBackgroundHex(envBgHex, 'custom');
         }
         if (Number.isFinite(raw?.env?.depthRangeScale)) {
             applySceneDepthRangeScale(raw.env.depthRangeScale, true);
+        }
+        if (Number.isFinite(raw?.env?.cameraFov)) {
+            applySceneCameraFov(raw.env.cameraFov, true);
+        }
+        if (raw?.env?.cameraPose) {
+            app.setCameraPose?.(raw.env.cameraPose);
+        }
+        if (typeof raw?.env?.cameraMode === 'string') {
+            dom.cameraMode && (dom.cameraMode.value = raw.env.cameraMode);
+            app.setCameraMode?.(raw.env.cameraMode);
+        }
+        if (typeof raw?.env?.renderMode === 'string') {
+            setExportMode(raw.env.renderMode, true);
+        }
+        if (typeof raw?.env?.cameraSequenceVisible === 'boolean') {
+            setCameraSequenceVisibility(raw.env.cameraSequenceVisible, true);
         }
 
         let loaded = 0;
@@ -1825,12 +2022,86 @@ async function loadScene() {
                         : (sx + sy + sz) / 3;
                     app.setModelScale(loadedModel.id, uniformScale);
                 }
+                if (typeof asset.visible === 'boolean') {
+                    app.setModelVisibility?.(loadedModel.id, asset.visible);
+                }
+                if (asset.type === 'onnx' && asset.dynamic && asset.animation) {
+                    if (Number.isFinite(asset.animation.speed)) {
+                        app.setModelAnimationSpeed?.(loadedModel.id, Number(asset.animation.speed));
+                    }
+                    const startTime = Number(asset.animation.startTime);
+                    const endTime = Number(asset.animation.endTime);
+                    if (Number.isFinite(startTime) && Number.isFinite(endTime)) {
+                        app.setModelAnimTimeBounds?.(loadedModel.id, startTime, endTime);
+                    }
+                }
 
                 loaded++;
             } catch (assetError) {
                 failed++;
                 console.warn(`[Editor ${state.VERSION}] 资产加载失败:`, asset, assetError);
             }
+        }
+
+        if (timeline) {
+            if (Number.isFinite(timeline.durationSec)) {
+                state.timelineDurationSec = Math.max(TIMELINE_MIN_DURATION_SEC, Number(timeline.durationSec));
+            }
+            if (Number.isFinite(timeline.playbackSpeed)) {
+                state.timelinePlaybackSpeed = Number(timeline.playbackSpeed);
+                if (dom.timelineSpeed) {
+                    dom.timelineSpeed.value = String(state.timelinePlaybackSpeed);
+                }
+            }
+            if (typeof timeline.isLooping === 'boolean') {
+                state.isLooping = timeline.isLooping;
+                dom.btnLoopCamera?.classList.toggle('active', state.isLooping);
+            }
+            if (Number.isFinite(timeline.fps)) {
+                state.timelineFps = Number(timeline.fps);
+                if (dom.timelineFps) {
+                    dom.timelineFps.value = String(state.timelineFps);
+                }
+            }
+            state.keyframes = Array.isArray(timeline.keyframes)
+                ? timeline.keyframes
+                    .map((item) => {
+                        const time = Number(item?.time);
+                        const frameRaw = Number(item?.frame);
+                        const frame = Number.isFinite(frameRaw)
+                            ? Math.round(frameRaw)
+                            : timeToFrame(Number.isFinite(time) ? time : 0);
+                        const camera = item?.camera;
+                        if (!camera?.position || !camera?.rotation) return null;
+                        return {
+                            frame,
+                            time: frameToTime(frame),
+                            camera: {
+                                position: {
+                                    x: Number(camera.position.x) || 0,
+                                    y: Number(camera.position.y) || 0,
+                                    z: Number(camera.position.z) || 0,
+                                },
+                                rotation: {
+                                    x: Number(camera.rotation.x) || 0,
+                                    y: Number(camera.rotation.y) || 0,
+                                    z: Number(camera.rotation.z) || 0,
+                                    w: Number(camera.rotation.w) || 1,
+                                },
+                                fovDegrees: Number(camera.fovDegrees || state.sceneCameraFov || 45),
+                            },
+                        };
+                    })
+                    .filter(Boolean)
+                    .sort((a, b) => a.frame - b.frame)
+                : [];
+
+            const selectedFrame = Number.isFinite(Number(timeline.selectedFrame))
+                ? Number(timeline.selectedFrame)
+                : timeToFrame(Number(timeline.currentTime) || 0);
+            setTimelineFrame(selectedFrame, { applyPose: true, syncSlider: true });
+            updateTimelineUI();
+            syncCameraSequenceVisualization();
         }
 
         showLoading(false);
@@ -2579,6 +2850,18 @@ function addKeyframe() {
     }
 }
 
+function addKeyframeFromShortcut() {
+    const frame = clampTimelineFrame(state.selectedFrame);
+    const hasLaterKeyframe = state.keyframes.some((keyframe) => keyframe.frame > frame);
+    addKeyframe();
+    if (hasLaterKeyframe) return;
+
+    const nextTime = frameToTime(frame) + 1;
+    const nextFrame = clampTimelineFrame(timeToFrame(nextTime));
+    if (nextFrame === frame) return;
+    setTimelineFrame(nextFrame, { applyPose: false, syncSlider: true });
+}
+
 /**
  * 删除当前时间戳上的关键帧
  */
@@ -2853,6 +3136,18 @@ function handleGlobalShortcuts(e) {
         return;
     }
 
+    if (e.code === 'Space') {
+        e.preventDefault();
+        playCameraAnimation();
+        return;
+    }
+
+    if (e.ctrlKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        addKeyframeFromShortcut();
+        return;
+    }
+
     if (e.key.toLowerCase() === 'f') {
         if (!app || !state.selectedModelId) return;
         e.preventDefault();
@@ -2960,12 +3255,11 @@ function initEventListeners() {
     dom.sceneBgColorHex?.addEventListener('change', (e) => {
         applySceneBackgroundHex(e.target.value, 'custom');
     });
-    dom.sceneDepthScale?.addEventListener('input', (e) => {
-        applySceneDepthRangeScale(e.target.value, true);
-    });
-    dom.sceneDepthScaleNumber?.addEventListener('change', (e) => {
-        applySceneDepthRangeScale(e.target.value);
-    });
+    dom.sceneDepthScale?.addEventListener('input', updateSceneDepthRangeScaleFromSlider);
+    dom.sceneDepthScaleNumber?.addEventListener('input', updateSceneDepthRangeScaleFromInput);
+    dom.sceneDepthScaleNumber?.addEventListener('change', commitSceneDepthRangeScaleFromInput);
+    dom.sceneDepthScaleNumber?.addEventListener('blur', commitSceneDepthRangeScaleFromInput);
+    dom.sceneDepthScaleNumber?.addEventListener('keydown', handleSceneDepthRangeScaleInputKeydown);
     dom.sceneFovRange?.addEventListener('input', (e) => {
         applySceneCameraFov(e.target.value, true);
     });
@@ -2998,12 +3292,7 @@ function initEventListeners() {
     dom.modelAnimSpeedValue?.addEventListener('input', updateSelectedModelAnimationSpeedFromInput);
     dom.modelAnimSpeedValue?.addEventListener('change', commitSelectedModelAnimationSpeedFromInput);
     dom.modelAnimSpeedValue?.addEventListener('blur', commitSelectedModelAnimationSpeedFromInput);
-    dom.modelAnimSpeedValue?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            commitSelectedModelAnimationSpeedFromInput();
-            dom.modelAnimSpeedValue?.blur();
-        }
-    });
+    dom.modelAnimSpeedValue?.addEventListener('keydown', handleSelectedModelAnimationSpeedInputKeydown);
 
     // 相机模式
     dom.cameraMode?.addEventListener('change', (e) => {
@@ -3159,9 +3448,11 @@ async function init() {
     // 初始化事件监听
     initEventListeners();
     initializeSidebarLayout();
+    syncCanvasContainerToViewport();
     window.addEventListener('resize', () => {
         const current = getCurrentSidebarWidths();
         applySidebarWidths(current.left, current.right, false);
+        syncCanvasContainerToViewport();
     });
     initSceneSettingsUI();
     initTimelineUI();

@@ -5,10 +5,67 @@ import {GaussianRenderer} from "../renderer";
 import {PointCloud, DynamicPointCloud} from "../point_cloud";
 import { CameraAdapter } from "../camera/CameraAdapter";
 import { FBXModelWrapper } from "../models/fbx-model-wrapper";
+import { readTextureR32Float, readTextureR32FloatPixel } from "../utils/gpu";
 
 type ScenePreviewMode = "color" | "normal" | "depth";
+type RawDepthSource = "mesh" | "gaussian" | "combined";
 const EDITOR_DEPTH_BASE_EXTENT_KEY = "__editorDepthBaseExtent";
 
+type RawDepthFrameDebug = {
+    source: RawDepthSource;
+    width: number;
+    height: number;
+    minDepth: number | null;
+    maxDepth: number | null;
+    data: Float32Array;
+};
+
+type SceneDepthPickResult = {
+    pixelX: number;
+    pixelY: number;
+    source: RawDepthSource | null;
+    meshDepth: number | null;
+    gaussianDepth: number | null;
+    depth: number | null;
+    world: { x: number; y: number; z: number } | null;
+};
+
+/**
+ * Fused Three.js + Gaussian renderer used by the editor.
+ *
+ * The per-frame render flow is intentionally split into three stages:
+ *
+ * 1. `onBeforeRender(...)`
+ *    Updates visible gaussian models, uploads preprocess inputs, and runs the
+ *    gaussian preprocess/sort stage through `GaussianRenderer.prepareMulti(...)`.
+ *    At this point, gaussian raw view-space depth already exists logically as
+ *    per-splat data (`z_view`), but it is not yet persisted per pixel.
+ *
+ * 2. `renderThreeScene(...)`
+ *    Renders the regular Three.js scene into an offscreen render target.
+ *    This captures mesh color plus mesh depth (`D1`). The mesh depth texture is then
+ *    converted into a mesh raw-depth texture (`sceneRawDepthTexture`), which is the
+ *    earliest point where mesh raw depth can be sampled/read back.
+ *    If preview mode is `depth`, this stage also blits a mesh depth visualization to canvas.
+ *
+ * 3. `drawSplats(...)`
+ *    Draws gaussian splats over the Three.js result, optionally using the mesh depth
+ *    attachment for visibility testing. When raw depth output is enabled, the gaussian
+ *    fragment pass writes visible gaussian raw depth into `gaussianRawDepthTexture`.
+ *    This is the earliest point where gaussian per-pixel raw depth can be sampled/read back.
+ *
+ * Preview modes:
+ * - `color`: Three color + gaussian color to screen; raw depth still available offscreen
+ * - `normal`: Three color + gaussian normal visualization to screen; raw depth still available offscreen
+ * - `depth`: screen shows depth visualization, but raw depth remains available via the
+ *   offscreen raw-depth textures rather than the displayed grayscale image
+ *
+ * Raw depth access summary:
+ * - mesh raw depth: after `renderThreeScene(...)`
+ * - gaussian raw depth: after `drawSplats(...)`
+ * - combined scene raw depth for picking: by reading both raw-depth textures and resolving
+ *   visibility in `pickScenePoint(...)` / `getRawDepthFrame(...)`
+ */
 export class GaussianThreeJSRenderer extends THREE.Mesh {
     private renderer: GaussianRenderer;
     private gaussianModels: GaussianModel[];
@@ -38,6 +95,16 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
     private overlayBindGroupLayout: GPUBindGroupLayout | null = null;
     private overlayPipeline: GPURenderPipeline | null = null;
     private overlayRenderedThisFrame = false;
+
+    // Raw depth buffers for picking/debug.
+    // `sceneRawDepthTexture`: mesh/Three raw view-space depth after renderThreeScene().
+    // `gaussianRawDepthTexture`: gaussian raw view-space depth after drawSplats().
+    private sceneRawDepthTexture: GPUTexture | null = null;
+    private gaussianRawDepthTexture: GPUTexture | null = null;
+    private rawDepthWidth = 0;
+    private rawDepthHeight = 0;
+    private rawSceneDepthPipeline: GPURenderPipeline | null = null;
+    private rawSceneDepthBindGroupLayout: GPUBindGroupLayout | null = null;
 
     public constructor(renderer: THREE.WebGPURenderer, scene: THREE.Scene, gaussianModels: GaussianModel[]) {
         super();
@@ -72,6 +139,7 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         (this.threeRenderer as any).getDrawingBufferSize?.(dbSize);
         const width = dbSize.x || this.threeRenderer.domElement.width || 1;
         const height = dbSize.y || this.threeRenderer.domElement.height || 1;
+        this.ensureRawDepthTextures(width, height);
         
         // Ensure scene depth RT is created with correct size
         if (!this.sceneDepthRT || this.sceneDepthRT.width !== width || this.sceneDepthRT.height !== height) {
@@ -107,6 +175,7 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         this.threeRenderer.clear(true, true, false);
         this.threeRenderer.render(this.threeScene, camera);
         this.threeRenderer.setRenderTarget(null);
+        this.updateSceneRawDepthTexture(camera);
         
         if ((globalThis as any).GS_DEPTH_DEBUG) {
             //console.log('[Depth] Rendered Three scene to RT (color + depth captured)');
@@ -224,6 +293,159 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         } catch (_error) {
             this.threeRenderer.render(this.threeScene, camera);
         }
+    }
+
+    /**
+     * Allocates the persistent raw-depth textures used by picking/debug.
+     * These textures are not shown directly on screen:
+     * - sceneRawDepthTexture receives mesh raw depth after renderThreeScene()
+     * - gaussianRawDepthTexture receives gaussian raw depth during drawSplats()
+     */
+    private ensureRawDepthTextures(width: number, height: number): void {
+        const w = Math.max(1, Math.floor(width));
+        const h = Math.max(1, Math.floor(height));
+        if (
+            this.sceneRawDepthTexture &&
+            this.gaussianRawDepthTexture &&
+            this.rawDepthWidth === w &&
+            this.rawDepthHeight === h
+        ) {
+            return;
+        }
+
+        this.sceneRawDepthTexture?.destroy();
+        this.gaussianRawDepthTexture?.destroy();
+        this.sceneRawDepthTexture = this.device.createTexture({
+            label: "Scene Raw Depth",
+            size: { width: w, height: h, depthOrArrayLayers: 1 },
+            format: "r32float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+        });
+        this.gaussianRawDepthTexture = this.device.createTexture({
+            label: "Gaussian Raw Depth",
+            size: { width: w, height: h, depthOrArrayLayers: 1 },
+            format: "r32float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+        });
+        this.rawDepthWidth = w;
+        this.rawDepthHeight = h;
+    }
+
+    private ensureSceneRawDepthPipeline(): void {
+        if (this.rawSceneDepthPipeline && this.rawSceneDepthBindGroupLayout) {
+            return;
+        }
+
+        this.rawSceneDepthBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: { sampleType: "depth", viewDimension: "2d" },
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: { type: "uniform" },
+                },
+            ],
+        });
+
+        const shaderModule = this.device.createShaderModule({
+            code: `
+                struct DepthParams {
+                    near: f32,
+                    far: f32,
+                };
+
+                @group(0) @binding(0) var depthTex: texture_depth_2d;
+                @group(0) @binding(1) var<uniform> params: DepthParams;
+
+                fn depthToViewZ(depth: f32, near: f32, far: f32) -> f32 {
+                    let denom = min((far - near) * depth - far, -0.000001);
+                    return abs((near * far) / denom);
+                }
+
+                @vertex
+                fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+                    var pos = array<vec2f, 6>(
+                        vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+                        vec2f(-1.0, 1.0),  vec2f(1.0, -1.0), vec2f(1.0, 1.0)
+                    );
+                    return vec4f(pos[i], 0.0, 1.0);
+                }
+
+                @fragment
+                fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) f32 {
+                    let xy = vec2<i32>(i32(fragCoord.x), i32(fragCoord.y));
+                    let depth = textureLoad(depthTex, xy, 0);
+                    if (depth >= 0.999999) {
+                        return -1.0;
+                    }
+                    return depthToViewZ(depth, params.near, params.far);
+                }
+            `,
+        });
+
+        this.rawSceneDepthPipeline = this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.rawSceneDepthBindGroupLayout] }),
+            vertex: {
+                module: shaderModule,
+                entryPoint: "vs_main",
+            },
+            fragment: {
+                module: shaderModule,
+                entryPoint: "fs_main",
+                targets: [{ format: "r32float" }],
+            },
+            primitive: { topology: "triangle-list" },
+        });
+    }
+
+    private updateSceneRawDepthTexture(camera: THREE.Camera): void {
+        if (!this.sceneDepthTexture || !this.sceneRawDepthTexture) return;
+
+        const backend = (this.threeRenderer as any).backend;
+        const depthInfo = backend?.get?.(this.sceneDepthTexture);
+        const depthTexture = depthInfo?.texture as GPUTexture | undefined;
+        if (!depthTexture) return;
+
+        this.ensureSceneRawDepthPipeline();
+        if (!this.rawSceneDepthPipeline || !this.rawSceneDepthBindGroupLayout) return;
+
+        const near = Math.max(0.0001, (camera as any).near ?? 0.01);
+        const far = Math.max(near + 0.0001, (camera as any).far ?? 1000.0);
+        const paramsBuffer = this.device.createBuffer({
+            size: 8,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(paramsBuffer, 0, new Float32Array([near, far]));
+
+        const bindGroup = this.device.createBindGroup({
+            layout: this.rawSceneDepthBindGroupLayout,
+            entries: [
+                { binding: 0, resource: depthTexture.createView() },
+                { binding: 1, resource: { buffer: paramsBuffer } },
+            ],
+        });
+
+        const encoder = this.device.createCommandEncoder({ label: "Scene Raw Depth" });
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [
+                {
+                    view: this.sceneRawDepthTexture.createView(),
+                    loadOp: "clear",
+                    storeOp: "store",
+                    clearValue: { r: -1, g: 0, b: 0, a: 0 },
+                },
+            ],
+        });
+        pass.setPipeline(this.rawSceneDepthPipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.draw(6, 1, 0, 0);
+        pass.end();
+        this.device.queue.submit([encoder.finish()]);
+        paramsBuffer.destroy();
     }
 
     private computeGaussianSceneExtent(visibleGaussianModels?: GaussianModel[]): number {
@@ -632,6 +854,8 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
 
         const device = (renderer.backend as any).device as GPUDevice;
         const context = (renderer.backend as any).context as GPUCanvasContext;
+        const [viewportWidth, viewportHeight] = this.getViewport();
+        this.ensureRawDepthTextures(viewportWidth, viewportHeight);
         const colorView = context.getCurrentTexture().createView();
         const encoder = device.createCommandEncoder({label: "GS-render"});
         
@@ -707,12 +931,22 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
 
         // Build render pass descriptor
         const passDescriptor: GPURenderPassDescriptor = {
-            colorAttachments: [{
-                view: colorView,
-                clearValue: { r: 0, g: 0, b: 0, a: 1 },
-                loadOp: "load",
-                storeOp: "store",
-            }]
+            colorAttachments: [
+                {
+                    view: colorView,
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                    loadOp: "load",
+                    storeOp: "store",
+                },
+                {
+                    // Attachment 1 stores gaussian raw view-space depth.
+                    // This is available for all preview modes; only the visible screen output changes.
+                    view: this.gaussianRawDepthTexture!.createView(),
+                    clearValue: { r: -1, g: 0, b: 0, a: 0 },
+                    loadOp: "clear",
+                    storeOp: "store",
+                },
+            ]
         };
 
         // Add depth attachment if available
@@ -923,6 +1157,7 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
 
     public async init() {
         await this.renderer.ensureSorter();
+        this.renderer.setRawDepthEnabled(true);
         console.log("GaussianThreeJSRenderer.init() Done!");
     }
 
@@ -969,6 +1204,108 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         return this.sceneDepthRangeScale;
     }
 
+    public getRawDepthSize(): { width: number; height: number } {
+        return {
+            width: this.rawDepthWidth,
+            height: this.rawDepthHeight,
+        };
+    }
+
+    public async pickScenePoint(camera: THREE.Camera, pixelX: number, pixelY: number): Promise<SceneDepthPickResult | null> {
+        if (!this.sceneRawDepthTexture || !this.gaussianRawDepthTexture) return null;
+        const x = Math.max(0, Math.min(this.rawDepthWidth - 1, Math.floor(pixelX)));
+        const y = Math.max(0, Math.min(this.rawDepthHeight - 1, Math.floor(pixelY)));
+        const [meshDepthValue, gaussianDepthValue] = await Promise.all([
+            readTextureR32FloatPixel(this.device, this.sceneRawDepthTexture, x, y),
+            readTextureR32FloatPixel(this.device, this.gaussianRawDepthTexture, x, y),
+        ]);
+        const meshDepth = meshDepthValue > 0 ? meshDepthValue : null;
+        const gaussianDepth = gaussianDepthValue > 0 ? gaussianDepthValue : null;
+        const depth = gaussianDepth ?? meshDepth;
+        const source: RawDepthSource | null = gaussianDepth ? "gaussian" : (meshDepth ? "mesh" : null);
+        const world = depth ? this.unprojectPixelToWorld(camera, x, y, depth) : null;
+        return {
+            pixelX: x,
+            pixelY: y,
+            source,
+            meshDepth,
+            gaussianDepth,
+            depth,
+            world,
+        };
+    }
+
+    /**
+     * Reads back one of the persisted raw-depth sources for debugging/export.
+     * `combined` does not come from a dedicated GPU buffer; it is resolved on CPU as:
+     * visible gaussian raw depth if present, otherwise mesh raw depth.
+     */
+    public async getRawDepthFrame(camera: THREE.Camera, source: RawDepthSource = "combined"): Promise<RawDepthFrameDebug | null> {
+        if (!this.sceneRawDepthTexture || !this.gaussianRawDepthTexture) return null;
+        const width = this.rawDepthWidth;
+        const height = this.rawDepthHeight;
+        const [meshData, gaussianData] = await Promise.all([
+            readTextureR32Float(this.device, this.sceneRawDepthTexture, width, height),
+            readTextureR32Float(this.device, this.gaussianRawDepthTexture, width, height),
+        ]);
+
+        let data: Float32Array;
+        if (source === "mesh") {
+            data = meshData;
+        } else if (source === "gaussian") {
+            data = gaussianData;
+        } else {
+            data = new Float32Array(width * height);
+            for (let i = 0; i < data.length; i += 1) {
+                data[i] = gaussianData[i] > 0 ? gaussianData[i] : meshData[i];
+            }
+        }
+
+        const depthRange = this.computeRawDepthRange(data);
+        return {
+            source,
+            width,
+            height,
+            minDepth: depthRange.minDepth,
+            maxDepth: depthRange.maxDepth,
+            data,
+        };
+    }
+
+    private computeRawDepthRange(data: Float32Array): { minDepth: number | null; maxDepth: number | null } {
+        let minDepth = Number.POSITIVE_INFINITY;
+        let maxDepth = Number.NEGATIVE_INFINITY;
+        for (let i = 0; i < data.length; i += 1) {
+            const value = data[i];
+            if (!(value > 0) || !Number.isFinite(value)) continue;
+            if (value < minDepth) minDepth = value;
+            if (value > maxDepth) maxDepth = value;
+        }
+        if (!Number.isFinite(minDepth) || !Number.isFinite(maxDepth)) {
+            return { minDepth: null, maxDepth: null };
+        }
+        return { minDepth, maxDepth };
+    }
+
+    private unprojectPixelToWorld(camera: THREE.Camera, pixelX: number, pixelY: number, viewDepth: number): { x: number; y: number; z: number } | null {
+        if (!(camera instanceof THREE.PerspectiveCamera) && camera.type !== "PerspectiveCamera") {
+            return null;
+        }
+        const width = Math.max(1, this.rawDepthWidth);
+        const height = Math.max(1, this.rawDepthHeight);
+        const ndcX = ((pixelX + 0.5) / width) * 2 - 1;
+        const ndcY = 1 - ((pixelY + 0.5) / height) * 2;
+        const clip = new THREE.Vector4(ndcX, ndcY, 1, 1).applyMatrix4((camera as any).projectionMatrixInverse);
+        if (Math.abs(clip.w) < 1e-6) {
+            return null;
+        }
+        clip.divideScalar(clip.w);
+        const scale = viewDepth / Math.max(1e-6, Math.abs(clip.z));
+        const cameraSpacePoint = new THREE.Vector3(clip.x * scale, clip.y * scale, clip.z * scale);
+        const worldPoint = cameraSpacePoint.applyMatrix4(camera.matrixWorld);
+        return { x: worldPoint.x, y: worldPoint.y, z: worldPoint.z };
+    }
+
     /**
      * Diagnostic: Check if depth is properly configured
      */
@@ -977,6 +1314,8 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         console.log('Auto depth mode:', this.autoDepthMode);
         console.log('Scene depth RT exists:', !!this.sceneDepthRT);
         console.log('Scene depth texture exists:', !!this.sceneDepthTexture);
+        console.log('Scene raw depth texture exists:', !!this.sceneRawDepthTexture);
+        console.log('Gaussian raw depth texture exists:', !!this.gaussianRawDepthTexture);
         
         if (this.sceneDepthRT) {
             console.log('Scene depth RT size:', this.sceneDepthRT.width, 'x', this.sceneDepthRT.height);
@@ -1001,6 +1340,14 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         }
         
         this.sceneDepthTexture = null;
+        this.sceneRawDepthTexture?.destroy();
+        this.sceneRawDepthTexture = null;
+        this.gaussianRawDepthTexture?.destroy();
+        this.gaussianRawDepthTexture = null;
+        this.rawDepthWidth = 0;
+        this.rawDepthHeight = 0;
+        this.rawSceneDepthPipeline = null;
+        this.rawSceneDepthBindGroupLayout = null;
         
         if ((globalThis as any).GS_DEPTH_DEBUG) {
             console.log('[Depth] Cleaned up depth resources');

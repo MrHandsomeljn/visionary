@@ -5,6 +5,7 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) screen_pos: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) view_depth: f32,
 };
 
 struct VertexInput {
@@ -20,8 +21,15 @@ struct Splat {
     pos: u32,
     // NDC z (high precision)
     posz: f32,
+    // View-space depth used for scene-point picking/debug.
+    view_depth: f32,
     // rgba packed as f16
     color_0: u32,color_1: u32,
+};
+
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) raw_depth: f32,
 };
 
 @group(0) @binding(2)
@@ -57,15 +65,19 @@ fn vs_main(
     out.position = vec4<f32>(v_center_xy + offset, z_ndc, 1.);
     out.screen_pos = position;
     out.color = vec4<f32>(unpack2x16float(vertex.color_0), unpack2x16float(vertex.color_1));
+    out.view_depth = vertex.view_depth;
     return out;
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput) -> FragmentOutput {
     let a = dot(in.screen_pos, in.screen_pos);
     if a > 2. * CUTOFF {
         discard;
     }
     let b = min(0.99, exp(-a) * in.color.a);
-    return vec4<f32>(in.color.rgb, 1.) * b;
+    var out: FragmentOutput;
+    out.color = vec4<f32>(in.color.rgb, 1.) * b;
+    out.raw_depth = in.view_depth;
+    return out;
 }

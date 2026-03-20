@@ -10,6 +10,10 @@ export function align8(n: number): number {
   return (n + 7) & ~7; 
 }
 
+export function align256(n: number): number {
+  return (n + 255) & ~255;
+}
+
 /**
  * Read entire buffer (or a segment from an offset).
  * @param device GPUDevice
@@ -50,6 +54,87 @@ export async function readWholeBuffer(
   const out = new Uint8Array(byteLength);
   out.set(new Uint8Array(mapped).subarray(0, byteLength));
 
+  staging.unmap();
+  staging.destroy();
+  return out;
+}
+
+export async function readTextureR32FloatPixel(
+  device: GPUDevice,
+  texture: GPUTexture,
+  x: number,
+  y: number
+): Promise<number> {
+  const bytesPerRow = 256;
+  const staging = device.createBuffer({
+    size: bytesPerRow,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+  });
+
+  const encoder = device.createCommandEncoder();
+  encoder.copyTextureToBuffer(
+    {
+      texture,
+      origin: {
+        x: Math.max(0, Math.floor(x)),
+        y: Math.max(0, Math.floor(y)),
+        z: 0,
+      },
+    },
+    {
+      buffer: staging,
+      bytesPerRow,
+      rowsPerImage: 1,
+    },
+    { width: 1, height: 1, depthOrArrayLayers: 1 }
+  );
+  device.queue.submit([encoder.finish()]);
+  await device.queue.onSubmittedWorkDone?.();
+
+  await staging.mapAsync(GPUMapMode.READ, 0, bytesPerRow);
+  const value = new Float32Array(staging.getMappedRange(0, 4))[0];
+  staging.unmap();
+  staging.destroy();
+  return value;
+}
+
+export async function readTextureR32Float(
+  device: GPUDevice,
+  texture: GPUTexture,
+  width: number,
+  height: number
+): Promise<Float32Array> {
+  const safeWidth = Math.max(1, Math.floor(width));
+  const safeHeight = Math.max(1, Math.floor(height));
+  const bytesPerPixel = 4;
+  const bytesPerRow = align256(safeWidth * bytesPerPixel);
+  const byteLength = bytesPerRow * safeHeight;
+  const staging = device.createBuffer({
+    size: byteLength,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+  });
+
+  const encoder = device.createCommandEncoder();
+  encoder.copyTextureToBuffer(
+    { texture },
+    {
+      buffer: staging,
+      bytesPerRow,
+      rowsPerImage: safeHeight,
+    },
+    { width: safeWidth, height: safeHeight, depthOrArrayLayers: 1 }
+  );
+  device.queue.submit([encoder.finish()]);
+  await device.queue.onSubmittedWorkDone?.();
+
+  await staging.mapAsync(GPUMapMode.READ, 0, byteLength);
+  const mapped = new Uint8Array(staging.getMappedRange(0, byteLength));
+  const out = new Float32Array(safeWidth * safeHeight);
+  for (let row = 0; row < safeHeight; row += 1) {
+    const rowStart = row * bytesPerRow;
+    const rowSlice = mapped.slice(rowStart, rowStart + safeWidth * bytesPerPixel);
+    out.set(new Float32Array(rowSlice.buffer, rowSlice.byteOffset, safeWidth), row * safeWidth);
+  }
   staging.unmap();
   staging.destroy();
   return out;

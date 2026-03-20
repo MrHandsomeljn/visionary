@@ -50,6 +50,8 @@ struct Splat {
     pos: u32,
     // NDC z (high precision)
     posz: f32,
+    // View-space depth used for scene-point picking/debug.
+    view_depth: f32,
     // rgba packed as f16
     color_0: u32,color_1: u32
 };
@@ -551,6 +553,8 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
 
 
     var color: vec4<f32>;
+    let view_pos = camera.view * vec4<f32>(xyz, 1.0);
+    let z_view = abs(view_pos.z);
     
     
     // color = vec4<f32>(sh_coef(0, 1u),opacity);
@@ -599,8 +603,6 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
         // 避免 far 过大导致画面几乎全白/全黑。
         let znear = -camera.proj[3][2] / camera.proj[2][2];
         let zfar = -camera.proj[3][2] / (camera.proj[2][2] - 1.0);
-        let view_pos = camera.view * vec4<f32>(xyz, 1.0);
-        let z_view = abs(view_pos.z);
         let local_far = znear + max(1e-3, render_settings.scene_extend * 3.0);
         let vis_far = min(zfar, local_far);
         let depth_linear = clamp((z_view - znear) / max(1e-6, (vis_far - znear)), 0.0, 1.0);
@@ -619,6 +621,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
         pack2x16float(v.xy), pack2x16float(v.zw),
         pack2x16float(v_center.xy),
         v_center.z,
+        z_view,
         pack2x16float(color.rg), pack2x16float(color.ba),
     );
     // filling the sorting buffers and the indirect sort dispatch buffer
