@@ -1,9 +1,11 @@
 /**
- * Visionary Editor Application 0.1.3
+ * Visionary Editor Application 0.1.4
  * Editor version of main app with UI controls
  */
 
 import * as THREE from "three/webgpu";
+import { LineSegments2 } from "three/examples/jsm/lines/webgpu/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { vec3, quat } from "gl-matrix";
 import { GaussianRenderer } from "../renderer/gaussian_renderer";
 import { GaussianModel } from "../app/GaussianModel";
@@ -88,8 +90,8 @@ const EDITOR_CAMERA_SEQUENCE_HELPER_KEY = "__visionaryEditorHelper";
 const CAMERA_SEQUENCE_FRUSTUM_COLOR = 0x22c55e;
 const CAMERA_SEQUENCE_PATH_COLOR = 0x4a90d9;
 const CAMERA_SEQUENCE_CURRENT_COLOR = 0xf59e0b;
-const CAMERA_SEQUENCE_FRUSTUM_RADIUS_FACTOR = 0.022;
-const CAMERA_SEQUENCE_PATH_RADIUS_FACTOR = 0.026;
+const CAMERA_SEQUENCE_FRUSTUM_LINE_WIDTH_PX = 2.25;
+const CAMERA_SEQUENCE_PATH_LINE_WIDTH_PX = 2.75;
 
 /**
  * Editor model data - tracks models with UI state
@@ -196,7 +198,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = "0.1.3";
+  readonly VERSION = "0.1.4";
 
   private globalTimelineTime: number = 0;
 
@@ -1893,9 +1895,6 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const frustumLength = this.computeCameraSequenceFrustumLength();
     const selected = Number.isFinite(Number(selectedFrame)) ? Math.round(Number(selectedFrame)) : null;
 
-    const frustumRadius = Math.max(0.003, frustumLength * CAMERA_SEQUENCE_FRUSTUM_RADIUS_FACTOR);
-    const pathRadius = Math.max(0.003, frustumLength * CAMERA_SEQUENCE_PATH_RADIUS_FACTOR);
-
     for (const item of normalized) {
       const color = selected !== null && item.frame === selected
         ? CAMERA_SEQUENCE_CURRENT_COLOR
@@ -1904,7 +1903,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         item.camera,
         aspect,
         frustumLength,
-        frustumRadius,
+        selected !== null && item.frame === selected
+          ? CAMERA_SEQUENCE_PATH_LINE_WIDTH_PX
+          : CAMERA_SEQUENCE_FRUSTUM_LINE_WIDTH_PX,
         color
       );
       if (frustum) {
@@ -1914,17 +1915,18 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
     const pathPoints = sampledCenters.length >= 2 ? sampledCenters : centers;
     if (pathPoints.length >= 2) {
+      const pathSegments: Array<[THREE.Vector3, THREE.Vector3]> = [];
       for (let i = 1; i < pathPoints.length; i++) {
-        const segment = this.buildThickLineSegment(
-          pathPoints[i - 1],
-          pathPoints[i],
-          pathRadius,
-          CAMERA_SEQUENCE_PATH_COLOR,
-          0.9
-        );
-        if (segment) {
-          group.add(segment);
-        }
+        pathSegments.push([pathPoints[i - 1], pathPoints[i]]);
+      }
+      const path = this.buildScreenSpaceLineSegments(
+        pathSegments,
+        CAMERA_SEQUENCE_PATH_COLOR,
+        0.9,
+        CAMERA_SEQUENCE_PATH_LINE_WIDTH_PX
+      );
+      if (path) {
+        group.add(path);
       }
     }
 
@@ -2062,9 +2064,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     pose: EditorCameraPose,
     aspect: number,
     frustumLength: number,
-    lineRadius: number,
+    lineWidthPx: number,
     color: number
-  ): THREE.Group | null {
+  ): LineSegments2 | null {
     const px = Number(pose?.position?.x);
     const py = Number(pose?.position?.y);
     const pz = Number(pose?.position?.z);
@@ -2116,60 +2118,78 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       [bl, tl],
     ];
 
-    const group = new THREE.Group();
-    group.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
-    for (const [start, end] of edges) {
-      const segment = this.buildThickLineSegment(start, end, lineRadius, color, 0.88);
-      if (!segment) continue;
-      group.add(segment);
-    }
-    return group;
+    return this.buildScreenSpaceLineSegments(edges, color, 0.88, lineWidthPx);
   }
 
-  private buildThickLineSegment(
-    start: THREE.Vector3,
-    end: THREE.Vector3,
-    radius: number,
+  private buildScreenSpaceLineSegments(
+    segments: Array<[THREE.Vector3, THREE.Vector3]>,
     color: number,
-    opacity = 0.9
-  ): THREE.Mesh | null {
-    const delta = new THREE.Vector3().subVectors(end, start);
-    const length = delta.length();
-    if (!Number.isFinite(length) || length <= 1e-6) return null;
+    opacity = 0.9,
+    lineWidthPx = CAMERA_SEQUENCE_FRUSTUM_LINE_WIDTH_PX
+  ): LineSegments2 | null {
+    const positions: number[] = [];
+    for (const [start, end] of segments) {
+      if (!start || !end) continue;
+      const length = start.distanceTo(end);
+      if (!Number.isFinite(length) || length <= 1e-6) continue;
+      positions.push(start.x, start.y, start.z, end.x, end.y, end.z);
+    }
+    if (positions.length === 0) return null;
 
-    const geometry = new THREE.CylinderGeometry(
-      Math.max(1e-4, radius),
-      Math.max(1e-4, radius),
-      length,
-      10,
-      1,
-      true
-    );
-    const material = new THREE.MeshBasicMaterial({
+    const geometry = new LineSegmentsGeometry();
+    geometry.setPositions(positions);
+
+    const material = new THREE.Line2NodeMaterial({
       color,
+      linewidth: lineWidthPx,
       transparent: opacity < 0.999,
       opacity,
-      depthTest: true,
-      depthWrite: true,
     });
+    material.worldUnits = false;
+    material.depthTest = true;
+    material.depthWrite = true;
 
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.copy(start).add(end).multiplyScalar(0.5);
-    const direction = delta.multiplyScalar(1 / length);
-    const quaternion = new THREE.Quaternion().setFromUnitVectors(
-      new THREE.Vector3(0, 1, 0),
-      direction
-    );
-    mesh.quaternion.copy(quaternion);
-    mesh.renderOrder = 0;
-    mesh.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
-    return mesh;
+    const line = new LineSegments2(geometry, material);
+    line.renderOrder = 0;
+    line.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
+    line.frustumCulled = false;
+    this.updateCameraSequenceLineMaterialResolution(line);
+    return line;
   }
 
   private updateCameraSequenceCurrentMarkerFromMeshCamera(): void {
     if (!this.cameraSequenceCurrentMarker || !this.meshCamera) return;
     this.cameraSequenceCurrentMarker.position.copy(this.meshCamera.position);
     this.cameraSequenceCurrentMarker.updateMatrixWorld(true);
+  }
+
+  private updateCameraSequenceLineMaterialResolution(root?: THREE.Object3D | null): void {
+    const target = root ?? this.cameraSequenceGroup;
+    if (!target) return;
+
+    const resolution = this.getCameraSequenceLineResolution();
+    if (!resolution) return;
+
+    target.traverse((node) => {
+      const materialCandidate = (node as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+      const materials = Array.isArray(materialCandidate) ? materialCandidate : [materialCandidate];
+      for (const material of materials) {
+        const lineMaterial = material as THREE.Line2NodeMaterial & { resolution?: THREE.Vector2 };
+        lineMaterial.resolution?.copy(resolution);
+      }
+    });
+  }
+
+  private getCameraSequenceLineResolution(): THREE.Vector2 | null {
+    const drawingBuffer = new THREE.Vector2();
+    (this.meshRenderer as any)?.getDrawingBufferSize?.(drawingBuffer);
+    if (drawingBuffer.x > 0 && drawingBuffer.y > 0) {
+      return drawingBuffer;
+    }
+    if (this.canvas && this.canvas.width > 0 && this.canvas.height > 0) {
+      return new THREE.Vector2(this.canvas.width, this.canvas.height);
+    }
+    return null;
   }
 
   private notifyCameraInteraction(kind: "drag" | "wheel" | "keyboard"): void {
@@ -2297,6 +2317,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         this.meshRenderer.setSize(rect.width || 1, rect.height || 1, false);
       }
     }
+    this.updateCameraSequenceLineMaterialResolution();
   }
 
   /**
@@ -2383,4 +2404,5 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
 // Create global editor instance
 export const editorApp = new EditorApp();
+
 

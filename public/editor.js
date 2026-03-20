@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.1.3
+ * Visionary Editor UI Controller 0.1.4
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -84,6 +84,11 @@ const dom = {
     btnPlayCamera: document.getElementById('btnPlayCamera'),
     btnLoopCamera: document.getElementById('btnLoopCamera'),
     btnToggleCameraSequence: document.getElementById('btnToggleCameraSequence'),
+    timelineCameraInterpolation: document.getElementById('timelineCameraInterpolation'),
+    timelineInterpolationParamControl: document.getElementById('timelineInterpolationParamControl'),
+    timelineInterpolationParamLabel: document.getElementById('timelineInterpolationParamLabel'),
+    timelineInterpolationParam: document.getElementById('timelineInterpolationParam'),
+    timelineInterpolationParamValue: document.getElementById('timelineInterpolationParamValue'),
     timelineSpeed: document.getElementById('timelineSpeed'),
     timelineFps: document.getElementById('timelineFps'),
     timelineRuler: document.getElementById('timelineRuler'),
@@ -117,7 +122,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.1.3',
+    VERSION: '0.1.4',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     cameraSequenceVisible: true,
@@ -129,6 +134,8 @@ const state = {
     selectedFrame: 0,
     timelineFps: 24,
     timelinePlaybackSpeed: 1.0,
+    cameraInterpolationMode: 'linear',
+    cameraInterpolationParam: 0.5,
     timelineDurationSec: 10,
     sceneBackgroundHex: '#050814',
     sceneSkyPresetId: 'night',
@@ -157,6 +164,44 @@ const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
 const TIMELINE_MIN_DURATION_SEC = 10;
 const TIMELINE_SLIDER_THUMB_PX = 16;
 const EXPORT_FALLBACK_FPS = 24;
+const CAMERA_INTERPOLATION_MODE_LINEAR = 'linear';
+const CAMERA_INTERPOLATION_MODE_SQUAD = 'squad';
+const CAMERA_INTERPOLATION_MODE_CATMULL = 'catmull';
+const CAMERA_INTERPOLATION_MODE_EASE = 'ease';
+const CAMERA_INTERPOLATION_PARAM_STORAGE_KEY = 'visionary_editor_camera_interpolation_param';
+const CAMERA_INTERPOLATION_MODE_STORAGE_KEY = 'visionary_editor_camera_interpolation_mode';
+const CAMERA_INTERPOLATION_CONFIGS = {
+    [CAMERA_INTERPOLATION_MODE_LINEAR]: {
+        label: '线性',
+        tunable: false,
+        defaultParam: 0.5,
+    },
+    [CAMERA_INTERPOLATION_MODE_SQUAD]: {
+        label: 'Squad',
+        tunable: false,
+        defaultParam: 0.5,
+    },
+    [CAMERA_INTERPOLATION_MODE_CATMULL]: {
+        label: 'Catmull',
+        tunable: true,
+        paramLabel: '张力',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        defaultParam: 0.35,
+        format: (value) => value.toFixed(2),
+    },
+    [CAMERA_INTERPOLATION_MODE_EASE]: {
+        label: 'Ease',
+        tunable: true,
+        paramLabel: '强度',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        defaultParam: 0.65,
+        format: (value) => value.toFixed(2),
+    },
+};
 const MODEL_ANIM_SPEED_MIN = 0.01;
 const MODEL_ANIM_SPEED_MAX = 100;
 const MODEL_ANIM_SPEED_STEP = 0.001;
@@ -1874,6 +1919,8 @@ async function saveScene() {
                 fps: Number(state.timelineFps || 24),
                 durationSec: Number(state.timelineDurationSec || TIMELINE_MIN_DURATION_SEC),
                 playbackSpeed: Number(state.timelinePlaybackSpeed || 1),
+                interpolationMode: normalizeCameraInterpolationMode(state.cameraInterpolationMode),
+                interpolationParam: Number(state.cameraInterpolationParam ?? 0.5),
                 selectedFrame: Number(state.selectedFrame || 0),
                 currentTime: Number(state.currentTime || 0),
                 isLooping: Boolean(state.isLooping),
@@ -2065,6 +2112,14 @@ async function loadScene() {
             if (Number.isFinite(timeline.durationSec)) {
                 state.timelineDurationSec = Math.max(TIMELINE_MIN_DURATION_SEC, Number(timeline.durationSec));
             }
+            if (typeof timeline.interpolationMode === 'string') {
+                setCameraInterpolationMode(timeline.interpolationMode, true);
+            } else {
+                setCameraInterpolationMode(CAMERA_INTERPOLATION_MODE_LINEAR, true);
+            }
+            if (Number.isFinite(Number(timeline.interpolationParam))) {
+                setCameraInterpolationParam(Number(timeline.interpolationParam), true);
+            }
             if (Number.isFinite(timeline.playbackSpeed)) {
                 state.timelinePlaybackSpeed = Number(timeline.playbackSpeed);
                 if (dom.timelineSpeed) {
@@ -2120,6 +2175,8 @@ async function loadScene() {
             setTimelineFrame(selectedFrame, { applyPose: true, syncSlider: true });
             updateTimelineUI();
             syncCameraSequenceVisualization();
+        } else {
+            setCameraInterpolationMode(CAMERA_INTERPOLATION_MODE_LINEAR, true);
         }
 
         showLoading(false);
@@ -2170,6 +2227,84 @@ function syncCameraSequenceVisualization() {
     }));
     const trajectory = buildSampledCameraTrajectory();
     app.setCameraSequenceVisualization(keyframes, state.selectedFrame, trajectory);
+}
+
+function normalizeCameraInterpolationMode(mode) {
+    if (mode === CAMERA_INTERPOLATION_MODE_SQUAD) return CAMERA_INTERPOLATION_MODE_SQUAD;
+    if (mode === CAMERA_INTERPOLATION_MODE_CATMULL) return CAMERA_INTERPOLATION_MODE_CATMULL;
+    if (mode === CAMERA_INTERPOLATION_MODE_EASE) return CAMERA_INTERPOLATION_MODE_EASE;
+    return CAMERA_INTERPOLATION_MODE_LINEAR;
+}
+
+function getCameraInterpolationConfig(mode = state.cameraInterpolationMode) {
+    return CAMERA_INTERPOLATION_CONFIGS[normalizeCameraInterpolationMode(mode)] || CAMERA_INTERPOLATION_CONFIGS[CAMERA_INTERPOLATION_MODE_LINEAR];
+}
+
+function clampCameraInterpolationParam(value, mode = state.cameraInterpolationMode) {
+    const config = getCameraInterpolationConfig(mode);
+    const n = Number(value);
+    const fallback = Number(config.defaultParam ?? 0.5);
+    const raw = Number.isFinite(n) ? n : fallback;
+    return Math.max(config.min ?? 0, Math.min(config.max ?? 1, raw));
+}
+
+function syncCameraInterpolationModeControl() {
+    if (dom.timelineCameraInterpolation) {
+        dom.timelineCameraInterpolation.value = normalizeCameraInterpolationMode(state.cameraInterpolationMode);
+    }
+    const config = getCameraInterpolationConfig();
+    const param = clampCameraInterpolationParam(state.cameraInterpolationParam, state.cameraInterpolationMode);
+    state.cameraInterpolationParam = param;
+    dom.timelineInterpolationParamControl?.classList.toggle('hidden', !config.tunable);
+    if (dom.timelineInterpolationParamLabel) {
+        dom.timelineInterpolationParamLabel.textContent = config.paramLabel || '参数';
+    }
+    if (dom.timelineInterpolationParam) {
+        dom.timelineInterpolationParam.min = String(config.min ?? 0);
+        dom.timelineInterpolationParam.max = String(config.max ?? 1);
+        dom.timelineInterpolationParam.step = String(config.step ?? 0.01);
+        dom.timelineInterpolationParam.value = String(param);
+    }
+    if (dom.timelineInterpolationParamValue) {
+        const formatter = typeof config.format === 'function' ? config.format : (value) => Number(value).toFixed(2);
+        dom.timelineInterpolationParamValue.textContent = formatter(param);
+    }
+}
+
+function setCameraInterpolationMode(mode, silent = false) {
+    const previousMode = normalizeCameraInterpolationMode(state.cameraInterpolationMode);
+    const normalized = normalizeCameraInterpolationMode(mode);
+    state.cameraInterpolationMode = normalized;
+    const config = getCameraInterpolationConfig(normalized);
+    if (normalized !== previousMode && config.tunable) {
+        state.cameraInterpolationParam = Number(config.defaultParam ?? 0.5);
+    } else {
+        state.cameraInterpolationParam = clampCameraInterpolationParam(
+            state.cameraInterpolationParam,
+            normalized
+        );
+    }
+    if (!Number.isFinite(Number(state.cameraInterpolationParam))) {
+        state.cameraInterpolationParam = Number(config.defaultParam ?? 0.5);
+    }
+    syncCameraInterpolationModeControl();
+    localStorage.setItem(CAMERA_INTERPOLATION_MODE_STORAGE_KEY, normalized);
+    localStorage.setItem(CAMERA_INTERPOLATION_PARAM_STORAGE_KEY, String(state.cameraInterpolationParam));
+    syncCameraSequenceVisualization();
+    if (!silent) {
+        showInfo(`相机插值: ${config.label || normalized}`);
+    }
+}
+
+function setCameraInterpolationParam(value, silent = false) {
+    const normalized = clampCameraInterpolationParam(value, state.cameraInterpolationMode);
+    state.cameraInterpolationParam = normalized;
+    syncCameraInterpolationModeControl();
+    localStorage.setItem(CAMERA_INTERPOLATION_PARAM_STORAGE_KEY, String(normalized));
+    syncCameraSequenceVisualization();
+    if (!silent && getCameraInterpolationConfig().tunable) {
+        showInfo(`${getCameraInterpolationConfig().paramLabel || '参数'}: ${normalized.toFixed(2)}`);
+    }
 }
 
 function buildSampledCameraTrajectory() {
@@ -2225,6 +2360,110 @@ function getTimelineTotalFrames() {
     const fps = Math.max(1, Number(state.timelineFps || 24));
     const durationSec = Math.max(1, Number(state.timelineDurationSec || TIMELINE_MIN_DURATION_SEC));
     return Math.max(1, Math.round(durationSec * fps));
+}
+
+function normalizeQuaternionValue(q) {
+    const x = Number(q?.x) || 0;
+    const y = Number(q?.y) || 0;
+    const z = Number(q?.z) || 0;
+    const w = Number(q?.w);
+    const safeW = Number.isFinite(w) ? w : 1;
+    const len = Math.hypot(x, y, z, safeW) || 1;
+    return {
+        x: x / len,
+        y: y / len,
+        z: z / len,
+        w: safeW / len,
+    };
+}
+
+function quaternionDot(a, b) {
+    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z) + (a.w * b.w);
+}
+
+function alignQuaternionHemisphere(reference, candidate) {
+    const ref = normalizeQuaternionValue(reference);
+    const q = normalizeQuaternionValue(candidate);
+    if (quaternionDot(ref, q) >= 0) return q;
+    return { x: -q.x, y: -q.y, z: -q.z, w: -q.w };
+}
+
+function multiplyQuaternions(a, b) {
+    return normalizeQuaternionValue({
+        x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    });
+}
+
+function invertQuaternion(q) {
+    const normalized = normalizeQuaternionValue(q);
+    return {
+        x: -normalized.x,
+        y: -normalized.y,
+        z: -normalized.z,
+        w: normalized.w,
+    };
+}
+
+function quaternionLogUnit(q) {
+    const normalized = normalizeQuaternionValue(q);
+    const w = Math.max(-1, Math.min(1, normalized.w));
+    const angle = Math.acos(w);
+    const sinAngle = Math.sin(angle);
+    if (sinAngle <= 1e-6) {
+        return { x: 0, y: 0, z: 0 };
+    }
+    const scale = angle / sinAngle;
+    return {
+        x: normalized.x * scale,
+        y: normalized.y * scale,
+        z: normalized.z * scale,
+    };
+}
+
+function quaternionExpPure(v) {
+    const angle = Math.hypot(v.x, v.y, v.z);
+    if (angle <= 1e-6) {
+        return normalizeQuaternionValue({ x: v.x, y: v.y, z: v.z, w: 1 });
+    }
+    const scale = Math.sin(angle) / angle;
+    return normalizeQuaternionValue({
+        x: v.x * scale,
+        y: v.y * scale,
+        z: v.z * scale,
+        w: Math.cos(angle),
+    });
+}
+
+function computeSquadTangent(prev, current, next) {
+    const currentNorm = normalizeQuaternionValue(current);
+    const prevAligned = alignQuaternionHemisphere(currentNorm, prev);
+    const nextAligned = alignQuaternionHemisphere(currentNorm, next);
+    const currentInverse = invertQuaternion(currentNorm);
+    const prevDelta = multiplyQuaternions(currentInverse, prevAligned);
+    const nextDelta = multiplyQuaternions(currentInverse, nextAligned);
+    const prevLog = quaternionLogUnit(prevDelta);
+    const nextLog = quaternionLogUnit(nextDelta);
+    const omega = {
+        x: -0.25 * (prevLog.x + nextLog.x),
+        y: -0.25 * (prevLog.y + nextLog.y),
+        z: -0.25 * (prevLog.z + nextLog.z),
+    };
+    return multiplyQuaternions(currentNorm, quaternionExpPure(omega));
+}
+
+function interpolateQuaternionSquad(prev, a, b, next, t) {
+    const start = normalizeQuaternionValue(a);
+    const end = alignQuaternionHemisphere(start, b);
+    const prevRef = prev ? alignQuaternionHemisphere(start, prev) : start;
+    const nextRef = next ? alignQuaternionHemisphere(end, next) : end;
+    const tangentA = computeSquadTangent(prevRef, start, end);
+    const tangentB = computeSquadTangent(start, end, nextRef);
+    const slerpMain = slerpQuaternion(start, end, t);
+    const slerpTangents = slerpQuaternion(tangentA, tangentB, t);
+    return slerpQuaternion(slerpMain, slerpTangents, 2 * t * (1 - t));
 }
 
 function frameToTime(frame) {
@@ -2924,8 +3163,10 @@ function startAnimationControlsSyncLoop() {
  * 球面线性插值 quaternion
  */
 function slerpQuaternion(a, b, t) {
-    const q1 = [a.x, a.y, a.z, a.w];
-    let q2 = [b.x, b.y, b.z, b.w];
+    const qa = normalizeQuaternionValue(a);
+    const qb = normalizeQuaternionValue(b);
+    const q1 = [qa.x, qa.y, qa.z, qa.w];
+    let q2 = [qb.x, qb.y, qb.z, qb.w];
     let dot = q1[0] * q2[0] + q1[1] * q2[1] + q1[2] * q2[2] + q1[3] * q2[3];
 
     if (dot < 0) {
@@ -2963,9 +3204,206 @@ function slerpQuaternion(a, b, t) {
     };
 }
 
+function interpolateCameraPoseLinear(a, b, t) {
+    const rot = slerpQuaternion(a.camera.rotation, b.camera.rotation, t);
+    return {
+        position: {
+            x: a.camera.position.x + (b.camera.position.x - a.camera.position.x) * t,
+            y: a.camera.position.y + (b.camera.position.y - a.camera.position.y) * t,
+            z: a.camera.position.z + (b.camera.position.z - a.camera.position.z) * t,
+        },
+        rotation: rot,
+        fovDegrees: a.camera.fovDegrees + (b.camera.fovDegrees - a.camera.fovDegrees) * t,
+    };
+}
+
+function getKeyframePositionVector(keyframe) {
+    return {
+        x: Number(keyframe?.camera?.position?.x) || 0,
+        y: Number(keyframe?.camera?.position?.y) || 0,
+        z: Number(keyframe?.camera?.position?.z) || 0,
+    };
+}
+
+function addVec3(a, b) {
+    return {
+        x: a.x + b.x,
+        y: a.y + b.y,
+        z: a.z + b.z,
+    };
+}
+
+function subVec3(a, b) {
+    return {
+        x: a.x - b.x,
+        y: a.y - b.y,
+        z: a.z - b.z,
+    };
+}
+
+function scaleVec3(v, s) {
+    return {
+        x: v.x * s,
+        y: v.y * s,
+        z: v.z * s,
+    };
+}
+
+function evaluateHermiteVec3(p1, p2, m1, m2, t) {
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const h00 = (2 * t3) - (3 * t2) + 1;
+    const h10 = t3 - (2 * t2) + t;
+    const h01 = (-2 * t3) + (3 * t2);
+    const h11 = t3 - t2;
+    return {
+        x: (h00 * p1.x) + (h10 * m1.x) + (h01 * p2.x) + (h11 * m2.x),
+        y: (h00 * p1.y) + (h10 * m1.y) + (h01 * p2.y) + (h11 * m2.y),
+        z: (h00 * p1.z) + (h10 * m1.z) + (h01 * p2.z) + (h11 * m2.z),
+    };
+}
+
+function lerpNumber(a, b, t) {
+    return a + (b - a) * t;
+}
+
+function easeInOutCubic(t) {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    return t < 0.5
+        ? 4 * t * t * t
+        : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function remapInterpolationTime(t, strength = state.cameraInterpolationParam) {
+    const clampedT = Math.max(0, Math.min(1, Number(t) || 0));
+    const clampedStrength = Math.max(0, Math.min(1, Number(strength) || 0));
+    const eased = easeInOutCubic(clampedT);
+    return lerpNumber(clampedT, eased, clampedStrength);
+}
+
+function buildVirtualBoundaryKeyframe(anchor, neighbor) {
+    const anchorPos = getKeyframePositionVector(anchor);
+    const neighborPos = getKeyframePositionVector(neighbor);
+    const mirroredPos = subVec3(scaleVec3(anchorPos, 2), neighborPos);
+    const anchorTime = Number(anchor?.time) || 0;
+    const neighborTime = Number(neighbor?.time) || anchorTime;
+    return {
+        time: anchorTime - (neighborTime - anchorTime),
+        camera: {
+            position: mirroredPos,
+        },
+    };
+}
+
+function interpolateCameraPositionCatmull(keyframes, index, t, tension = state.cameraInterpolationParam) {
+    const current = keyframes[index];
+    const next = keyframes[index + 1];
+    if (!current || !next) return null;
+
+    const prev = keyframes[index - 1] || buildVirtualBoundaryKeyframe(current, next);
+    const nextNext = keyframes[index + 2] || buildVirtualBoundaryKeyframe(next, current);
+
+    const p0 = getKeyframePositionVector(prev);
+    const p1 = getKeyframePositionVector(current);
+    const p2 = getKeyframePositionVector(next);
+    const p3 = getKeyframePositionVector(nextNext);
+
+    const t0 = Number(prev?.time);
+    const t1 = Number(current?.time);
+    const t2 = Number(next?.time);
+    const t3 = Number(nextNext?.time);
+
+    if (![t0, t1, t2, t3].every(Number.isFinite)) {
+        return {
+            x: p1.x + (p2.x - p1.x) * t,
+            y: p1.y + (p2.y - p1.y) * t,
+            z: p1.z + (p2.z - p1.z) * t,
+        };
+    }
+
+    const dt10 = Math.max(1e-6, t1 - t0);
+    const dt21 = Math.max(1e-6, t2 - t1);
+    const dt20 = Math.max(1e-6, t2 - t0);
+    const dt31 = Math.max(1e-6, t3 - t1);
+    const tensionScale = Math.max(0, Math.min(1, 1 - (Number(tension) || 0)));
+
+    const velocity1 = scaleVec3(subVec3(p2, p0), 1 / dt20);
+    const velocity2 = scaleVec3(subVec3(p3, p1), 1 / dt31);
+    const tangent1 = scaleVec3(velocity1, dt21 * tensionScale);
+    const tangent2 = scaleVec3(velocity2, dt21 * tensionScale);
+
+    const position = evaluateHermiteVec3(p1, p2, tangent1, tangent2, t);
+    if (![position.x, position.y, position.z].every(Number.isFinite)) {
+        return {
+            x: p1.x + (p2.x - p1.x) * t,
+            y: p1.y + (p2.y - p1.y) * t,
+            z: p1.z + (p2.z - p1.z) * t,
+        };
+    }
+
+    return position;
+}
+
+function interpolateCameraPoseSquad(keyframes, index, t) {
+    const a = keyframes[index];
+    const b = keyframes[index + 1];
+    if (!a || !b) return null;
+    if (!Array.isArray(keyframes) || keyframes.length < 3) {
+        return interpolateCameraPoseLinear(a, b, t);
+    }
+
+    const prev = keyframes[index - 1]?.camera?.rotation || a.camera.rotation;
+    const next = keyframes[index + 2]?.camera?.rotation || b.camera.rotation;
+    const rot = interpolateQuaternionSquad(prev, a.camera.rotation, b.camera.rotation, next, t);
+    if (![rot.x, rot.y, rot.z, rot.w].every(Number.isFinite)) {
+        return interpolateCameraPoseLinear(a, b, t);
+    }
+
+    return {
+        position: {
+            x: a.camera.position.x + (b.camera.position.x - a.camera.position.x) * t,
+            y: a.camera.position.y + (b.camera.position.y - a.camera.position.y) * t,
+            z: a.camera.position.z + (b.camera.position.z - a.camera.position.z) * t,
+        },
+        rotation: rot,
+        fovDegrees: a.camera.fovDegrees + (b.camera.fovDegrees - a.camera.fovDegrees) * t,
+    };
+}
+
+function interpolateCameraPoseCatmull(keyframes, index, t) {
+    const a = keyframes[index];
+    const b = keyframes[index + 1];
+    if (!a || !b) return null;
+    const position = interpolateCameraPositionCatmull(keyframes, index, t, state.cameraInterpolationParam);
+    if (!position || ![position.x, position.y, position.z].every(Number.isFinite)) {
+        return interpolateCameraPoseLinear(a, b, t);
+    }
+    return {
+        position,
+        rotation: slerpQuaternion(a.camera.rotation, b.camera.rotation, t),
+        fovDegrees: lerpNumber(a.camera.fovDegrees, b.camera.fovDegrees, t),
+    };
+}
+
+function interpolateCameraPoseEase(a, b, t) {
+    const easedT = remapInterpolationTime(t, state.cameraInterpolationParam);
+    const rot = slerpQuaternion(a.camera.rotation, b.camera.rotation, easedT);
+    return {
+        position: {
+            x: lerpNumber(a.camera.position.x, b.camera.position.x, easedT),
+            y: lerpNumber(a.camera.position.y, b.camera.position.y, easedT),
+            z: lerpNumber(a.camera.position.z, b.camera.position.z, easedT),
+        },
+        rotation: rot,
+        fovDegrees: lerpNumber(a.camera.fovDegrees, b.camera.fovDegrees, easedT),
+    };
+}
+
 function interpolateCameraPoseAt(timeSec) {
     if (state.keyframes.length === 0) return null;
     const keyframes = state.keyframes;
+    const mode = normalizeCameraInterpolationMode(state.cameraInterpolationMode);
 
     if (timeSec <= keyframes[0].time) {
         return keyframes[0].camera;
@@ -2982,17 +3420,16 @@ function interpolateCameraPoseAt(timeSec) {
 
         const span = Math.max(1e-6, b.time - a.time);
         const t = (timeSec - a.time) / span;
-        const rot = slerpQuaternion(a.camera.rotation, b.camera.rotation, t);
-
-        return {
-            position: {
-                x: a.camera.position.x + (b.camera.position.x - a.camera.position.x) * t,
-                y: a.camera.position.y + (b.camera.position.y - a.camera.position.y) * t,
-                z: a.camera.position.z + (b.camera.position.z - a.camera.position.z) * t,
-            },
-            rotation: rot,
-            fovDegrees: a.camera.fovDegrees + (b.camera.fovDegrees - a.camera.fovDegrees) * t,
-        };
+        if (mode === CAMERA_INTERPOLATION_MODE_SQUAD) {
+            return interpolateCameraPoseSquad(keyframes, i, t) || interpolateCameraPoseLinear(a, b, t);
+        }
+        if (mode === CAMERA_INTERPOLATION_MODE_CATMULL) {
+            return interpolateCameraPoseCatmull(keyframes, i, t) || interpolateCameraPoseLinear(a, b, t);
+        }
+        if (mode === CAMERA_INTERPOLATION_MODE_EASE) {
+            return interpolateCameraPoseEase(a, b, t);
+        }
+        return interpolateCameraPoseLinear(a, b, t);
     }
 
     return last.camera;
@@ -3114,6 +3551,15 @@ function initTimelineUI() {
         }
         dom.timelineFps.value = String(state.timelineFps);
     }
+    const savedInterpolationMode = localStorage.getItem(CAMERA_INTERPOLATION_MODE_STORAGE_KEY);
+    const savedInterpolationParam = localStorage.getItem(CAMERA_INTERPOLATION_PARAM_STORAGE_KEY);
+    if (savedInterpolationMode) {
+        state.cameraInterpolationMode = normalizeCameraInterpolationMode(savedInterpolationMode);
+    }
+    if (savedInterpolationParam !== null) {
+        state.cameraInterpolationParam = clampCameraInterpolationParam(savedInterpolationParam, state.cameraInterpolationMode);
+    }
+    syncCameraInterpolationModeControl();
     setTimelineFrame(0, { applyPose: false, syncSlider: true });
     syncCameraSequenceVisualization();
 }
@@ -3321,6 +3767,15 @@ function initEventListeners() {
     dom.btnToggleCameraSequence?.addEventListener('click', () => {
         setCameraSequenceVisibility(!state.cameraSequenceVisible);
     });
+    dom.timelineCameraInterpolation?.addEventListener('change', (e) => {
+        setCameraInterpolationMode(e.target.value);
+    });
+    dom.timelineInterpolationParam?.addEventListener('input', (e) => {
+        setCameraInterpolationParam(e.target.value, true);
+    });
+    dom.timelineInterpolationParam?.addEventListener('change', (e) => {
+        setCameraInterpolationParam(e.target.value);
+    });
     dom.timelineFps?.addEventListener('change', (e) => {
         setTimelineFps(e.target.value);
     });
@@ -3505,4 +3960,5 @@ async function init() {
 
 // 启动应用
 document.addEventListener('DOMContentLoaded', init);
+
 
