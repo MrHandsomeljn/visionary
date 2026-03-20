@@ -1,4 +1,38 @@
 // Renderer interfaces and contracts
+//
+// Render flow overview used by Visionary editor / fused renderer:
+//
+// 1. `prepareMulti(...)`
+//    CPU-side caller has already chosen the active render mode for each model
+//    (`color`, `normal`, or `depth`).
+//    This stage runs gaussian preprocess + sorting, and writes per-splat data into
+//    the shared `points_2d` buffer. When raw scene depth is enabled, preprocess also
+//    stores each splat's raw view-space depth (`z_view`) alongside color data.
+//
+// 2. Mesh / Three scene render
+//    The fused renderer may render the regular Three.js scene first to capture mesh
+//    depth and color. This produces the mesh-only depth source often called `D1`.
+//    In the editor path, that depth is additionally transformed into a raw view-space
+//    depth texture so mesh raw depth can be read back later.
+//
+// 3. `render(...)` / `renderMulti(...)`
+//    This stage records gaussian draw calls into the current render pass.
+//    In `color` and `normal` modes, attachment 0 is the visible color target.
+//    In `depth` mode, attachment 0 is still the visible target, but contains
+//    depth visualization rather than albedo/normal output.
+//    When raw depth is enabled by the caller, attachment 1 stores gaussian raw
+//    view-space depth for the visible splat at each pixel.
+//
+// Raw depth availability:
+// - `color`: available after gaussian preprocess and persisted during gaussian draw
+// - `normal`: available after gaussian preprocess and persisted during gaussian draw
+// - `depth`: available after gaussian preprocess and persisted during gaussian draw;
+//   the on-screen depth image is only a visualization, not the raw buffer itself
+//
+// Important distinction:
+// - "depth preview" / "depth visualization" means a mapped grayscale display value
+// - "raw depth" means the underlying view-space depth that can be used for picking,
+//   reprojection, or debugging
 
 import { PerspectiveCamera } from '../camera';
 import { PointCloud } from '../point_cloud';

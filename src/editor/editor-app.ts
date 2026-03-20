@@ -1,5 +1,5 @@
 /**
- * Visionary Editor Application 0.1.1
+ * Visionary Editor Application 0.1.2
  * Editor version of main app with UI controls
  */
 
@@ -68,6 +68,7 @@ const SCENE_SKY_PRESETS: SceneSkyPreset[] = [
 ];
 
 type EditorRenderMode = "color" | "normal" | "depth";
+type EditorRawDepthSource = "mesh" | "gaussian" | "combined";
 
 const RENDER_MODE_INDEX: Record<EditorRenderMode, number> = {
   color: 0,
@@ -191,7 +192,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = "0.1.1";
+  readonly VERSION = "0.1.2";
 
   private globalTimelineTime: number = 0;
 
@@ -366,6 +367,11 @@ export class EditorApp {
       const controller = this.cameraManager.getController();
       controller.processScroll(e.deltaY > 0 ? 0.05 : -0.05);
     }, { passive: false });
+
+    this.canvas.addEventListener('dblclick', (e) => {
+      if (this.isEditingText()) return;
+      void this.lookAtScenePointFromClient(e.clientX, e.clientY);
+    });
 
     // Keyboard events
     window.addEventListener('keydown', (e) => this.handleCameraKeyboard(e, true));
@@ -1246,6 +1252,187 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     return true;
   }
 
+  async pickScenePointAtClient(clientX: number, clientY: number): Promise<{
+    pixelX: number;
+    pixelY: number;
+    source: EditorRawDepthSource | null;
+    meshDepth: number | null;
+    gaussianDepth: number | null;
+    depth: number | null;
+    world: { x: number; y: number; z: number } | null;
+  } | null> {
+    if (!this.canvas || !this.meshCamera || !this.fusedRenderer) return null;
+    const pixel = this.clientToRenderPixel(clientX, clientY);
+    if (!pixel) return null;
+    return await this.fusedRenderer.pickScenePoint(this.meshCamera, pixel.x, pixel.y);
+  }
+
+  async lookAtScenePointFromClient(clientX: number, clientY: number): Promise<boolean> {
+    const result = await this.pickScenePointAtClient(clientX, clientY);
+    if (!result?.world) {
+      console.warn("[EditorApp] No scene point available at clicked position");
+      return false;
+    }
+
+    const camera = this.cameraManager.getCamera();
+    if (!camera) return false;
+
+    const target = vec3.fromValues(result.world.x, result.world.y, result.world.z);
+    const forward = vec3.subtract(vec3.create(), target, camera.positionV);
+    if (vec3.length(forward) <= 1e-6) {
+      return false;
+    }
+
+    vec3.normalize(forward, forward);
+    const worldUp = vec3.fromValues(0, 1, 0);
+    camera.rotationQ = lookAtW2C(forward, worldUp);
+    this.cameraManager.syncOrbitAfterExternalLookAt(target, worldUp);
+    this.syncMeshCameraFromCoreCamera();
+    console.log("[EditorApp] Look-at scene point:", result);
+    return true;
+  }
+
+  async getScenePointPickDebugInfo(clientX: number, clientY: number): Promise<{
+    client: { x: number; y: number };
+    rect: { left: number; top: number; width: number; height: number } | null;
+    canvas: { width: number; height: number } | null;
+    drawingBuffer: { width: number; height: number } | null;
+    rawDepth: { width: number; height: number } | null;
+    mappedPixel: { x: number; y: number } | null;
+    picked: Awaited<ReturnType<EditorApp["pickScenePointAtClient"]>>;
+    projectedBeforeLookAt: { x: number; y: number } | null;
+  }> {
+    const rect = this.canvas?.getBoundingClientRect() ?? null;
+    const rawDepth = this.fusedRenderer?.getRawDepthSize?.() ?? null;
+    const drawingBuffer = this.getDrawingBufferSize();
+    const mappedPixel = this.clientToRenderPixel(clientX, clientY);
+    const picked = await this.pickScenePointAtClient(clientX, clientY);
+    const projectedBeforeLookAt = picked?.world ? this.projectWorldToClient(picked.world) : null;
+    return {
+      client: { x: clientX, y: clientY },
+      rect: rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null,
+      canvas: this.canvas ? { width: this.canvas.width, height: this.canvas.height } : null,
+      drawingBuffer,
+      rawDepth,
+      mappedPixel,
+      picked,
+      projectedBeforeLookAt,
+    };
+  }
+
+  refreshViewportLayout(): void {
+    this.resize();
+    this.syncMeshCameraFromCoreCamera();
+  }
+
+  async getRawDepthFrame(source: EditorRawDepthSource = "combined"): Promise<{
+    source: EditorRawDepthSource;
+    width: number;
+    height: number;
+    minDepth: number | null;
+    maxDepth: number | null;
+    data: Float32Array;
+  } | null> {
+    if (!this.meshCamera || !this.fusedRenderer) return null;
+    return await this.fusedRenderer.getRawDepthFrame(this.meshCamera, source);
+  }
+
+  async showRawDepthPreview(source: EditorRawDepthSource = "combined"): Promise<{
+    source: EditorRawDepthSource;
+    width: number;
+    height: number;
+    minDepth: number | null;
+    maxDepth: number | null;
+  } | null> {
+    const frame = await this.getRawDepthFrame(source);
+    if (!frame) return null;
+
+    const previewCanvas = document.createElement("canvas");
+    previewCanvas.width = frame.width;
+    previewCanvas.height = frame.height;
+    const ctx = previewCanvas.getContext("2d");
+    if (!ctx) return null;
+
+    const image = ctx.createImageData(frame.width, frame.height);
+    const minDepth = frame.minDepth ?? 0;
+    const maxDepth = frame.maxDepth ?? Math.max(minDepth + 1, 1);
+    const denom = Math.max(1e-6, maxDepth - minDepth);
+    for (let i = 0; i < frame.data.length; i += 1) {
+      const depth = frame.data[i];
+      const vis = depth > 0 ? Math.max(0, Math.min(255, Math.round((1 - (depth - minDepth) / denom) * 255))) : 0;
+      const offset = i * 4;
+      image.data[offset] = vis;
+      image.data[offset + 1] = vis;
+      image.data[offset + 2] = vis;
+      image.data[offset + 3] = depth > 0 ? 255 : 0;
+    }
+    ctx.putImageData(image, 0, 0);
+
+    const previewWindow = window.open("", "_blank", "noopener,noreferrer");
+    if (previewWindow) {
+      previewWindow.document.title = `Raw Depth Preview (${source})`;
+      previewWindow.document.body.style.margin = "0";
+      previewWindow.document.body.style.background = "#111";
+      previewWindow.document.body.appendChild(previewCanvas);
+    }
+
+    return {
+      source,
+      width: frame.width,
+      height: frame.height,
+      minDepth: frame.minDepth,
+      maxDepth: frame.maxDepth,
+    };
+  }
+
+  async downloadRawDepth(source: EditorRawDepthSource = "combined", format: "json" | "png" = "json"): Promise<boolean> {
+    const frame = await this.getRawDepthFrame(source);
+    if (!frame) return false;
+
+    if (format === "png") {
+      const preview = document.createElement("canvas");
+      preview.width = frame.width;
+      preview.height = frame.height;
+      const ctx = preview.getContext("2d");
+      if (!ctx) return false;
+      const image = ctx.createImageData(frame.width, frame.height);
+      const minDepth = frame.minDepth ?? 0;
+      const maxDepth = frame.maxDepth ?? Math.max(minDepth + 1, 1);
+      const denom = Math.max(1e-6, maxDepth - minDepth);
+      for (let i = 0; i < frame.data.length; i += 1) {
+        const depth = frame.data[i];
+        const vis = depth > 0 ? Math.max(0, Math.min(255, Math.round((1 - (depth - minDepth) / denom) * 255))) : 0;
+        const offset = i * 4;
+        image.data[offset] = vis;
+        image.data[offset + 1] = vis;
+        image.data[offset + 2] = vis;
+        image.data[offset + 3] = depth > 0 ? 255 : 0;
+      }
+      ctx.putImageData(image, 0, 0);
+      const link = document.createElement("a");
+      link.download = `visionary-raw-depth-${source}.png`;
+      link.href = preview.toDataURL("image/png");
+      link.click();
+      return true;
+    }
+
+    const payload = {
+      source,
+      width: frame.width,
+      height: frame.height,
+      minDepth: frame.minDepth,
+      maxDepth: frame.maxDepth,
+      data: Array.from(frame.data),
+    };
+    const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.download = `visionary-raw-depth-${source}.json`;
+    link.href = URL.createObjectURL(blob);
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 0);
+    return true;
+  }
+
   /**
    * Keep current view direction and remove camera roll (upright to world +Y).
    */
@@ -1948,6 +2135,54 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       return clamped.toString(16).padStart(2, "0");
     };
     return `#${toHex(color[0])}${toHex(color[1])}${toHex(color[2])}`;
+  }
+
+  private clientToRenderPixel(clientX: number, clientY: number): { x: number; y: number } | null {
+    if (!this.canvas) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const renderSize = this.fusedRenderer?.getRawDepthSize?.();
+    const drawingBuffer = this.getDrawingBufferSize();
+    const width = Math.max(
+      1,
+      Math.floor(
+        renderSize?.width ||
+        drawingBuffer?.width ||
+        this.canvas.width
+      )
+    );
+    const height = Math.max(
+      1,
+      Math.floor(
+        renderSize?.height ||
+        drawingBuffer?.height ||
+        this.canvas.height
+      )
+    );
+    const x = Math.max(0, Math.min(width - 1, Math.floor(((clientX - rect.left) / rect.width) * width)));
+    const y = Math.max(0, Math.min(height - 1, Math.floor(((clientY - rect.top) / rect.height) * height)));
+    return { x, y };
+  }
+
+  private getDrawingBufferSize(): { width: number; height: number } | null {
+    if (!this.meshRenderer) return null;
+    const db = new THREE.Vector2();
+    (this.meshRenderer as any).getDrawingBufferSize?.(db);
+    const width = Math.max(0, Math.floor(db.x || 0));
+    const height = Math.max(0, Math.floor(db.y || 0));
+    if (width <= 0 || height <= 0) return null;
+    return { width, height };
+  }
+
+  private projectWorldToClient(world: { x: number; y: number; z: number }): { x: number; y: number } | null {
+    if (!this.meshCamera || !this.canvas) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const projected = new THREE.Vector3(world.x, world.y, world.z).project(this.meshCamera);
+    return {
+      x: rect.left + ((projected.x + 1) * 0.5) * rect.width,
+      y: rect.top + ((1 - projected.y) * 0.5) * rect.height,
+    };
   }
 
   /**

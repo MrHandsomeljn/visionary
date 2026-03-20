@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visionary Editor 0.1.1</title>
+    <title>Visionary Editor 0.1.2</title>
     <link rel="stylesheet" href="./editor.css">
 </head>
 <body class="theme-light">
@@ -89,7 +89,7 @@
                     <button id="btnThemeToggle" class="theme-toggle-btn" title="切换白天/夜间">
                         白天
                     </button>
-                    <span class="version-label" id="versionLabel">0.1.1</span>
+                    <span class="version-label" id="versionLabel">0.1.2</span>
                 </div>
             </div>
 
@@ -167,8 +167,8 @@
                                         <span>深度倍率</span>
                                     </label>
                                     <div class="property-inputs depth-scale-row">
-                                        <input type="range" id="sceneDepthScale" min="0.01" max="100.0" step="0.001" value="1.000">
-                                        <input type="number" id="sceneDepthScaleNumber" min="0.01" max="100.0" step="0.001" value="1.000">
+                                        <input type="range" id="sceneDepthScale" min="0" max="1" step="0.001" value="0.500">
+                                        <input type="text" id="sceneDepthScaleNumber" value="1.000" inputmode="decimal" aria-label="场景深度倍率">
                                     </div>
                                 </div>
 
@@ -263,7 +263,7 @@
                                         <span>速率</span>
                                     </label>
                                     <div class="property-inputs model-anim-speed-row">
-                                        <input type="range" id="modelAnimSpeed" min="0" max="1" step="0.001" value="0.750">
+                                        <input type="range" id="modelAnimSpeed" min="0" max="1" step="0.001" value="0.500">
                                         <input type="text" id="modelAnimSpeedValue" value="1.000" inputmode="decimal" aria-label="ONNX 动画速率">
                                     </div>
                                 </div>
@@ -391,13 +391,16 @@
                             <li><kbd>左键拖拽</kbd><span>旋转视角</span></li>
                             <li><kbd>右键拖拽</kbd><span>平移视角</span></li>
                             <li><kbd>滚轮</kbd><span>缩放视角</span></li>
+                            <li><kbd>双击场景</kbd><span>聚焦到双击位置的场景点</span></li>
                             <li><kbd>拖拽文件</kbd><span>导入模型到场景</span></li>
                         </ul>
                     </div>
                     <div class="help-section">
                         <h4>键盘快捷键</h4>
                         <ul class="help-list">
+                            <li><kbd>Space</kbd><span>播放 / 暂停相机动画</span></li>
                             <li><kbd>F</kbd><span>聚焦当前选中模型</span></li>
+                            <li><kbd>Ctrl + F</kbd><span>在当前视角和时间新增相机关键帧；若后方无关键帧则时间轴前进 1 秒</span></li>
                             <li><kbd>X</kbd><span>相机回正</span></li>
                             <li><kbd>?</kbd><span>打开操作提示</span></li>
                             <li><kbd>Esc</kbd><span>关闭操作提示或导出窗口</span></li>

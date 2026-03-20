@@ -1,6 +1,6 @@
 {
   "name": "visionary-core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Web-based 3D Gaussian Splatting renderer using WebGPU",
   "type": "module",
   "main": "dist/visionary-core.umd.js",

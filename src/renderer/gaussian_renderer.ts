@@ -26,6 +26,7 @@ export class GaussianRenderer implements IRenderer {
   private pipeline!: GPURenderPipeline;
   private pipelineDepth!: GPURenderPipeline;
   private useDepth: boolean = false;
+  private rawDepthEnabled: boolean = false;
   private depthFormat: GPUTextureFormat = 'depth24plus'; // Configurable depth format
   private pipelineLayout!: GPUPipelineLayout;
   private drawIndirectBuffer!: GPUBuffer;
@@ -124,6 +125,23 @@ export class GaussianRenderer implements IRenderer {
    */
   /** Enable or disable depth testing for GS render pipeline */
   public setDepthEnabled(enabled: boolean) { this.useDepth = !!enabled; }
+
+  /**
+   * Enables an additional fragment output that persists gaussian raw view-space depth.
+   *
+   * Output behavior by preview mode:
+   * - `color`: attachment 0 = color, attachment 1 = raw depth
+   * - `normal`: attachment 0 = normal visualization, attachment 1 = raw depth
+   * - `depth`: attachment 0 = depth visualization, attachment 1 = raw depth
+   *
+   * This only changes the render-pass contract for callers that explicitly opt in.
+   */
+  public setRawDepthEnabled(enabled: boolean): void {
+    const next = !!enabled;
+    if (this.rawDepthEnabled === next) return;
+    this.rawDepthEnabled = next;
+    this.createRenderPipeline();
+  }
   
   /**
    * Set depth format and recreate depth pipeline if format changed
@@ -162,13 +180,7 @@ export class GaussianRenderer implements IRenderer {
       fragment: {
         module: shaderModule,
         entryPoint: 'fs_main',
-        targets: [{
-          format: this.format,
-          blend: {
-            color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          },
-        }],
+        targets: this.createColorTargets(),
       },
       primitive: {
         topology: 'triangle-strip',
@@ -366,13 +378,7 @@ export class GaussianRenderer implements IRenderer {
       fragment: {
         module: shaderModule,
         entryPoint: 'fs_main',
-        targets: [{
-          format: this.format,
-          blend: {
-            color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          },
-        }],
+        targets: this.createColorTargets(),
       },
       primitive: {
         topology: 'triangle-strip',
@@ -383,6 +389,20 @@ export class GaussianRenderer implements IRenderer {
 
     // Create depth pipeline with initial format
     this.createDepthPipeline();
+  }
+
+  private createColorTargets(): GPUColorTargetState[] {
+    const targets: GPUColorTargetState[] = [{
+      format: this.format,
+      blend: {
+        color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      },
+    }];
+    if (this.rawDepthEnabled) {
+      targets.push({ format: 'r32float' });
+    }
+    return targets;
   }
   
   /**
