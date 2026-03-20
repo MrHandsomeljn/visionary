@@ -1,4 +1,4 @@
-/* Visionary Editor Styles 0.1.3 */
+/* Visionary Editor Styles 0.1.4 */
 
 :root {
     --bg-color: #0a0a0f;
@@ -1216,7 +1216,8 @@ body {
 }
 
 #timelineFps,
-#timelineSpeed {
+#timelineSpeed,
+#timelineCameraInterpolation {
     min-width: 70px;
     height: 28px;
     padding: 0 8px;
@@ -1229,8 +1230,36 @@ body {
 }
 
 #timelineFps:focus,
-#timelineSpeed:focus {
+#timelineSpeed:focus,
+#timelineCameraInterpolation:focus {
     border-color: var(--accent);
+}
+
+.timeline-interpolation-control {
+    margin-left: 2px;
+}
+
+.timeline-interpolation-param-control {
+    min-width: 0;
+    margin-left: 0;
+}
+
+.timeline-interpolation-param-control.hidden {
+    display: none;
+}
+
+#timelineInterpolationParam {
+    width: 84px;
+    height: 6px;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.timeline-interpolation-param-value {
+    min-width: 34px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
 }
 
 .timeline-time-value {
@@ -1971,4 +2000,5 @@ body.sidebar-resizing {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--text-secondary);
 }
+
 
