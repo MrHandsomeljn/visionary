@@ -1,5 +1,5 @@
 /**
- * Visionary Editor Application 0.1.2
+ * Visionary Editor Application 0.1.3
  * Editor version of main app with UI controls
  */
 
@@ -29,6 +29,7 @@ import { initWebGPU_onnx, WebGPUContext, DEFAULT_DUMMY_MODEL_URL } from "../app/
 import { initOrtEnvironment, getDefaultOrtWasmPaths } from "../config/ort-config";
 import { PointCloud, DynamicPointCloud } from "../point_cloud";
 import { lookAtW2C } from "../controls/orbit";
+import { GLTFModelWrapper } from "../models/gltf-model-wrapper";
 
 const MAX_MODELS = 10000;
 const CAMERA_KEY_CODES = new Set([
@@ -106,11 +107,14 @@ interface EditorModel {
   modelEntry?: ModelEntry;
   object3D?: THREE.Object3D;
   gaussianModel?: GaussianModel;
+  gltfAnimation?: GLTFModelWrapper;
   sourceFile?: File;
   sourcePath?: string;
   animDuration?: number;
+  animSpeed?: number;
   animStartTime?: number;
   animEndTime?: number;
+  animLoop?: boolean;
 }
 
 interface EditorCameraPose {
@@ -192,7 +196,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = "0.1.2";
+  readonly VERSION = "0.1.3";
 
   private globalTimelineTime: number = 0;
 
@@ -202,9 +206,13 @@ export class EditorApp {
 
   public setModelAnimTimeBounds(id: string, start: number, end: number): void {
     const model = this.editorModels.get(id);
-    if (model && model.modelEntry) {
-      model.modelEntry.animStartTime = start;
-      model.modelEntry.animEndTime = end;
+    if (model) {
+      model.animStartTime = start;
+      model.animEndTime = end;
+      if (model.modelEntry) {
+        model.modelEntry.animStartTime = start;
+        model.modelEntry.animEndTime = end;
+      }
       if (this.onModelsChangedCallback) {
         this.onModelsChangedCallback(Array.from(this.editorModels.values()));
       }
@@ -444,6 +452,19 @@ export class EditorApp {
         this.fusionLastTime = now;
 
         this.cameraManager.update(dt);
+        for (const model of this.editorModels.values()) {
+          if (!model.gltfAnimation) continue;
+          const start = model.animStartTime ?? 0;
+          const end = model.animEndTime ?? model.animDuration ?? start;
+          const speed = Number.isFinite(model.animSpeed) ? Number(model.animSpeed) : 1.0;
+          const inWindow = this.globalTimelineTime >= start && this.globalTimelineTime <= end;
+          if (model.object3D) {
+            model.object3D.visible = Boolean(model.visible) && inWindow;
+          }
+          if (!inWindow) continue;
+          model.gltfAnimation.setAnimationSpeed(speed);
+          model.gltfAnimation.setAnimationTime((this.globalTimelineTime - start) * speed);
+        }
         this.syncMeshCameraFromCoreCamera();
         this.updateCameraSequenceCurrentMarkerFromMeshCamera();
 
@@ -773,6 +794,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
       let modelEntry: ModelEntry | null = null;
       let meshObject: THREE.Object3D | null = null;
+      let gltfAnimation: GLTFModelWrapper | null = null;
       let gaussianModel: GaussianModel | null = null;
       let isDynamic = false;
       let pointCount = 0;
@@ -815,11 +837,26 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
           throw new Error(`File loaded but not recognized as mesh: ${file.name}`);
         }
         meshObject = loaded.object3D() as THREE.Object3D;
+        const animationClips = loaded.animationClips?.() ?? [];
+        if ((lowerName.endsWith('.glb') || lowerName.endsWith('.gltf')) && animationClips.length > 0) {
+          gltfAnimation = new GLTFModelWrapper(meshObject, animationClips, {
+            autoPlay: false,
+            defaultSpeed: 1.0,
+            loop: true,
+          });
+          isDynamic = true;
+        }
         this.addMeshObjectToScene(meshObject);
         pointCount = this.countMeshVertices(meshObject);
         position = { x: meshObject.position.x, y: meshObject.position.y, z: meshObject.position.z };
         rotation = { x: meshObject.rotation.x, y: meshObject.rotation.y, z: meshObject.rotation.z };
         scale = Number(meshObject.scale.x || 1);
+        if (gltfAnimation) {
+          const duration = gltfAnimation.getDuration();
+          if (Number.isFinite(duration) && duration > 0) {
+            pointCount = Math.max(0, pointCount);
+          }
+        }
       } else {
         throw new Error(`Unsupported file type: ${file.name}. Supported: ${defaultLoader.getAllSupportedExtensions().join(', ')}`);
       }
@@ -868,10 +905,23 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         modelType,
         modelEntry: modelEntry || undefined,
         object3D: meshObject || undefined,
+        gltfAnimation: gltfAnimation || undefined,
         gaussianModel: gaussianModel || undefined,
         sourceFile: file,
         sourcePath: options.sourcePath || file.name,
-        animDuration: Number.isFinite(Number(modelEntry?.animDuration)) ? Number(modelEntry?.animDuration) : undefined
+        animDuration: Number.isFinite(Number(modelEntry?.animDuration))
+          ? Number(modelEntry?.animDuration)
+          : (gltfAnimation && Number.isFinite(gltfAnimation.getDuration()) && gltfAnimation.getDuration() > 0
+            ? gltfAnimation.getDuration()
+            : undefined),
+        animSpeed: Number.isFinite(Number(modelEntry?.animSpeed)) ? Number(modelEntry?.animSpeed) : 1.0,
+        animStartTime: Number.isFinite(Number(modelEntry?.animStartTime)) ? Number(modelEntry?.animStartTime) : 0,
+        animEndTime: Number.isFinite(Number(modelEntry?.animEndTime))
+          ? Number(modelEntry?.animEndTime)
+          : (gltfAnimation && Number.isFinite(gltfAnimation.getDuration()) && gltfAnimation.getDuration() > 0
+            ? gltfAnimation.getDuration()
+            : undefined),
+        animLoop: gltfAnimation ? gltfAnimation.getAnimationIsLoop() : true,
       };
 
       this.editorModels.set(editorModel.id, editorModel);
@@ -991,6 +1041,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         this.meshScene.remove(model.gaussianModel);
       }
     }
+    model.gltfAnimation?.dispose();
     this.removeMeshObject(model);
 
     this.editorModels.delete(id);
@@ -1455,7 +1506,21 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     speed: number;
   } {
     const model = this.editorModels.get(id);
-    if (!model || !model.modelEntry) {
+    if (!model) {
+      return { supported: false, isPlaying: false, isPaused: false, isLooping: true, speed: 1.0 };
+    }
+
+    if (model.gltfAnimation) {
+      return {
+        supported: model.gltfAnimation.supportsAnimation(),
+        isPlaying: model.gltfAnimation.isAnimationRunning(),
+        isPaused: model.gltfAnimation.isAnimationPaused(),
+        isLooping: model.gltfAnimation.getAnimationIsLoop(),
+        speed: model.gltfAnimation.getAnimationSpeed(),
+      };
+    }
+
+    if (!model.modelEntry) {
       return { supported: false, isPlaying: false, isPaused: false, isLooping: true, speed: 1.0 };
     }
 
@@ -1480,6 +1545,19 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const model = this.editorModels.get(id);
     if (!model) return false;
 
+    if (model.gltfAnimation) {
+      if (playing) {
+        if (model.gltfAnimation.isAnimationPaused()) {
+          model.gltfAnimation.resumeAnimation();
+        } else if (!model.gltfAnimation.isAnimationRunning()) {
+          model.gltfAnimation.startAnimation(model.gltfAnimation.getAnimationSpeed());
+        }
+      } else if (model.gltfAnimation.isAnimationRunning()) {
+        model.gltfAnimation.pauseAnimation();
+      }
+      return true;
+    }
+
     const dynamicPC = this.getDynamicPointCloudForModel(model);
     if (!dynamicPC) return false;
 
@@ -1503,6 +1581,13 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const model = this.editorModels.get(id);
     if (!model) return false;
 
+    if (model.gltfAnimation) {
+      model.gltfAnimation.setLoop(enabled);
+      model.animLoop = enabled;
+      this.notifyModelsChanged();
+      return true;
+    }
+
     const dynamicPC = this.getDynamicPointCloudForModel(model);
     if (!dynamicPC) return false;
 
@@ -1517,10 +1602,18 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const model = this.editorModels.get(id);
     if (!model) return false;
 
+    const safeSpeed = Number.isFinite(speed) ? speed : 1.0;
+    model.animSpeed = safeSpeed;
+
+    if (model.gltfAnimation) {
+      model.gltfAnimation.setAnimationSpeed(safeSpeed);
+      this.notifyModelsChanged();
+      return true;
+    }
+
     const dynamicPC = this.getDynamicPointCloudForModel(model);
     if (!dynamicPC) return false;
 
-    const safeSpeed = Number.isFinite(speed) ? speed : 1.0;
     dynamicPC.setAnimationSpeed(safeSpeed);
     if (model.modelEntry) {
       model.modelEntry.animSpeed = safeSpeed;
@@ -2290,3 +2383,4 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
 // Create global editor instance
 export const editorApp = new EditorApp();
+

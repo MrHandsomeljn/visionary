@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.1.2
+ * Visionary Editor UI Controller 0.1.3
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -83,6 +83,7 @@ const dom = {
     btnRemoveKeyframe: document.getElementById('btnRemoveKeyframe'),
     btnPlayCamera: document.getElementById('btnPlayCamera'),
     btnLoopCamera: document.getElementById('btnLoopCamera'),
+    btnToggleCameraSequence: document.getElementById('btnToggleCameraSequence'),
     timelineSpeed: document.getElementById('timelineSpeed'),
     timelineFps: document.getElementById('timelineFps'),
     timelineRuler: document.getElementById('timelineRuler'),
@@ -116,7 +117,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.1.2',
+    VERSION: '0.1.3',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     cameraSequenceVisible: true,
@@ -156,7 +157,6 @@ const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
 const TIMELINE_MIN_DURATION_SEC = 10;
 const TIMELINE_SLIDER_THUMB_PX = 16;
 const EXPORT_FALLBACK_FPS = 24;
-const CAMERA_SEQUENCE_LIST_ITEM_ID = '__editor_camera_sequence__';
 const MODEL_ANIM_SPEED_MIN = 0.01;
 const MODEL_ANIM_SPEED_MAX = 100;
 const MODEL_ANIM_SPEED_STEP = 0.001;
@@ -867,11 +867,23 @@ function setCameraSequenceVisibility(nextVisible, silent = false) {
         return false;
     }
     state.cameraSequenceVisible = safe;
-    updateModelList();
+    updateCameraSequenceToggleButton();
     if (!silent) {
         showInfo(`相机序列: ${safe ? '可见' : '隐藏'}`);
     }
     return true;
+}
+
+function updateCameraSequenceToggleButton() {
+    if (!dom.btnToggleCameraSequence) return;
+    const visible = syncCameraSequenceVisibilityState();
+    dom.btnToggleCameraSequence.classList.toggle('active', visible);
+    const textEl = dom.btnToggleCameraSequence.querySelector('.btn-text');
+    if (textEl) {
+        textEl.textContent = visible ? '相机序列可见' : '相机序列隐藏';
+    } else {
+        dom.btnToggleCameraSequence.textContent = visible ? '相机序列可见' : '相机序列隐藏';
+    }
 }
 
 /**
@@ -880,32 +892,15 @@ function setCameraSequenceVisibility(nextVisible, silent = false) {
 function updateModelList() {
     if (!app || !dom.modelList) return;
     const models = app.getModels();
-    const cameraSequenceVisible = syncCameraSequenceVisibilityState();
-    const cameraSequenceItemHtml = `
-        <div class="model-item model-item-system" data-id="${CAMERA_SEQUENCE_LIST_ITEM_ID}" data-system-item="camera-sequence">
-            <span class="model-name">相机序列</span>
-            <button class="model-visibility-btn ${cameraSequenceVisible ? 'active' : ''}" data-system-action="toggle-camera-sequence-visibility" title="切换可见性">
-                ${cameraSequenceVisible ? '可见' : '隐藏'}
-            </button>
-        </div>
-    `;
+    updateCameraSequenceToggleButton();
 
     if (models.length === 0) {
-        dom.modelList.innerHTML = cameraSequenceItemHtml + '<div class="empty-list">' +
+        dom.modelList.innerHTML = '<div class="empty-list">' +
             '<p>暂无模型</p>' +
             '<p class="empty-hint">拖拽文件到此处，或点击下方按钮</p>' +
             '</div>';
-        dom.modelList.querySelectorAll('.model-visibility-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const systemAction = btn.dataset.systemAction;
-                if (systemAction === 'toggle-camera-sequence-visibility') {
-                    setCameraSequenceVisibility(!state.cameraSequenceVisible);
-                }
-            });
-        });
     } else {
-        dom.modelList.innerHTML = cameraSequenceItemHtml + models.map((model) => `
+        dom.modelList.innerHTML = models.map((model) => `
             <div class="model-item ${state.selectedModelId === model.id ? 'selected' : ''}" data-id="${model.id}">
                 <span class="model-name">${model.name}</span>
                 <span class="model-points">${model.pointCount.toLocaleString()} 点</span>
@@ -931,11 +926,6 @@ function updateModelList() {
         dom.modelList.querySelectorAll('.model-visibility-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const systemAction = btn.dataset.systemAction;
-                if (systemAction === 'toggle-camera-sequence-visibility') {
-                    setCameraSequenceVisibility(!state.cameraSequenceVisible);
-                    return;
-                }
                 const id = btn.dataset.id;
                 const model = app.getModel(id);
                 if (!model) return;
@@ -949,7 +939,6 @@ function updateModelList() {
         // 绑定点击选择事件
         dom.modelList.querySelectorAll('.model-item').forEach(item => {
             item.addEventListener('click', () => {
-                if (item.dataset.systemItem === 'camera-sequence') return;
                 selectModel(item.dataset.id);
             });
         });
@@ -1058,6 +1047,35 @@ function closeEditor() {
 function getSelectedModelAnimationState() {
     if (!app || !state.selectedModelId) return null;
     return app.getModelAnimationState(state.selectedModelId);
+}
+
+function getModelAnimationSpeedValue(model) {
+    const raw = Number(model?.modelEntry?.animSpeed ?? model?.animSpeed ?? 1);
+    return Number.isFinite(raw) ? raw : 1;
+}
+
+function getModelAnimationStartTime(model) {
+    const raw = Number(model?.modelEntry?.animStartTime ?? model?.animStartTime ?? 0);
+    return Number.isFinite(raw) ? raw : 0;
+}
+
+function getModelAnimationEndTime(model) {
+    const rawDuration = getModelAnimationDuration(model);
+    const fallbackEnd = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 10;
+    const raw = Number(model?.modelEntry?.animEndTime ?? model?.animEndTime ?? fallbackEnd);
+    return Number.isFinite(raw) ? raw : fallbackEnd;
+}
+
+function getModelAnimationDuration(model) {
+    const raw = Number(model?.animDuration ?? model?.modelEntry?.animDuration);
+    if (Number.isFinite(raw) && raw > 0) {
+        return raw;
+    }
+    return MODEL_ANIM_DURATION_FALLBACK_SEC;
+}
+
+function modelHasTimelineAnimation(model) {
+    return Boolean(model?.isDynamic && getModelAnimationDuration(model) > 0);
 }
 
 function updateModelAnimationControls(id = state.selectedModelId) {
@@ -1809,12 +1827,12 @@ async function saveScene() {
                 visible: model.visible !== false,
             };
 
-            if (asset.type === 'onnx' && model.isDynamic) {
+            if ((asset.type === 'onnx' || asset.type === 'glb' || asset.type === 'gltf') && modelHasTimelineAnimation(model)) {
                 asset.dynamic = true;
                 asset.animation = {
-                    speed: Number(model.modelEntry?.animSpeed ?? 1),
-                    startTime: Number(model.modelEntry?.animStartTime ?? 0),
-                    endTime: Number(model.modelEntry?.animEndTime ?? model.modelEntry?.animDuration ?? 10),
+                    speed: Number(getModelAnimationSpeedValue(model)),
+                    startTime: Number(getModelAnimationStartTime(model)),
+                    endTime: Number(getModelAnimationEndTime(model)),
                 };
             }
 
@@ -2025,7 +2043,7 @@ async function loadScene() {
                 if (typeof asset.visible === 'boolean') {
                     app.setModelVisibility?.(loadedModel.id, asset.visible);
                 }
-                if (asset.type === 'onnx' && asset.dynamic && asset.animation) {
+                if ((asset.type === 'onnx' || asset.type === 'glb' || asset.type === 'gltf') && asset.dynamic && asset.animation) {
                     if (Number.isFinite(asset.animation.speed)) {
                         app.setModelAnimationSpeed?.(loadedModel.id, Number(asset.animation.speed));
                     }
@@ -2459,11 +2477,8 @@ let activeModelTrackDrag = null;
 let suppressModelClickOnce = false;
 
 function buildModelTrackLoopMarkers(model, startSec, endSec) {
-    const rawDuration = Number(model?.animDuration ?? model?.modelEntry?.animDuration);
-    const duration = Number.isFinite(rawDuration) && rawDuration > 0
-        ? rawDuration
-        : MODEL_ANIM_DURATION_FALLBACK_SEC;
-    const speed = Math.abs(Number(model?.modelEntry?.animSpeed ?? 1));
+    const duration = getModelAnimationDuration(model);
+    const speed = Math.abs(getModelAnimationSpeedValue(model));
     const clipDuration = Math.max(0, endSec - startSec);
 
     if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(speed) || speed <= 0 || clipDuration <= 0) {
@@ -2489,11 +2504,8 @@ function buildModelTrackLoopMarkers(model, startSec, endSec) {
 }
 
 function buildModelTrackOverflowIndicator(model, startSec, endSec) {
-    const rawDuration = Number(model?.animDuration ?? model?.modelEntry?.animDuration);
-    const duration = Number.isFinite(rawDuration) && rawDuration > 0
-        ? rawDuration
-        : MODEL_ANIM_DURATION_FALLBACK_SEC;
-    const speed = Math.abs(Number(model?.modelEntry?.animSpeed ?? 1));
+    const duration = getModelAnimationDuration(model);
+    const speed = Math.abs(getModelAnimationSpeedValue(model));
     const clipDuration = Math.max(0, endSec - startSec);
 
     if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(speed) || speed <= 0 || clipDuration <= 0) {
@@ -2505,20 +2517,20 @@ function buildModelTrackOverflowIndicator(model, startSec, endSec) {
         return '';
     }
 
-    return '<span class="model-track-overflow-indicator" title="ONNX 播放时长超过当前 clip 时长">&gt;</span>';
+    return '<span class="model-track-overflow-indicator" title="模型动画播放时长超过当前 clip 时长">&gt;</span>';
 }
 
 function getModelTrackLoopMarkerDebugInfo() {
     const models = Array.from(app?.editorModels?.values?.() || []);
     return models
-        .filter((model) => model?.isDynamic && model?.modelEntry)
+        .filter((model) => modelHasTimelineAnimation(model))
         .map((model) => {
-            const startSec = Number(model.modelEntry.animStartTime ?? 0);
-            const endSec = Number(model.modelEntry.animEndTime ?? 10);
-            const rawDuration = Number(model.animDuration ?? model.modelEntry.animDuration);
+            const startSec = getModelAnimationStartTime(model);
+            const endSec = getModelAnimationEndTime(model);
+            const rawDuration = Number(model.animDuration ?? model.modelEntry?.animDuration);
             const hasMetadataDuration = Number.isFinite(rawDuration) && rawDuration > 0;
-            const duration = hasMetadataDuration ? rawDuration : MODEL_ANIM_DURATION_FALLBACK_SEC;
-            const speed = Math.abs(Number(model.modelEntry.animSpeed ?? 1));
+            const duration = getModelAnimationDuration(model);
+            const speed = Math.abs(getModelAnimationSpeedValue(model));
             const clipDuration = Math.max(0, endSec - startSec);
             const cycleDuration = Number.isFinite(duration) && duration > 0 && Number.isFinite(speed) && speed > 0
                 ? duration / speed
@@ -2575,11 +2587,11 @@ function renderModelTracks() {
     let hasTracks = false;
     
     for (const model of models) {
-        if (!model.isDynamic || !model.modelEntry) continue;
+        if (!modelHasTimelineAnimation(model)) continue;
         
         hasTracks = true;
-        const startSec = model.modelEntry.animStartTime ?? 0;
-        const endSec = model.modelEntry.animEndTime ?? 10;
+        const startSec = getModelAnimationStartTime(model);
+        const endSec = getModelAnimationEndTime(model);
         
         const startRatio = Math.max(0, Math.min(1, startSec / durationSec));
         const endRatio = Math.max(0, Math.min(1, endSec / durationSec));
@@ -2629,11 +2641,11 @@ function beginModelTrackDrag(e) {
     const modelId = track.dataset.modelId;
     
     const model = app.editorModels.get(modelId);
-    if (!model || !model.modelEntry) return;
+    if (!model || !modelHasTimelineAnimation(model)) return;
 
     const action = e.target.dataset.action || 'move';
-    const startSec = model.modelEntry.animStartTime ?? 0;
-    const endSec = model.modelEntry.animEndTime ?? 10;
+    const startSec = getModelAnimationStartTime(model);
+    const endSec = getModelAnimationEndTime(model);
 
     activeModelTrackDrag = {
         modelId,
@@ -3306,6 +3318,9 @@ function initEventListeners() {
     dom.btnRemoveKeyframe?.addEventListener('click', removeKeyframe);
     dom.btnPlayCamera?.addEventListener('click', playCameraAnimation);
     dom.btnLoopCamera?.addEventListener('click', toggleCameraLoop);
+    dom.btnToggleCameraSequence?.addEventListener('click', () => {
+        setCameraSequenceVisibility(!state.cameraSequenceVisible);
+    });
     dom.timelineFps?.addEventListener('change', (e) => {
         setTimelineFps(e.target.value);
     });
@@ -3421,8 +3436,8 @@ async function init() {
         
         let maxEnd = state.timelineDurationSec;
         for (const model of models) {
-             if (model.isDynamic && model.modelEntry && model.modelEntry.animEndTime) {
-                  maxEnd = Math.max(maxEnd, model.modelEntry.animEndTime);
+             if (modelHasTimelineAnimation(model) && Number.isFinite(getModelAnimationEndTime(model))) {
+                  maxEnd = Math.max(maxEnd, getModelAnimationEndTime(model));
              }
         }
         if (maxEnd > state.timelineDurationSec && Number.isFinite(maxEnd)) {
@@ -3464,6 +3479,7 @@ async function init() {
     if (dom.btnLoopCamera) {
         dom.btnLoopCamera.classList.toggle('active', state.isLooping);
     }
+    updateCameraSequenceToggleButton();
 
     // 初始更新
     updateModelList();
@@ -3489,3 +3505,4 @@ async function init() {
 
 // 启动应用
 document.addEventListener('DOMContentLoaded', init);
+

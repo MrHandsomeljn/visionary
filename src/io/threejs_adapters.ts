@@ -19,10 +19,12 @@ export class ThreeJSModelData implements ThreeJSDataSource {
   private _object3D: THREE.Object3D;
   private _bbox: { min: [number, number, number]; max: [number, number, number] };
   private _modelType: string;
+  private _animationClips: THREE.AnimationClip[];
 
-  constructor(object3D: THREE.Object3D, modelType: string = 'unknown') {
+  constructor(object3D: THREE.Object3D, modelType: string = 'unknown', animationClips: THREE.AnimationClip[] = []) {
     this._object3D = object3D;
     this._modelType = modelType;
+    this._animationClips = Array.isArray(animationClips) ? [...animationClips] : [];
     this._bbox = this.calculateBoundingBox(object3D);
   }
 
@@ -33,6 +35,10 @@ export class ThreeJSModelData implements ThreeJSDataSource {
 
   modelType(): string {
     return this._modelType;
+  }
+
+  animationClips(): THREE.AnimationClip[] {
+    return [...this._animationClips];
   }
 
   bbox(): { min: [number, number, number]; max: [number, number, number] } {
@@ -76,16 +82,16 @@ abstract class ThreeJSLoaderAdapter<T extends THREE.Object3D> implements ILoader
   async loadFile(file: File, options?: LoadingOptions): Promise<ThreeJSModelData> {
     const url = URL.createObjectURL(file);
     try {
-      const object3D = await this.loadFromUrl(url, options);
-      return new ThreeJSModelData(object3D, this.getModelType());
+      const loaded = await this.loadFromUrl(url, options);
+      return new ThreeJSModelData(loaded.object3D, this.getModelType(), loaded.animationClips);
     } finally {
       URL.revokeObjectURL(url);
     }
   }
 
   async loadUrl(url: string, options?: LoadingOptions): Promise<ThreeJSModelData> {
-    const object3D = await this.loadFromUrl(url, options);
-    return new ThreeJSModelData(object3D, this.getModelType());
+    const loaded = await this.loadFromUrl(url, options);
+    return new ThreeJSModelData(loaded.object3D, this.getModelType(), loaded.animationClips);
   }
 
   async loadBuffer(buffer: ArrayBuffer, options?: LoadingOptions): Promise<ThreeJSModelData> {
@@ -99,7 +105,10 @@ abstract class ThreeJSLoaderAdapter<T extends THREE.Object3D> implements ILoader
   }
 
   abstract getSupportedExtensions(): string[];
-  protected abstract loadFromUrl(url: string, options?: LoadingOptions): Promise<T>;
+  protected abstract loadFromUrl(
+    url: string,
+    options?: LoadingOptions
+  ): Promise<{ object3D: T; animationClips: THREE.AnimationClip[] }>;
   protected abstract getModelType(): string;
 }
 
@@ -119,7 +128,10 @@ export class GLTFLoaderAdapter extends ThreeJSLoaderAdapter<THREE.Group> {
     return 'gltf';
   }
 
-  protected async loadFromUrl(url: string, options?: LoadingOptions): Promise<THREE.Group> {
+  protected async loadFromUrl(
+    url: string,
+    options?: LoadingOptions
+  ): Promise<{ object3D: THREE.Group; animationClips: THREE.AnimationClip[] }> {
     return new Promise((resolve, reject) => {
       this.loader.load(
         url,
@@ -131,7 +143,10 @@ export class GLTFLoaderAdapter extends ThreeJSLoaderAdapter<THREE.Group> {
             metalness: 0.05
           });
           this.applyShadowsAndMaterial(gltf.scene, fallbackMaterial);
-          resolve(gltf.scene);
+          resolve({
+            object3D: gltf.scene,
+            animationClips: Array.isArray(gltf.animations) ? gltf.animations : [],
+          });
         },
         (progress: any) => {
           if (options?.onProgress) {
@@ -163,14 +178,17 @@ export class OBJLoaderAdapter extends ThreeJSLoaderAdapter<THREE.Group> {
     return 'obj';
   }
 
-  protected async loadFromUrl(url: string, options?: LoadingOptions): Promise<THREE.Group> {
+  protected async loadFromUrl(
+    url: string,
+    options?: LoadingOptions
+  ): Promise<{ object3D: THREE.Group; animationClips: THREE.AnimationClip[] }> {
     return new Promise((resolve, reject) => {
       this.loader.load(
         url,
         (object3D: THREE.Group) => {
           // OBJ 可能带 MTL，优先保留自带材质
           this.applyShadowsAndMaterial(object3D);
-          resolve(object3D);
+          resolve({ object3D, animationClips: [] });
         },
         (progress: any) => {
           if (options?.onProgress) {
@@ -202,14 +220,17 @@ export class FBXLoaderAdapter extends ThreeJSLoaderAdapter<THREE.Group> {
     return 'fbx';
   }
 
-  protected async loadFromUrl(url: string, options?: LoadingOptions): Promise<THREE.Group> {
+  protected async loadFromUrl(
+    url: string,
+    options?: LoadingOptions
+  ): Promise<{ object3D: THREE.Group; animationClips: THREE.AnimationClip[] }> {
     return new Promise((resolve, reject) => {
       this.loader.load(
         url,
         (object3D: THREE.Group) => {
           // FBX 自带材质保持不动，只补充阴影属性
           this.applyShadowsAndMaterial(object3D);
-          resolve(object3D);
+          resolve({ object3D, animationClips: [] });
         },
         (progress: any) => {
           if (options?.onProgress) {
@@ -241,7 +262,10 @@ export class STLLoaderAdapter extends ThreeJSLoaderAdapter<THREE.Mesh> {
     return 'stl';
   }
 
-  protected async loadFromUrl(url: string, options?: LoadingOptions): Promise<THREE.Mesh> {
+  protected async loadFromUrl(
+    url: string,
+    options?: LoadingOptions
+  ): Promise<{ object3D: THREE.Mesh; animationClips: THREE.AnimationClip[] }> {
     return new Promise((resolve, reject) => {
       this.loader.load(
         url,
@@ -251,7 +275,7 @@ export class STLLoaderAdapter extends ThreeJSLoaderAdapter<THREE.Mesh> {
           const mesh = new THREE.Mesh(geometry, material);
           // STL 本身无材质，使用默认材质；如有材质则保留
           this.applyShadowsAndMaterial(mesh, material);
-          resolve(mesh);
+          resolve({ object3D: mesh, animationClips: [] });
         },
         (progress: any) => {
           if (options?.onProgress) {
@@ -283,7 +307,10 @@ export class ThreeJSPLYLoaderAdapter extends ThreeJSLoaderAdapter<THREE.Mesh> {
     return 'ply';
   }
 
-  protected async loadFromUrl(url: string, options?: LoadingOptions): Promise<THREE.Mesh> {
+  protected async loadFromUrl(
+    url: string,
+    options?: LoadingOptions
+  ): Promise<{ object3D: THREE.Mesh; animationClips: THREE.AnimationClip[] }> {
     return new Promise((resolve, reject) => {
       this.loader.load(
         url,
@@ -293,7 +320,7 @@ export class ThreeJSPLYLoaderAdapter extends ThreeJSLoaderAdapter<THREE.Mesh> {
           const mesh = new THREE.Mesh(geometry, material);
           // PLY 若有自带材质则保留，否则用默认 vertexColors 材质
           this.applyShadowsAndMaterial(mesh, material);
-          resolve(mesh);
+          resolve({ object3D: mesh, animationClips: [] });
         },
         (progress: any) => {
           if (options?.onProgress) {
