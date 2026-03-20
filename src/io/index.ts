@@ -38,6 +38,8 @@ export interface ThreeJSDataSource extends DataSource {
   object3D(): any; // 使用 any 避免 THREE 命名空间依赖
   /** Get the model type */
   modelType(): string;
+  /** Get parsed animation clips when available */
+  animationClips?(): any[];
 }
 
 /**

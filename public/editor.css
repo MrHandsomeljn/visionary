@@ -1,4 +1,4 @@
-/* Visionary Editor Styles 0.1.2 */
+/* Visionary Editor Styles 0.1.3 */
 
 :root {
     --bg-color: #0a0a0f;
@@ -1175,6 +1175,12 @@ body {
     border-bottom: 1px solid var(--panel-border);
 }
 
+.timeline-header-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
 .timeline-header h2 {
     font-size: 12px;
     font-weight: 600;
@@ -1182,6 +1188,11 @@ body {
     color: var(--text-primary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
+}
+
+.timeline-inline-btn {
+    padding-left: 8px;
+    padding-right: 8px;
 }
 
 .timeline-actions {
@@ -1960,3 +1971,4 @@ body.sidebar-resizing {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--text-secondary);
 }
+
