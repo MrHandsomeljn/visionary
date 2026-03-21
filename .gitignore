@@ -42,5 +42,5 @@ datasets/
 *.tgz
 package-lock.json
 
-models/
+# models/
 模型/
