@@ -1,5 +1,5 @@
 /**
- * Visionary Editor Application 0.1.4
+ * Visionary Editor Application 0.1.5
  * Editor version of main app with UI controls
  */
 
@@ -32,6 +32,8 @@ import { initOrtEnvironment, getDefaultOrtWasmPaths } from "../config/ort-config
 import { PointCloud, DynamicPointCloud } from "../point_cloud";
 import { lookAtW2C } from "../controls/orbit";
 import { GLTFModelWrapper } from "../models/gltf-model-wrapper";
+import { GizmoManager } from "../gizmo/gizmo-manager";
+import type { GizmoMode } from "../gizmo/types";
 
 const MAX_MODELS = 10000;
 const CAMERA_KEY_CODES = new Set([
@@ -163,8 +165,10 @@ export class EditorApp {
   private meshCanvas: HTMLCanvasElement | null = null;
   private meshRenderer: THREE.WebGPURenderer | null = null;
   private meshScene: THREE.Scene | null = null;
+  private gizmoOverlayScene: THREE.Scene | null = null;
   private meshCamera: THREE.PerspectiveCamera | null = null;
   private fusedRenderer: GaussianThreeJSRenderer | null = null;
+  private gizmoManager: GizmoManager | null = null;
   private meshRenderAnimationId = 0;
   private fusionLastTime = performance.now();
   private fusionFrameRunning = false;
@@ -189,6 +193,11 @@ export class EditorApp {
   private cameraSequenceGroup: THREE.Group | null = null;
   private cameraSequenceCurrentMarker: THREE.Mesh | null = null;
   private onCameraInteractionCallback: ((kind: "drag" | "wheel" | "keyboard") => void) | null = null;
+  private onViewportGizmoTransformCallback: ((id: string, model: EditorModel) => void) | null = null;
+  private selectedModelId: string | null = null;
+  private viewportGizmoMode: GizmoMode = "translate";
+  private viewportGizmoEnabled = false;
+  private cameraInputEnabled = true;
 
   // Mouse state for camera control
   private lastMouseX = 0;
@@ -198,7 +207,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = "0.1.4";
+  readonly VERSION = "0.1.5";
 
   private globalTimelineTime: number = 0;
 
@@ -328,6 +337,9 @@ export class EditorApp {
 
     // Mouse events - directly set controller state like demo/simple
     this.canvas.addEventListener('mousedown', (e) => {
+      if (!this.cameraInputEnabled) {
+        return;
+      }
       const controller = this.cameraManager.getController();
       if (e.button === 0) {
         this.leftMouseDown = true;
@@ -357,6 +369,9 @@ export class EditorApp {
     });
 
     window.addEventListener('mousemove', (e) => {
+      if (!this.cameraInputEnabled) {
+        return;
+      }
       if (this.leftMouseDown || this.rightMouseDown) {
         const dx = e.clientX - this.lastMouseX;
         const dy = e.clientY - this.lastMouseY;
@@ -372,6 +387,10 @@ export class EditorApp {
 
     // Wheel event
     this.canvas.addEventListener('wheel', (e) => {
+      if (!this.cameraInputEnabled) {
+        e.preventDefault();
+        return;
+      }
       e.preventDefault();
       this.notifyCameraInteraction("wheel");
       const controller = this.cameraManager.getController();
@@ -399,6 +418,7 @@ export class EditorApp {
     this.meshCanvas = this.canvas;
 
     this.meshScene = new THREE.Scene();
+    this.gizmoOverlayScene = new THREE.Scene();
     this.meshCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000);
     this.meshCamera.matrixAutoUpdate = true;
 
@@ -431,6 +451,32 @@ export class EditorApp {
         await this.fusedRenderer.init();
         this.fusedRenderer.setDepthRangeScale(this.sceneDepthRangeScale);
         this.fusedRenderer.setPreviewMode(this.renderMode);
+      }
+
+      if (!this.gizmoManager && this.meshScene && this.meshCamera && this.gizmoOverlayScene) {
+        this.gizmoManager = new GizmoManager(
+          this.meshScene,
+          this.meshCamera,
+          this.meshRenderer,
+          {
+            mode: this.viewportGizmoMode,
+            space: "local",
+            size: 0.9,
+            showHelper: true,
+            pivotMode: "aabb",
+            showPivotHelper: false,
+          },
+          this.gizmoOverlayScene
+        );
+        this.gizmoManager.setCameraControls({
+          setEnabled: (enabled: boolean) => this.setViewportCameraInputEnabled(enabled),
+        });
+        this.gizmoManager.setCallbacks({
+          onObjectChange: () => this.handleViewportGizmoObjectChange(),
+          onChangeStart: () => this.setViewportCameraInputEnabled(false),
+          onChangeEnd: () => this.setViewportCameraInputEnabled(true),
+        });
+        this.gizmoManager.setEnabled(false);
       }
     } catch (error) {
       console.warn("[EditorApp] Fused renderer initialization failed:", error);
@@ -468,6 +514,7 @@ export class EditorApp {
           model.gltfAnimation.setAnimationTime((this.globalTimelineTime - start) * speed);
         }
         this.syncMeshCameraFromCoreCamera();
+        this.gizmoManager?.update();
         this.updateCameraSequenceCurrentMarkerFromMeshCamera();
 
         if (this.fusedRenderer) {
@@ -492,6 +539,9 @@ export class EditorApp {
           }
 
           await this.fusedRenderer.updateDynamicModels(this.meshCamera, (now - this.fusionStartTime) / 500.0);
+          if (this.gizmoOverlayScene) {
+            this.fusedRenderer.renderOverlayScene(this.gizmoOverlayScene, this.meshCamera);
+          }
           this.fusedRenderer.onBeforeRender(this.meshRenderer, this.meshScene, this.meshCamera);
           this.fusedRenderer.renderThreeScene(this.meshCamera);
           const drew = this.fusedRenderer.drawSplats(this.meshRenderer, this.meshScene, this.meshCamera);
@@ -708,6 +758,58 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     return updated;
   }
 
+  private setViewportCameraInputEnabled(enabled: boolean): void {
+    this.cameraInputEnabled = !!enabled;
+    if (enabled) return;
+
+    this.leftMouseDown = false;
+    this.rightMouseDown = false;
+    const controller = this.cameraManager.getController();
+    controller.leftMousePressed = false;
+    controller.rightMousePressed = false;
+  }
+
+  private getEditorModelTransformTarget(model: EditorModel | null | undefined): THREE.Object3D | null {
+    if (!model) return null;
+    if (model.gaussianModel) return model.gaussianModel;
+    if (model.object3D) return model.object3D;
+    return null;
+  }
+
+  private syncViewportGizmoTarget(): void {
+    if (!this.gizmoManager) return;
+    this.setViewportCameraInputEnabled(true);
+    const model = this.selectedModelId ? this.editorModels.get(this.selectedModelId) : null;
+    const target = this.getEditorModelTransformTarget(model);
+    const focusPoint = model ? this.getModelFocusPoint(model) : null;
+    if (target && focusPoint) {
+      this.gizmoManager.setPivotMode("custom");
+      this.gizmoManager.setPivot(new THREE.Vector3(focusPoint[0], focusPoint[1], focusPoint[2]));
+    }
+    this.gizmoManager.setTarget(target);
+    this.gizmoManager.setEnabled(Boolean(target) && this.viewportGizmoEnabled);
+    if (target && this.viewportGizmoEnabled) {
+      this.gizmoManager.setMode(this.viewportGizmoMode);
+    }
+  }
+
+  private handleViewportGizmoObjectChange(): void {
+    if (!this.selectedModelId) return;
+    const model = this.editorModels.get(this.selectedModelId);
+    const target = this.getEditorModelTransformTarget(model);
+    if (!model || !target) return;
+
+    this.setModelPosition(model.id, target.position.x, target.position.y, target.position.z);
+    this.setModelRotation(model.id, target.rotation.x, target.rotation.y, target.rotation.z);
+    const uniformScale = (target.scale.x + target.scale.y + target.scale.z) / 3;
+    this.setModelScale(model.id, uniformScale);
+
+    const nextModel = this.editorModels.get(model.id);
+    if (nextModel && this.onViewportGizmoTransformCallback) {
+      this.onViewportGizmoTransformCallback(model.id, nextModel);
+    }
+  }
+
   private isEditingText(): boolean {
     const active = document.activeElement as HTMLElement | null;
     if (!active) return false;
@@ -731,6 +833,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   private handleCameraKeyboard(event: KeyboardEvent, pressed: boolean): void {
     if (!CAMERA_KEY_CODES.has(event.code)) return;
     if (this.isEditingText()) return;
+    if (!this.cameraInputEnabled) return;
     if (pressed && event.repeat) return;
     const mappedCode = this.remapCameraCode(event.code);
 
@@ -1047,6 +1150,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     this.removeMeshObject(model);
 
     this.editorModels.delete(id);
+    if (this.selectedModelId === id) {
+      this.selectedModelId = null;
+      this.syncViewportGizmoTarget();
+    }
     this.notifyModelsChanged();
 
     console.log(`[EditorApp] Model removed:`, model.name);
@@ -1195,6 +1302,44 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
    */
   getModel(id: string): EditorModel | null {
     return this.editorModels.get(id) || null;
+  }
+
+  setSelectedModel(id: string | null): boolean {
+    if (id && !this.editorModels.has(id)) {
+      return false;
+    }
+    this.selectedModelId = id;
+    this.syncViewportGizmoTarget();
+    return true;
+  }
+
+  setViewportGizmoMode(mode: GizmoMode | null): boolean {
+    if (mode !== null && mode !== "translate" && mode !== "rotate" && mode !== "scale") {
+      return false;
+    }
+    if (mode === null) {
+      this.viewportGizmoEnabled = false;
+      this.gizmoManager?.setTarget(null);
+      this.gizmoManager?.setEnabled(false);
+      return true;
+    }
+    this.viewportGizmoMode = mode;
+    this.viewportGizmoEnabled = true;
+    this.gizmoManager?.setMode(mode);
+    this.syncViewportGizmoTarget();
+    return true;
+  }
+
+  getViewportGizmoMode(): GizmoMode | null {
+    return this.viewportGizmoEnabled ? this.viewportGizmoMode : null;
+  }
+
+  refreshSelectedModelViewportGizmo(): void {
+    this.syncViewportGizmoTarget();
+  }
+
+  onViewportGizmoTransform(callback: ((id: string, model: EditorModel) => void) | null): void {
+    this.onViewportGizmoTransformCallback = callback;
   }
 
   /**
@@ -2174,8 +2319,8 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       const materialCandidate = (node as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
       const materials = Array.isArray(materialCandidate) ? materialCandidate : [materialCandidate];
       for (const material of materials) {
-        const lineMaterial = material as THREE.Line2NodeMaterial & { resolution?: THREE.Vector2 };
-        lineMaterial.resolution?.copy(resolution);
+        const lineMaterial = material as (THREE.Line2NodeMaterial & { resolution?: THREE.Vector2 }) | undefined;
+        lineMaterial?.resolution?.copy(resolution);
       }
     });
   }
@@ -2317,6 +2462,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         this.meshRenderer.setSize(rect.width || 1, rect.height || 1, false);
       }
     }
+    this.gizmoManager?.onResize();
     this.updateCameraSequenceLineMaterialResolution();
   }
 
@@ -2387,6 +2533,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     if (this.meshRenderer) {
       this.meshRenderer.dispose();
     }
+    this.gizmoManager?.dispose();
     if (this.meshCanvas && this.meshCanvas !== this.canvas && this.meshCanvas.parentElement) {
       this.meshCanvas.parentElement.removeChild(this.meshCanvas);
     }
@@ -2395,8 +2542,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     this.renderer = null;
     this.meshRenderer = null;
     this.meshScene = null;
+    this.gizmoOverlayScene = null;
     this.meshCamera = null;
     this.meshCanvas = null;
+    this.gizmoManager = null;
 
     console.log('[EditorApp] Disposed');
   }
@@ -2404,5 +2553,6 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
 // Create global editor instance
 export const editorApp = new EditorApp();
+
 
 

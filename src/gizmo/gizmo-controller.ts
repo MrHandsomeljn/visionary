@@ -218,6 +218,7 @@ export class GizmoController {
    */
   setTarget(object: THREE.Object3D | null): void {
     this.currentObject = object;
+    const helper = this.transformControls.getHelper();
     if (object) {
       // 将 pivotProxy 添加到 overlay 场景（如果还没有）
       if (this.pivotProxy) {
@@ -237,6 +238,7 @@ export class GizmoController {
     } else {
       this.transformControls.detach();
     }
+    helper.visible = Boolean(object) && this.transformControls.enabled;
   }
 
   /**
@@ -299,6 +301,7 @@ export class GizmoController {
    */
   setEnabled(enabled: boolean): void {
     this.transformControls.enabled = enabled;
+    this.transformControls.getHelper().visible = enabled && Boolean(this.currentObject);
   }
 
   /**
