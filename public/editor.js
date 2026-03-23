@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.1.4
+ * Visionary Editor UI Controller 0.1.5
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -43,6 +43,8 @@ const dom = {
     modelTransformSection: document.getElementById('modelTransformSection'),
     selectedModelName: document.getElementById('selectedModelName'),
     btnCloseEditor: document.getElementById('btnCloseEditor'),
+    btnToggleSceneSettings: document.getElementById('btnToggleSceneSettings'),
+    btnSceneSettingsClose: document.getElementById('btnSceneSettingsClose'),
     sceneSettingsPanel: document.getElementById('sceneSettingsPanel'),
     sceneBgColorPicker: document.getElementById('sceneBgColorPicker'),
     sceneBgColorHex: document.getElementById('sceneBgColorHex'),
@@ -54,6 +56,9 @@ const dom = {
 
     // 变换控件
     btnResetTransform: document.getElementById('btnResetTransform'),
+    btnGizmoTranslate: document.getElementById('btnGizmoTranslate'),
+    btnGizmoRotate: document.getElementById('btnGizmoRotate'),
+    btnGizmoScale: document.getElementById('btnGizmoScale'),
 
     // 位置
     posX: document.getElementById('posX'),
@@ -122,7 +127,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.1.4',
+    VERSION: '0.1.5',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     cameraSequenceVisible: true,
@@ -141,6 +146,9 @@ const state = {
     sceneSkyPresetId: 'night',
     sceneDepthRangeScale: 1.0,
     sceneCameraFov: 45.0,
+    viewportGizmoMode: null,
+    sceneSettingsOpen: false,
+    leftSidebarCollapsed: false,
 };
 
 // EditorApp 实例 (会在 init 后设置)
@@ -157,8 +165,11 @@ let isExporting = false;
 let keyframeMarkerDrag = null;
 let suppressMarkerClickOnce = false;
 let sidebarResizeState = null;
+let preferredLeftSidebarWidth = null;
+let preferredRightSidebarWidth = null;
+let sidebarWidthDebugHistory = [];
 const THEME_STORAGE_KEY = 'visionary_editor_theme';
-const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_left_sidebar_width';
+const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_left_sidebar_width_v4';
 const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_right_sidebar_width';
 const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
 const TIMELINE_MIN_DURATION_SEC = 10;
@@ -213,14 +224,14 @@ const SCENE_DEPTH_SCALE_STEP = 0.001;
 const SCENE_DEPTH_SCALE_MIN_LOG = Math.log10(SCENE_DEPTH_SCALE_MIN);
 const SCENE_DEPTH_SCALE_MAX_LOG = Math.log10(SCENE_DEPTH_SCALE_MAX);
 const MODEL_ANIM_DURATION_FALLBACK_SEC = 2.5;
-const LEFT_SIDEBAR_DEFAULT_WIDTH = 236;
+const LEFT_SIDEBAR_DEFAULT_WIDTH = 290;
 const LEFT_SIDEBAR_MIN_WIDTH = 220;
 const LEFT_SIDEBAR_COMPACT_WIDTH = 230;
 const RIGHT_SIDEBAR_DEFAULT_WIDTH = 380;
 const RIGHT_SIDEBAR_MIN_WIDTH = 272;
 const RIGHT_SIDEBAR_NARROW_WIDTH = 360;
 const RIGHT_SIDEBAR_XNARROW_WIDTH = 330;
-const CENTER_VIEWPORT_MIN_WIDTH = 420;
+const CENTER_VIEWPORT_MIN_WIDTH = 350;
 const EXPORT_PRESET_RESOLUTIONS = [
     { width: 1280, height: 720, label: '1280 x 720 (720p)' },
     { width: 1920, height: 1080, label: '1920 x 1080 (1080p)' },
@@ -255,24 +266,26 @@ function getSidebarHandleWidth(handle) {
 }
 
 function isRightSidebarVisible() {
-    return !!dom.rightSidebar && !dom.rightSidebar.classList.contains('hidden');
+    if (!dom.rightSidebar) return false;
+    if (dom.rightSidebar.classList.contains('floating-toolbar-host')) return false;
+    return !dom.rightSidebar.classList.contains('hidden');
 }
 
 function getCurrentSidebarWidths() {
     return {
-        left: clampSidebarWidth(dom.leftSidebar?.offsetWidth, LEFT_SIDEBAR_DEFAULT_WIDTH, LEFT_SIDEBAR_MIN_WIDTH),
+        left: LEFT_SIDEBAR_DEFAULT_WIDTH,
         right: clampSidebarWidth(dom.rightSidebar?.offsetWidth, RIGHT_SIDEBAR_DEFAULT_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH),
     };
 }
 
 function getSidebarLayoutBounds() {
     const containerWidth = dom.middleSection?.clientWidth || window.innerWidth;
-    const leftHandleWidth = getSidebarHandleWidth(dom.leftSidebarResizer);
+    const leftHandleWidth = 0;
     const rightHandleWidth = isRightSidebarVisible() ? getSidebarHandleWidth(dom.rightSidebarResizer) : 0;
     const rightWidth = isRightSidebarVisible()
         ? clampSidebarWidth(dom.rightSidebar?.offsetWidth, RIGHT_SIDEBAR_DEFAULT_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH)
         : 0;
-    const leftWidth = clampSidebarWidth(dom.leftSidebar?.offsetWidth, LEFT_SIDEBAR_DEFAULT_WIDTH, LEFT_SIDEBAR_MIN_WIDTH);
+    const leftWidth = 0;
 
     return {
         containerWidth,
@@ -292,29 +305,57 @@ function applySidebarWidthClasses(leftWidth, rightWidth) {
 }
 
 function applySidebarWidths(nextLeftWidth, nextRightWidth, persist = true) {
+    preferredLeftSidebarWidth = LEFT_SIDEBAR_DEFAULT_WIDTH;
+    preferredRightSidebarWidth = isRightSidebarVisible()
+        ? clampSidebarWidth(nextRightWidth, RIGHT_SIDEBAR_DEFAULT_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH)
+        : 0;
+
     const bounds = getSidebarLayoutBounds();
-    let leftWidth = clampSidebarWidth(nextLeftWidth, LEFT_SIDEBAR_DEFAULT_WIDTH, LEFT_SIDEBAR_MIN_WIDTH);
+    const leftWidth = LEFT_SIDEBAR_DEFAULT_WIDTH;
+    const leftReservedWidth = 0;
     let rightWidth = isRightSidebarVisible()
         ? clampSidebarWidth(nextRightWidth, RIGHT_SIDEBAR_DEFAULT_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH)
         : 0;
 
     const totalReserved = bounds.leftHandleWidth + bounds.rightHandleWidth;
-    const maxLeft = Math.max(LEFT_SIDEBAR_MIN_WIDTH, bounds.containerWidth - totalReserved - rightWidth - CENTER_VIEWPORT_MIN_WIDTH);
-    leftWidth = Math.min(leftWidth, maxLeft);
+    const maxLeft = LEFT_SIDEBAR_DEFAULT_WIDTH;
 
     if (isRightSidebarVisible()) {
-        const maxRight = Math.max(RIGHT_SIDEBAR_MIN_WIDTH, bounds.containerWidth - totalReserved - leftWidth - CENTER_VIEWPORT_MIN_WIDTH);
+        const maxRight = Math.max(RIGHT_SIDEBAR_MIN_WIDTH, bounds.containerWidth - totalReserved - leftReservedWidth - CENTER_VIEWPORT_MIN_WIDTH);
         rightWidth = Math.min(rightWidth, maxRight);
 
-        const minCenter = bounds.containerWidth - totalReserved - leftWidth - rightWidth;
+        const minCenter = bounds.containerWidth - totalReserved - leftReservedWidth - rightWidth;
         if (minCenter < CENTER_VIEWPORT_MIN_WIDTH) {
             const deficit = CENTER_VIEWPORT_MIN_WIDTH - minCenter;
             rightWidth = Math.max(RIGHT_SIDEBAR_MIN_WIDTH, rightWidth - deficit);
         }
     }
 
+    const debugEntry = {
+        time: new Date().toISOString(),
+        persist,
+        requestedLeft: nextLeftWidth,
+        requestedRight: nextRightWidth,
+        preferredLeft: preferredLeftSidebarWidth,
+        preferredRight: preferredRightSidebarWidth,
+        containerWidth: bounds.containerWidth,
+        totalReserved,
+        currentLeftWidth: bounds.currentLeftWidth,
+        currentRightWidth: bounds.currentRightWidth,
+        maxLeft,
+        appliedLeft: leftWidth,
+        appliedRight: rightWidth,
+        centerMinWidth: CENTER_VIEWPORT_MIN_WIDTH,
+        rightVisible: isRightSidebarVisible(),
+    };
+    sidebarWidthDebugHistory.push(debugEntry);
+    if (sidebarWidthDebugHistory.length > 30) {
+        sidebarWidthDebugHistory = sidebarWidthDebugHistory.slice(-30);
+    }
+    console.log('[Editor Sidebar Width]', debugEntry);
+
     if (dom.leftSidebar) {
-        dom.leftSidebar.style.width = `${leftWidth}px`;
+        dom.leftSidebar.style.width = `${LEFT_SIDEBAR_DEFAULT_WIDTH}px`;
     }
     if (dom.rightSidebar) {
         dom.rightSidebar.style.width = isRightSidebarVisible() ? `${rightWidth}px` : '';
@@ -326,7 +367,6 @@ function applySidebarWidths(nextLeftWidth, nextRightWidth, persist = true) {
     syncCanvasContainerToViewport();
 
     if (persist) {
-        localStorage.setItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY, String(leftWidth));
         if (isRightSidebarVisible()) {
             localStorage.setItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY, String(rightWidth));
         }
@@ -377,11 +417,18 @@ function endSidebarResize() {
 }
 
 function initializeSidebarLayout() {
-    const savedLeft = localStorage.getItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY);
     const savedRight = localStorage.getItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY);
-    const leftWidth = clampSidebarWidth(savedLeft, LEFT_SIDEBAR_DEFAULT_WIDTH, LEFT_SIDEBAR_MIN_WIDTH);
     const rightWidth = clampSidebarWidth(savedRight, RIGHT_SIDEBAR_DEFAULT_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH);
-    applySidebarWidths(leftWidth, rightWidth, false);
+    preferredLeftSidebarWidth = LEFT_SIDEBAR_DEFAULT_WIDTH;
+    preferredRightSidebarWidth = rightWidth;
+    applySidebarWidths(LEFT_SIDEBAR_DEFAULT_WIDTH, rightWidth, false);
+    requestAnimationFrame(() => {
+        applySidebarWidths(
+            LEFT_SIDEBAR_DEFAULT_WIDTH,
+            preferredRightSidebarWidth ?? RIGHT_SIDEBAR_DEFAULT_WIDTH,
+            false
+        );
+    });
 }
 
 function syncCanvasContainerToViewport() {
@@ -645,8 +692,61 @@ function initSceneSettingsUI() {
 }
 
 function setModelEditorActive(active) {
-    dom.btnCloseEditor && (dom.btnCloseEditor.disabled = !active);
     dom.modelSettingsCard?.classList.toggle('inactive', !active);
+    syncViewportGizmoControls();
+}
+
+function syncViewportGizmoControls() {
+    const buttons = [
+        [dom.btnGizmoTranslate, 'translate'],
+        [dom.btnGizmoRotate, 'rotate'],
+        [dom.btnGizmoScale, 'scale'],
+    ];
+    for (const [button, mode] of buttons) {
+        if (!button) continue;
+        button.disabled = !app;
+        button.classList.toggle('active', state.viewportGizmoMode === mode);
+    }
+}
+
+function setViewportGizmoMode(mode, silent = false) {
+    if (!app) return false;
+    const nextMode = state.viewportGizmoMode === mode ? null : mode;
+    if (!app.setViewportGizmoMode?.(nextMode)) {
+        return false;
+    }
+    state.viewportGizmoMode = nextMode;
+    syncViewportGizmoControls();
+    if (!silent) {
+        const labels = { translate: '移动', rotate: '旋转', scale: '缩放' };
+        showInfo(nextMode ? `视口控件: ${labels[nextMode] || nextMode}` : '视口控件: 已关闭');
+    }
+    return true;
+}
+
+function syncSceneSettingsPanel() {
+    dom.sceneSettingsPanel?.classList.toggle('hidden', !state.sceneSettingsOpen);
+    dom.btnToggleSceneSettings?.classList.toggle('active', state.sceneSettingsOpen);
+}
+
+function setSceneSettingsOpen(open) {
+    state.sceneSettingsOpen = Boolean(open);
+    syncSceneSettingsPanel();
+}
+
+function syncLeftSidebarCollapsedState() {
+    const collapsed = Boolean(state.leftSidebarCollapsed);
+    dom.leftSidebar?.classList.toggle('sidebar-collapsed', collapsed);
+    if (dom.modelCountBadge) {
+        dom.modelCountBadge.textContent = collapsed ? '展开' : '收起';
+        dom.modelCountBadge.setAttribute('aria-expanded', String(!collapsed));
+        dom.modelCountBadge.title = collapsed ? '展开模型面板' : '收起模型面板';
+    }
+}
+
+function setLeftSidebarCollapsed(collapsed) {
+    state.leftSidebarCollapsed = Boolean(collapsed);
+    syncLeftSidebarCollapsedState();
 }
 
 function updateThemeToggleLabel(theme) {
@@ -801,6 +901,7 @@ function registerDebugHooks() {
             leftWidth: dom.leftSidebar?.offsetWidth ?? null,
             rightWidth: dom.rightSidebar?.offsetWidth ?? null,
             leftCompact: dom.leftSidebar?.classList.contains('sidebar-compact') ?? false,
+            leftCollapsed: dom.leftSidebar?.classList.contains('sidebar-collapsed') ?? false,
             rightNarrow: dom.rightSidebar?.classList.contains('sidebar-narrow') ?? false,
             rightXNarrow: dom.rightSidebar?.classList.contains('sidebar-xnarrow') ?? false,
             rightVisible: isRightSidebarVisible(),
@@ -808,6 +909,10 @@ function registerDebugHooks() {
             centerViewportRect: dom.centerViewport?.getBoundingClientRect?.() ?? null,
             canvasRect: dom.canvas?.getBoundingClientRect?.() ?? null,
             canvasContainerRect: dom.canvasContainer?.getBoundingClientRect?.() ?? null,
+            preferredLeftSidebarWidth,
+            preferredRightSidebarWidth,
+            centerMinWidth: CENTER_VIEWPORT_MIN_WIDTH,
+            recentWidthHistory: sidebarWidthDebugHistory.slice(),
         }),
         rerenderTimeline: () => {
             updateTimelineUI();
@@ -891,7 +996,9 @@ function updateModelCount() {
     const models = app.getModels();
     const visibleCount = models.filter(m => m.visible).length;
     const totalCount = models.length;
-    dom.modelCountBadge.textContent = `${visibleCount}/${totalCount}`;
+    dom.modelCountBadge.dataset.modelCount = String(totalCount);
+    dom.modelCountBadge.dataset.visibleCount = String(visibleCount);
+    syncLeftSidebarCollapsedState();
 }
 
 function syncCameraSequenceVisibilityState() {
@@ -942,7 +1049,7 @@ function updateModelList() {
     if (models.length === 0) {
         dom.modelList.innerHTML = '<div class="empty-list">' +
             '<p>暂无模型</p>' +
-            '<p class="empty-hint">拖拽文件到此处，或点击下方按钮</p>' +
+            '<p class="empty-hint">拖拽文件到此处，或点击加号按钮</p>' +
             '</div>';
     } else {
         dom.modelList.innerHTML = models.map((model) => `
@@ -996,10 +1103,17 @@ function updateModelList() {
  * 选择模型进行编辑
  */
 function selectModel(id) {
+    if (!id) return;
+    if (state.selectedModelId === id) {
+        closeEditor();
+        showInfo('已取消选中模型');
+        return;
+    }
     const model = app.getModel(id);
     if (!model) return;
 
     state.selectedModelId = id;
+    app.setSelectedModel?.(id);
 
     // 更新 UI
     if (dom.selectedModelName) dom.selectedModelName.textContent = model.name;
@@ -1059,6 +1173,7 @@ function updateModelFromEditor() {
 
     const scale = parseFloat(dom.scaleS?.value || 1);
     app.setModelScale(id, scale);
+    app.refreshSelectedModelViewportGizmo?.();
 
     if (!isInputLabelDragging) {
         showInfo('模型已更新');
@@ -1071,6 +1186,7 @@ function updateModelFromEditor() {
 function resetTransform() {
     if (!state.selectedModelId || !app) return;
     app.resetModelTransform(state.selectedModelId);
+    app.setSelectedModel?.(state.selectedModelId);
     const model = app.getModel(state.selectedModelId);
     if (model) {
         updateEditorValues(model);
@@ -1082,10 +1198,11 @@ function resetTransform() {
  * 关闭模型编辑器
  */
 function closeEditor() {
-    if (dom.onnxAnimSection) dom.onnxAnimSection.classList.add('hidden');
     if (dom.selectedModelName) dom.selectedModelName.textContent = '未选中模型';
     state.selectedModelId = null;
+    app?.setSelectedModel?.(null);
     setModelEditorActive(false);
+    if (dom.onnxAnimSection) dom.onnxAnimSection.classList.add('inactive');
     updateModelList();
 }
 
@@ -1125,24 +1242,48 @@ function modelHasTimelineAnimation(model) {
 
 function updateModelAnimationControls(id = state.selectedModelId) {
     if (!app || !id) {
-        if (dom.onnxAnimSection) dom.onnxAnimSection.classList.add('hidden');
+        if (dom.onnxAnimSection) dom.onnxAnimSection.classList.add('inactive');
+        if (dom.modelAnimSpeed) {
+            dom.modelAnimSpeed.value = speedToSliderValue(1).toFixed(3);
+            dom.modelAnimSpeed.disabled = true;
+        }
+        if (dom.modelAnimSpeedValue) {
+            if (document.activeElement !== dom.modelAnimSpeedValue) {
+                dom.modelAnimSpeedValue.value = '1.000';
+            }
+            dom.modelAnimSpeedValue.disabled = true;
+        }
         return;
     }
 
     const anim = app.getModelAnimationState(id);
     if (!anim || !anim.supported) {
-        if (dom.onnxAnimSection) dom.onnxAnimSection.classList.add('hidden');
+        if (dom.onnxAnimSection) dom.onnxAnimSection.classList.add('inactive');
+        if (dom.modelAnimSpeed) {
+            dom.modelAnimSpeed.value = speedToSliderValue(1).toFixed(3);
+            dom.modelAnimSpeed.disabled = true;
+        }
+        if (dom.modelAnimSpeedValue) {
+            if (document.activeElement !== dom.modelAnimSpeedValue) {
+                dom.modelAnimSpeedValue.value = '1.000';
+            }
+            dom.modelAnimSpeedValue.disabled = true;
+        }
         return;
     }
 
-    if (dom.onnxAnimSection) dom.onnxAnimSection.classList.remove('hidden');
+    if (dom.onnxAnimSection) dom.onnxAnimSection.classList.remove('inactive');
 
     const speed = Number(anim.speed || 1);
     if (dom.modelAnimSpeed) {
         dom.modelAnimSpeed.value = speedToSliderValue(speed).toFixed(3);
+        dom.modelAnimSpeed.disabled = false;
     }
     if (dom.modelAnimSpeedValue && document.activeElement !== dom.modelAnimSpeedValue) {
         dom.modelAnimSpeedValue.value = speed.toFixed(3);
+        dom.modelAnimSpeedValue.disabled = false;
+    } else if (dom.modelAnimSpeedValue) {
+        dom.modelAnimSpeedValue.disabled = false;
     }
 }
 
@@ -3705,8 +3846,13 @@ function initEventListeners() {
     });
 
     // 模型编辑器 - 编辑器控件
-    dom.btnCloseEditor?.addEventListener('click', closeEditor);
     dom.btnResetTransform?.addEventListener('click', resetTransform);
+    dom.modelCountBadge?.addEventListener('click', () => setLeftSidebarCollapsed(!state.leftSidebarCollapsed));
+    dom.btnGizmoTranslate?.addEventListener('click', () => setViewportGizmoMode('translate'));
+    dom.btnGizmoRotate?.addEventListener('click', () => setViewportGizmoMode('rotate'));
+    dom.btnGizmoScale?.addEventListener('click', () => setViewportGizmoMode('scale'));
+    dom.btnToggleSceneSettings?.addEventListener('click', () => setSceneSettingsOpen(!state.sceneSettingsOpen));
+    dom.btnSceneSettingsClose?.addEventListener('click', () => setSceneSettingsOpen(false));
     dom.sceneBgColorPicker?.addEventListener('input', (e) => {
         applySceneBackgroundHex(e.target.value, 'custom');
     });
@@ -3882,11 +4028,20 @@ async function init() {
         showError('Failed to initialize editor');
         return;
     }
+    state.viewportGizmoMode = app.getViewportGizmoMode?.() ?? state.viewportGizmoMode;
     state.cameraSequenceVisible = Boolean(app.getCameraSequenceVisible?.() ?? state.cameraSequenceVisible);
 
     // 注册模型变化回调
     app.onModelsChanged((models) => {
         updateModelList();
+        if (state.selectedModelId) {
+            const selected = app.getModel(state.selectedModelId);
+            if (selected) {
+                updateEditorValues(selected);
+            } else {
+                closeEditor();
+            }
+        }
         updateModelAnimationControls(state.selectedModelId);
         
         let maxEnd = state.timelineDurationSec;
@@ -3903,6 +4058,10 @@ async function init() {
         
         if (typeof renderModelTracks === 'function') renderModelTracks();
     });
+    app.onViewportGizmoTransform?.((id, model) => {
+        if (id !== state.selectedModelId) return;
+        updateEditorValues(model);
+    });
     app.onCameraInteraction?.((kind) => {
         if (!state.isPlaying) return;
         if (kind !== 'drag' && kind !== 'wheel' && kind !== 'keyboard') return;
@@ -3918,15 +4077,21 @@ async function init() {
     // 初始化事件监听
     initEventListeners();
     initializeSidebarLayout();
+    syncLeftSidebarCollapsedState();
     syncCanvasContainerToViewport();
     window.addEventListener('resize', () => {
-        const current = getCurrentSidebarWidths();
-        applySidebarWidths(current.left, current.right, false);
+        applySidebarWidths(
+            preferredLeftSidebarWidth ?? LEFT_SIDEBAR_DEFAULT_WIDTH,
+            preferredRightSidebarWidth ?? RIGHT_SIDEBAR_DEFAULT_WIDTH,
+            false
+        );
         syncCanvasContainerToViewport();
     });
     initSceneSettingsUI();
     initTimelineUI();
     closeEditor();
+    syncSceneSettingsPanel();
+    syncViewportGizmoControls();
     startAnimationControlsSyncLoop();
 
     // 初始化时间轴按钮状态
@@ -3960,5 +4125,6 @@ async function init() {
 
 // 启动应用
 document.addEventListener('DOMContentLoaded', init);
+
 
 
