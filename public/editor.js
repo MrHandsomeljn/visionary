@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.1.5
+ * Visionary Editor UI Controller 0.1.6
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -19,6 +19,9 @@ const dom = {
     btnClearScene: document.getElementById('btnClearScene'),
     btnHelpTips: document.getElementById('btnHelpTips'),
     btnThemeToggle: document.getElementById('btnThemeToggle'),
+    btnClearScreen: document.getElementById('btnClearScreen'),
+    exportToolFlyout: document.getElementById('exportToolFlyout'),
+    btnExportFlyout: document.getElementById('btnExportFlyout'),
 
     // 模式按钮
     modeColor: document.getElementById('modeColor'),
@@ -86,8 +89,14 @@ const dom = {
     bottomTimeline: document.getElementById('bottom-timeline'),
     btnAddKeyframe: document.getElementById('btnAddKeyframe'),
     btnRemoveKeyframe: document.getElementById('btnRemoveKeyframe'),
+    btnImportCameraSequence: document.getElementById('btnImportCameraSequence'),
+    btnExportCameraSequence: document.getElementById('btnExportCameraSequence'),
+    btnClearCameraSequence: document.getElementById('btnClearCameraSequence'),
     btnPlayCamera: document.getElementById('btnPlayCamera'),
     btnLoopCamera: document.getElementById('btnLoopCamera'),
+    btnToggleCameraSettings: document.getElementById('btnToggleCameraSettings'),
+    btnCameraSettingsClose: document.getElementById('btnCameraSettingsClose'),
+    cameraSettingsPanel: document.getElementById('cameraSettingsPanel'),
     btnToggleCameraSequence: document.getElementById('btnToggleCameraSequence'),
     timelineCameraInterpolation: document.getElementById('timelineCameraInterpolation'),
     timelineInterpolationParamControl: document.getElementById('timelineInterpolationParamControl'),
@@ -103,6 +112,7 @@ const dom = {
 
     // 文件输入
     fileInput: document.getElementById('fileInput'),
+    cameraSequenceFileInput: document.getElementById('cameraSequenceFileInput'),
     modalFileInput: document.getElementById('modalFileInput'),
 
     // 模态框
@@ -127,7 +137,7 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.1.5',
+    VERSION: '0.1.6',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     cameraSequenceVisible: true,
@@ -142,12 +152,16 @@ const state = {
     cameraInterpolationMode: 'linear',
     cameraInterpolationParam: 0.5,
     timelineDurationSec: 10,
-    sceneBackgroundHex: '#050814',
+    sceneBackgroundHex: '#707070',
     sceneSkyPresetId: 'night',
     sceneDepthRangeScale: 1.0,
     sceneCameraFov: 45.0,
     viewportGizmoMode: null,
     sceneSettingsOpen: false,
+    cameraSettingsOpen: false,
+    exportFlyoutOpen: false,
+    clearScreenMode: false,
+    clearScreenPreview: false,
     leftSidebarCollapsed: false,
 };
 
@@ -244,7 +258,7 @@ const FALLBACK_SKY_PRESETS = [
     { id: 'clear_day', name: '晴空', colorHex: '#6EAEEA' },
     { id: 'sunset', name: '日落', colorHex: '#E9875A' },
     { id: 'dusk', name: '暮光', colorHex: '#4A5D86' },
-    { id: 'night', name: '夜空', colorHex: '#050814' },
+    { id: 'night', name: '夜空', colorHex: '#707070' },
 ];
 
 function normalizeHexColor(value) {
@@ -521,7 +535,6 @@ function renderSkyPresetGrid() {
     dom.skyPresetGrid.innerHTML = presets.map((preset) => `
         <button class="sky-preset-btn ${state.sceneSkyPresetId === preset.id ? 'active' : ''}" data-sky-id="${preset.id}" title="${preset.name}">
             <span class="sky-preset-swatch" style="background:${preset.colorHex};"></span>
-            <span class="sky-preset-name">${preset.name}</span>
         </button>
     `).join('');
 }
@@ -734,6 +747,44 @@ function setSceneSettingsOpen(open) {
     syncSceneSettingsPanel();
 }
 
+function positionCameraSettingsPanel() {
+    if (!dom.cameraSettingsPanel || !dom.btnToggleCameraSettings) return;
+    const anchorRect = dom.btnToggleCameraSettings.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    const margin = 12;
+    const gap = 14;
+    const left = margin;
+
+    const panelHeight = dom.cameraSettingsPanel.offsetHeight || 0;
+    let top = anchorRect.top - gap - panelHeight;
+    if (top < margin) {
+        top = Math.min(viewportHeight - margin - panelHeight, anchorRect.bottom + gap);
+    }
+
+    dom.cameraSettingsPanel.style.left = `${left}px`;
+    dom.cameraSettingsPanel.style.top = `${Math.max(margin, top)}px`;
+}
+
+function syncCameraSettingsPanel() {
+    dom.cameraSettingsPanel?.classList.toggle('hidden', !state.cameraSettingsOpen);
+    dom.btnToggleCameraSettings?.classList.toggle('active', state.cameraSettingsOpen);
+    if (state.cameraSettingsOpen) {
+        requestAnimationFrame(positionCameraSettingsPanel);
+    }
+}
+
+function setCameraSettingsOpen(open) {
+    state.cameraSettingsOpen = Boolean(open);
+    syncCameraSettingsPanel();
+}
+
+function mountCameraSettingsPanelToMainUi() {
+    const mainUi = document.getElementById('main-ui');
+    if (!mainUi || !dom.cameraSettingsPanel) return;
+    if (dom.cameraSettingsPanel.parentElement === mainUi) return;
+    mainUi.appendChild(dom.cameraSettingsPanel);
+}
+
 function syncLeftSidebarCollapsedState() {
     const collapsed = Boolean(state.leftSidebarCollapsed);
     dom.leftSidebar?.classList.toggle('sidebar-collapsed', collapsed);
@@ -752,8 +803,28 @@ function setLeftSidebarCollapsed(collapsed) {
 function updateThemeToggleLabel(theme) {
     if (!dom.btnThemeToggle) return;
     const nextTheme = theme === 'light' ? 'dark' : 'light';
-    dom.btnThemeToggle.textContent = nextTheme === 'light' ? '白天' : '夜间';
-    dom.btnThemeToggle.title = nextTheme === 'light' ? '切换到白天' : '切换到夜间';
+    const tooltip = nextTheme === 'light' ? '切换到白天' : '切换到夜间';
+    dom.btnThemeToggle.title = tooltip;
+    dom.btnThemeToggle.setAttribute('data-tooltip', tooltip);
+    dom.btnThemeToggle.innerHTML = nextTheme === 'light'
+        ? `
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v2" />
+                <path d="M12 19v2" />
+                <path d="M3 12h2" />
+                <path d="M19 12h2" />
+                <path d="m5.64 5.64 1.41 1.41" />
+                <path d="m16.95 16.95 1.41 1.41" />
+                <path d="m5.64 18.36 1.41-1.41" />
+                <path d="m16.95 7.05 1.41-1.41" />
+                <circle cx="12" cy="12" r="4" />
+            </svg>
+        `
+        : `
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+            </svg>
+        `;
 }
 
 function applyTheme(theme, persist = false) {
@@ -794,6 +865,51 @@ function openHelpTipsModal() {
 
 function closeHelpTipsModal() {
     dom.helpTipsModal?.classList.add('hidden');
+}
+
+function syncExportFlyoutState() {
+    dom.exportToolFlyout?.classList.toggle('is-open', Boolean(state.exportFlyoutOpen));
+    dom.btnExportFlyout?.classList.toggle('active', Boolean(state.exportFlyoutOpen));
+    dom.btnExportFlyout?.setAttribute('aria-expanded', state.exportFlyoutOpen ? 'true' : 'false');
+}
+
+function setExportFlyoutOpen(open) {
+    state.exportFlyoutOpen = Boolean(open);
+    syncExportFlyoutState();
+}
+
+function toggleExportFlyout() {
+    setExportFlyoutOpen(!state.exportFlyoutOpen);
+}
+
+function syncClearScreenState() {
+    document.body.classList.toggle('clear-screen-mode', Boolean(state.clearScreenMode));
+    document.body.classList.toggle('clear-screen-preview', !state.clearScreenMode && Boolean(state.clearScreenPreview));
+    dom.btnClearScreen?.classList.toggle('active', Boolean(state.clearScreenMode));
+}
+
+function setClearScreenPreview(active) {
+    if (state.clearScreenMode) return;
+    state.clearScreenPreview = Boolean(active);
+    syncClearScreenState();
+}
+
+function setClearScreenMode(active, silent = false) {
+    state.clearScreenMode = Boolean(active);
+    if (state.clearScreenMode) {
+        state.clearScreenPreview = false;
+        setExportFlyoutOpen(false);
+        setSceneSettingsOpen(false);
+        setCameraSettingsOpen(false);
+    }
+    syncClearScreenState();
+    if (!silent) {
+        showInfo(`清屏模式: ${state.clearScreenMode ? '开启' : '关闭'}`);
+    }
+}
+
+function toggleClearScreenMode(silent = false) {
+    setClearScreenMode(!state.clearScreenMode, silent);
 }
 
 function getInputStep(input) {
@@ -1032,9 +1148,9 @@ function updateCameraSequenceToggleButton() {
     dom.btnToggleCameraSequence.classList.toggle('active', visible);
     const textEl = dom.btnToggleCameraSequence.querySelector('.btn-text');
     if (textEl) {
-        textEl.textContent = visible ? '相机序列可见' : '相机序列隐藏';
+        textEl.textContent = visible ? '可见' : '隐藏';
     } else {
-        dom.btnToggleCameraSequence.textContent = visible ? '相机序列可见' : '相机序列隐藏';
+        dom.btnToggleCameraSequence.textContent = visible ? '可见' : '隐藏';
     }
 }
 
@@ -1970,7 +2086,7 @@ async function saveScene() {
         const assets = [];
         let skipped = 0;
 
-        const bgHex = normalizeHexColor(state.sceneBackgroundHex) || '#050814';
+        const bgHex = normalizeHexColor(state.sceneBackgroundHex) || '#707070';
         const r = Number.parseInt(bgHex.slice(1, 3), 16) / 255;
         const g = Number.parseInt(bgHex.slice(3, 5), 16) / 255;
         const b = Number.parseInt(bgHex.slice(5, 7), 16) / 255;
@@ -3275,18 +3391,115 @@ function removeKeyframe() {
     showInfo(`关键帧已删除: ${removed.time.toFixed(3)}s`);
 }
 
+function buildCameraSequenceExportPayload() {
+    return {
+        version: 1,
+        timelineFps: Number(state.timelineFps || 24),
+        timelineDurationSec: Number(state.timelineDurationSec || 10),
+        timelinePlaybackSpeed: Number(state.timelinePlaybackSpeed || 1),
+        interpolationMode: normalizeCameraInterpolationMode(state.cameraInterpolationMode),
+        interpolationParam: Number(state.cameraInterpolationParam || 0.5),
+        keyframes: (Array.isArray(state.keyframes) ? state.keyframes : []).map((keyframe) => ({
+            frame: Math.round(Number(keyframe.frame) || 0),
+            time: Number(keyframe.time) || 0,
+            camera: keyframe.camera,
+        })),
+    };
+}
+
+function exportCameraSequence() {
+    const payload = buildCameraSequenceExportPayload();
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'visionary-camera-sequence.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    showInfo(`相机序列已导出: ${payload.keyframes.length} 个关键帧`);
+}
+
+function clearCameraSequence() {
+    if (!confirm('确定要清空当前相机序列吗？')) return;
+    stopTimelinePlayback(false);
+    state.keyframes = [];
+    state.currentKeyframeIndex = -1;
+    setTimelineFrame(0, { applyPose: false, syncSlider: true });
+    updateTimelineUI();
+    syncCameraSequenceVisualization();
+    showInfo('相机序列已清空');
+}
+
+async function importCameraSequenceFromFile(file) {
+    if (!file) return;
+    try {
+        const raw = JSON.parse(await file.text());
+        if (!Array.isArray(raw?.keyframes)) {
+            throw new Error('缺少 keyframes 数组');
+        }
+
+        if (Number.isFinite(raw.timelineFps)) {
+            setTimelineFps(raw.timelineFps);
+        }
+        if (Number.isFinite(raw.timelinePlaybackSpeed)) {
+            state.timelinePlaybackSpeed = Number(raw.timelinePlaybackSpeed) || 1;
+            if (dom.timelineSpeed) dom.timelineSpeed.value = String(state.timelinePlaybackSpeed);
+        }
+        if (raw.interpolationMode) {
+            setCameraInterpolationMode(raw.interpolationMode, true);
+        }
+        if (Number.isFinite(raw.interpolationParam)) {
+            setCameraInterpolationParam(raw.interpolationParam, true);
+        }
+        if (Number.isFinite(raw.timelineDurationSec)) {
+            state.timelineDurationSec = Math.max(TIMELINE_MIN_DURATION_SEC, Number(raw.timelineDurationSec));
+        }
+
+        state.keyframes = raw.keyframes
+            .map((item) => {
+                const time = Number(item?.time);
+                const frameRaw = Number(item?.frame);
+                const frame = Number.isFinite(frameRaw)
+                    ? Math.round(frameRaw)
+                    : timeToFrame(Number.isFinite(time) ? time : 0);
+                if (!item?.camera?.position) return null;
+                return {
+                    frame: clampTimelineFrame(frame),
+                    time: Number.isFinite(time) ? time : frameToTime(frame),
+                    camera: item.camera,
+                };
+            })
+            .filter(Boolean)
+            .sort((a, b) => a.frame - b.frame);
+
+        state.currentKeyframeIndex = -1;
+        setTimelineFrame(0, { applyPose: false, syncSlider: true });
+        updateTimelineUI();
+        syncCameraSequenceVisualization();
+        showInfo(`相机序列已导入: ${state.keyframes.length} 个关键帧`);
+    } catch (error) {
+        console.error(`[Editor ${state.VERSION}] importCameraSequence failed:`, error);
+        showError(`导入相机序列失败: ${error?.message || String(error)}`);
+    }
+}
+
 /**
  * 更新播放按钮 UI
  */
 function updatePlayButtonUI() {
     if (!dom.btnPlayCamera) return;
-    const icon = dom.btnPlayCamera.querySelector('.btn-icon');
     if (state.isPlaying) {
         dom.btnPlayCamera.classList.add('active');
-        if (icon) icon.textContent = '暂停';
+        dom.btnPlayCamera.classList.add('is-playing');
+        dom.btnPlayCamera.setAttribute('title', '暂停相机动画');
+        dom.btnPlayCamera.setAttribute('aria-label', '暂停相机动画');
     } else {
         dom.btnPlayCamera.classList.remove('active');
-        if (icon) icon.textContent = '播放';
+        dom.btnPlayCamera.classList.remove('is-playing');
+        dom.btnPlayCamera.setAttribute('title', '播放相机动画');
+        dom.btnPlayCamera.setAttribute('aria-label', '播放相机动画');
     }
 }
 
@@ -3729,6 +3942,12 @@ function handleGlobalShortcuts(e) {
     if (e.repeat) return;
     if (isEditingText()) return;
 
+    if (e.key === '`' || e.key === '~') {
+        e.preventDefault();
+        toggleClearScreenMode();
+        return;
+    }
+
     if (e.key === '?') {
         e.preventDefault();
         openHelpTipsModal();
@@ -3745,6 +3964,24 @@ function handleGlobalShortcuts(e) {
         e.preventDefault();
         addKeyframeFromShortcut();
         return;
+    }
+
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === '1') {
+            e.preventDefault();
+            setViewportGizmoMode('translate');
+            return;
+        }
+        if (e.key === '2') {
+            e.preventDefault();
+            setViewportGizmoMode('rotate');
+            return;
+        }
+        if (e.key === '3') {
+            e.preventDefault();
+            setViewportGizmoMode('scale');
+            return;
+        }
     }
 
     if (e.key.toLowerCase() === 'f') {
@@ -3791,6 +4028,21 @@ function initEventListeners() {
     dom.btnRenderVideo?.addEventListener('click', () => openExportModal('video'));
     dom.btnRenderImage?.addEventListener('click', () => openExportModal('image'));
     dom.btnThemeToggle?.addEventListener('click', toggleTheme);
+    dom.btnClearScreen?.addEventListener('click', (e) => {
+        e.preventDefault();
+        toggleClearScreenMode();
+    });
+    dom.btnClearScreen?.addEventListener('mouseenter', () => setClearScreenPreview(true));
+    dom.btnClearScreen?.addEventListener('mouseleave', () => setClearScreenPreview(false));
+    dom.btnClearScreen?.addEventListener('focus', () => setClearScreenPreview(true));
+    dom.btnClearScreen?.addEventListener('blur', () => setClearScreenPreview(false));
+    dom.btnExportFlyout?.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleExportFlyout();
+    });
+    dom.btnRenderVideo?.addEventListener('click', () => setExportFlyoutOpen(false));
+    dom.btnRenderImage?.addEventListener('click', () => setExportFlyoutOpen(false));
 
     // 模型操作 - 添加模型按钮（打开文件选择器）
     dom.btnAddModel?.addEventListener('click', openModelFileSelector);
@@ -3817,6 +4069,13 @@ function initEventListeners() {
             // 清空 input 以便重复选择同一文件
             e.target.value = '';
         }
+    });
+    dom.cameraSequenceFileInput?.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            await importCameraSequenceFromFile(file);
+        }
+        e.target.value = '';
     });
 
     // 模态框按钮
@@ -3853,6 +4112,8 @@ function initEventListeners() {
     dom.btnGizmoScale?.addEventListener('click', () => setViewportGizmoMode('scale'));
     dom.btnToggleSceneSettings?.addEventListener('click', () => setSceneSettingsOpen(!state.sceneSettingsOpen));
     dom.btnSceneSettingsClose?.addEventListener('click', () => setSceneSettingsOpen(false));
+    dom.btnToggleCameraSettings?.addEventListener('click', () => setCameraSettingsOpen(!state.cameraSettingsOpen));
+    dom.btnCameraSettingsClose?.addEventListener('click', () => setCameraSettingsOpen(false));
     dom.sceneBgColorPicker?.addEventListener('input', (e) => {
         applySceneBackgroundHex(e.target.value, 'custom');
     });
@@ -3908,6 +4169,9 @@ function initEventListeners() {
     // 时间轴
     dom.btnAddKeyframe?.addEventListener('click', addKeyframe);
     dom.btnRemoveKeyframe?.addEventListener('click', removeKeyframe);
+    dom.btnImportCameraSequence?.addEventListener('click', () => dom.cameraSequenceFileInput?.click());
+    dom.btnExportCameraSequence?.addEventListener('click', exportCameraSequence);
+    dom.btnClearCameraSequence?.addEventListener('click', clearCameraSequence);
     dom.btnPlayCamera?.addEventListener('click', playCameraAnimation);
     dom.btnLoopCamera?.addEventListener('click', toggleCameraLoop);
     dom.btnToggleCameraSequence?.addEventListener('click', () => {
@@ -3970,12 +4234,36 @@ function initEventListeners() {
     // 全局快捷键
     document.addEventListener('keydown', handleGlobalShortcuts);
     document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && state.cameraSettingsOpen) {
+            setCameraSettingsOpen(false);
+            return;
+        }
+        if (e.key === 'Escape' && state.exportFlyoutOpen) {
+            setExportFlyoutOpen(false);
+            return;
+        }
         if (e.key === 'Escape' && dom.helpTipsModal && !dom.helpTipsModal.classList.contains('hidden')) {
             closeHelpTipsModal();
             return;
         }
         if (e.key === 'Escape' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
             closeExportModal();
+        }
+    });
+    document.addEventListener('pointerdown', (e) => {
+        if (!state.exportFlyoutOpen) return;
+        if (dom.exportToolFlyout?.contains(e.target)) return;
+        setExportFlyoutOpen(false);
+    });
+    document.addEventListener('pointerdown', (e) => {
+        if (!state.cameraSettingsOpen) return;
+        if (dom.cameraSettingsPanel?.contains(e.target)) return;
+        if (dom.btnToggleCameraSettings?.contains(e.target)) return;
+        setCameraSettingsOpen(false);
+    });
+    window.addEventListener('resize', () => {
+        if (state.cameraSettingsOpen) {
+            positionCameraSettingsPanel();
         }
     });
 
@@ -3995,6 +4283,8 @@ async function init() {
         dom.versionLabel.textContent = state.VERSION;
     }
     initTheme();
+    syncClearScreenState();
+    mountCameraSettingsPanelToMainUi();
 
     // 检查关键 DOM 元素是否存在
     if (!dom.canvas) {
@@ -4125,6 +4415,3 @@ async function init() {
 
 // 启动应用
 document.addEventListener('DOMContentLoaded', init);
-
-
-

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visionary Editor 0.1.5</title>
+    <title>Visionary Editor 0.1.6</title>
     <link rel="stylesheet" href="./editor.css">
 </head>
 <body class="theme-light">
@@ -40,67 +40,38 @@
 
         <!-- Main UI -->
         <div id="main-ui">
-            <!-- Top Menu Bar -->
-            <div id="top-menu">
-                <div class="menu-section">
-                    <span class="menu-label">场景</span>
-                    <div class="menu-actions">
-                        <button id="btnSaveScene" class="menu-btn">
-                            <span class="menu-btn-text">保存</span>
-                        </button>
-                        <button id="btnLoadScene" class="menu-btn">
-                            <span class="menu-btn-text">加载</span>
-                        </button>
-                        <button id="btnClearScene" class="menu-btn">
-                            <span class="menu-btn-text">清空</span>
-                        </button>
-                    </div>
-                </div>
-                <div class="menu-section">
-                    <span class="menu-label">模式</span>
-                    <div class="menu-actions">
-                        <button class="menu-btn menu-btn-active" data-mode="color" id="modeColor">
-                            <span class="menu-btn-text">图片</span>
-                        </button>
-                        <button class="menu-btn" data-mode="depth" id="modeDepth">
-                            <span class="menu-btn-text">深度图</span>
-                        </button>
-                        <button class="menu-btn" data-mode="normal" id="modeNormal">
-                            <span class="menu-btn-text">法向图</span>
-                        </button>
-                    </div>
-                </div>
-                <div class="menu-section">
-                    <span class="menu-label">渲染</span>
-                    <div class="menu-actions">
-                        <button class="menu-btn" data-render="video" id="renderVideo">
-                            <span class="menu-btn-text">视频</span>
-                        </button>
-                        <button class="menu-btn" data-render="image" id="renderImage">
-                            <span class="menu-btn-text">图片</span>
-                        </button>
-                    </div>
-                </div>
-                <div class="menu-spacer"></div>
-                <div class="menu-section menu-section-right">
-                    <button id="btnHelpTips" class="help-tips-btn" title="查看操作提示">
-                        <span aria-hidden="true">i</span>
-                    </button>
-                    <button id="btnThemeToggle" class="theme-toggle-btn" title="切换白天/夜间">
-                        白天
-                    </button>
-                    <span class="version-label" id="versionLabel">0.1.5</span>
-                </div>
-            </div>
-
             <!-- Middle Section: Three-Column Layout -->
             <div id="middle-section">
                 <!-- Left: Model List -->
                 <div id="left-sidebar">
                     <div class="sidebar-header">
-                        <h2>模型列表</h2>
+                        <h2>场景管理</h2>
                         <div class="sidebar-header-actions">
-                            <button type="button" id="btnAddModel" class="sidebar-add-btn" title="加载模型" aria-label="加载模型">+</button>
+                            <button type="button" id="btnAddModel" class="sidebar-add-btn" title="加载模型" aria-label="加载模型">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M12 5v14M5 12h14" />
+                                </svg>
+                            </button>
+                            <button type="button" id="btnLoadScene" class="sidebar-icon-btn" title="加载场景" aria-label="加载场景">
+                                <svg class="filled-icon" viewBox="0 0 12 12" aria-hidden="true">
+                                    <path fill-rule="evenodd" clip-rule="evenodd" d="M1.5 3.5C1.5 2.67157 2.17157 2 3 2H9C9.82843 2 10.5 2.67157 10.5 3.5V8.5C10.5 9.32843 9.82843 10 9 10H8C7.72386 10 7.5 9.77614 7.5 9.5C7.5 9.22386 7.72386 9 8 9H9C9.27614 9 9.5 8.77614 9.5 8.5V3.5C9.5 3.22386 9.27614 3 9 3H3C2.72386 3 2.5 3.22386 2.5 3.5V8.5C2.5 8.77614 2.72386 9 3 9H4C4.27614 9 4.5 9.22386 4.5 9.5C4.5 9.77614 4.27614 10 4 10H3C2.17157 10 1.5 9.32843 1.5 8.5V3.5ZM6.5 7L7.1 7.8C7.26568 8.02091 7.57908 8.06568 7.8 7.9C8.02091 7.73431 8.06568 7.42091 7.9 7.2L6.72 5.62666C6.36 5.14666 5.64 5.14666 5.28 5.62666L4.1 7.2C3.93431 7.42091 3.97908 7.73431 4.2 7.9C4.42091 8.06568 4.73431 8.02091 4.9 7.8L5.5 6.99999V10.5C5.5 10.7761 5.72386 11 6 11C6.27614 11 6.5 10.7761 6.5 10.5V7Z" />
+                                </svg>
+                            </button>
+                            <button type="button" id="btnSaveScene" class="sidebar-icon-btn" title="保存场景" aria-label="保存场景">
+                                <svg class="filled-icon" viewBox="0 0 12 12" aria-hidden="true">
+                                    <path fill-rule="evenodd" clip-rule="evenodd" d="M1.5 3.5C1.5 2.67157 2.17157 2 3 2H9C9.82843 2 10.5 2.67157 10.5 3.5V8.5C10.5 9.32843 9.82843 10 9 10H8C7.72386 10 7.5 9.77614 7.5 9.5C7.5 9.22386 7.72386 9 8 9H9C9.27614 9 9.5 8.77614 9.5 8.5V3.5C9.5 3.22386 9.27614 3 9 3H3C2.72386 3 2.5 3.22386 2.5 3.5V8.5C2.5 8.77614 2.72386 9 3 9H4C4.27614 9 4.5 9.22386 4.5 9.5C4.5 9.77614 4.27614 10 4 10H3C2.17157 10 1.5 9.32843 1.5 8.5V3.5ZM5.5 7L4.9 6.2C4.73431 5.97909 4.42091 5.93432 4.2 6.1C3.97908 6.26569 3.93431 6.57909 4.1 6.8L5.28 8.37334C5.64 8.85334 6.36 8.85334 6.72 8.37334L7.9 6.8C8.06568 6.57909 8.02091 6.26569 7.8 6.1C7.57908 5.93432 7.26568 5.97909 7.1 6.2L6.5 7V3.5C6.5 3.22386 6.27614 3 6 3C5.72386 3 5.5 3.22386 5.5 3.5V7ZM4 9C3.72386 9 3.5 9.22386 3.5 9.5C3.5 9.77614 3.72386 10 4 10H8C8.27614 10 8.5 9.77614 8.5 9.5C8.5 9.22386 8.27614 9 8 9H4Z" />
+                                </svg>
+                            </button>
+                            <button type="button" id="btnClearScene" class="sidebar-icon-btn" title="清空场景" aria-label="清空场景">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M8 8v9" />
+                                    <path d="M12 8v9" />
+                                    <path d="M16 8v9" />
+                                    <path d="M4 6h16" />
+                                    <path d="M9 6V4h6v2" />
+                                    <path d="M6.5 6l.7 12h9.6l.7-12" />
+                                </svg>
+                            </button>
                             <button
                                 type="button"
                                 class="sidebar-toggle-btn"
@@ -224,8 +195,8 @@
                                         <span>背景色</span>
                                     </label>
                                     <div class="property-inputs scene-bg-color-row">
-                                        <input type="color" id="sceneBgColorPicker" value="#050814">
-                                        <input type="text" id="sceneBgColorHex" value="#050814" maxlength="7" placeholder="#RRGGBB">
+                                        <input type="color" id="sceneBgColorPicker" value="#707070">
+                                        <input type="text" id="sceneBgColorHex" value="#707070" maxlength="7" placeholder="#RRGGBB">
                                     </div>
                                 </div>
 
@@ -235,6 +206,23 @@
                                     </label>
                                     <div class="property-inputs">
                                         <div id="skyPresetGrid" class="sky-preset-grid"></div>
+                                    </div>
+                                </div>
+
+                                <div class="property-row">
+                                    <label class="property-label">
+                                        <span>模式</span>
+                                    </label>
+                                    <div class="property-inputs render-mode-row">
+                                        <button class="menu-btn menu-btn-active" data-mode="color" id="modeColor">
+                                            <span class="menu-btn-text">图片</span>
+                                        </button>
+                                        <button class="menu-btn" data-mode="depth" id="modeDepth">
+                                            <span class="menu-btn-text">深度图</span>
+                                        </button>
+                                        <button class="menu-btn" data-mode="normal" id="modeNormal">
+                                            <span class="menu-btn-text">法向图</span>
+                                        </button>
                                     </div>
                                 </div>
 
@@ -266,8 +254,63 @@
                         <button id="btnGizmoRotate" class="floating-tool-btn" data-tooltip="旋转" aria-label="旋转">R</button>
                         <button id="btnGizmoScale" class="floating-tool-btn" data-tooltip="缩放" aria-label="缩放">S</button>
                     </div>
+                    <div class="floating-tool-group floating-tool-group-clear" aria-label="清屏工具">
+                        <button id="btnClearScreen" class="floating-tool-btn" data-tooltip="清屏" aria-label="清屏">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M8 4H4v4" />
+                                <path d="M16 4h4v4" />
+                                <path d="M20 16v4h-4" />
+                                <path d="M4 16v4h4" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="floating-tool-group" aria-label="导出工具">
+                        <div id="exportToolFlyout" class="floating-tool-flyout" aria-label="导出">
+                            <div class="floating-tool-flyout-panel" aria-hidden="true">
+                                <button class="floating-tool-btn" data-render="image" id="renderImage" data-tooltip="图片" aria-label="导出图片">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <rect x="4" y="5" width="16" height="14" rx="2" />
+                                        <circle cx="9" cy="10" r="1.5" />
+                                        <path d="m20 16-4.5-4.5L9 18" />
+                                    </svg>
+                                </button>
+                                <button class="floating-tool-btn" data-render="video" id="renderVideo" data-tooltip="视频" aria-label="导出视频">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <rect x="4" y="6" width="12" height="12" rx="2" />
+                                        <path d="m16 10 4-2v8l-4-2z" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <button id="btnExportFlyout" class="floating-tool-btn" data-tooltip="导出" aria-label="导出">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M4 8.5h3l1.3-2h7.4l1.3 2H20a1 1 0 0 1 1 1V17a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1Z" />
+                                    <circle cx="12" cy="13" r="3.2" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
                     <div class="floating-tool-group" aria-label="面板工具">
+                        <button id="btnThemeToggle" class="floating-tool-btn" data-tooltip="切换到白天" aria-label="切换主题">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 3v2" />
+                                <path d="M12 19v2" />
+                                <path d="M3 12h2" />
+                                <path d="M19 12h2" />
+                                <path d="m5.64 5.64 1.41 1.41" />
+                                <path d="m16.95 16.95 1.41 1.41" />
+                                <path d="m5.64 18.36 1.41-1.41" />
+                                <path d="m16.95 7.05 1.41-1.41" />
+                                <circle cx="12" cy="12" r="4" />
+                            </svg>
+                        </button>
                         <button id="btnToggleSceneSettings" class="floating-tool-btn" data-tooltip="场景设置" aria-label="场景设置">⚙</button>
+                        <button id="btnHelpTips" class="floating-tool-btn" data-tooltip="操作提示" aria-label="操作提示">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <circle cx="12" cy="12" r="9" />
+                                <path d="M9.5 9a2.5 2.5 0 1 1 4.2 1.8c-.9.8-1.7 1.3-1.7 2.7" />
+                                <path d="M12 17h.01" />
+                            </svg>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -275,41 +318,112 @@
             <!-- Bottom: Timeline for Camera Keyframes -->
             <div id="bottom-timeline">
                 <div class="timeline-header">
-                    <div class="timeline-header-title">
+                    <div class="timeline-header-left">
                         <h2>相机关键帧</h2>
-                        <button id="btnToggleCameraSequence" class="timeline-action-btn timeline-inline-btn" title="切换相机序列可见性">
-                            <span class="btn-text">相机序列可见</span>
-                        </button>
-                        <div class="timeline-fps-control timeline-interpolation-control">
-                            <label for="timelineCameraInterpolation">插值</label>
-                            <select id="timelineCameraInterpolation">
-                                <option value="linear" selected>线性</option>
-                                <option value="squad">Squad</option>
-                                <option value="catmull">Catmull</option>
-                                <option value="ease">Ease</option>
-                            </select>
+                        <div class="timeline-settings-anchor">
+                            <button id="btnToggleCameraSettings" class="timeline-action-btn timeline-inline-btn" title="打开相机设置">
+                                <span class="btn-text">相机设置</span>
+                            </button>
+                            <div id="cameraSettingsPanel" class="settings-card floating-camera-settings hidden">
+                                <div class="settings-card-header">
+                                    <h3>相机设置</h3>
+                                    <button id="btnCameraSettingsClose" class="close-editor-btn floating-panel-close" title="收起设置">
+                                        <span>×</span>
+                                    </button>
+                                </div>
+                                <div class="settings-card-body">
+                                    <div class="property-row">
+                                        <span class="property-label">轨迹</span>
+                                        <div class="property-inputs">
+                                            <button id="btnToggleCameraSequence" class="timeline-action-btn timeline-inline-btn" title="切换相机序列可见性">
+                                                <span class="btn-text">可见</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="property-row">
+                                        <span class="property-label">插值</span>
+                                        <div class="property-inputs">
+                                            <select id="timelineCameraInterpolation">
+                                                <option value="linear" selected>线性</option>
+                                                <option value="squad">Squad</option>
+                                                <option value="catmull">Catmull</option>
+                                                <option value="ease">Ease</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div id="timelineInterpolationParamControl" class="property-row timeline-camera-param-row hidden">
+                                        <span id="timelineInterpolationParamLabel" class="property-label" for="timelineInterpolationParam">参数</span>
+                                        <div class="property-inputs timeline-camera-param-inputs">
+                                            <input type="range" id="timelineInterpolationParam" min="0" max="1" step="0.01" value="0.50">
+                                            <span id="timelineInterpolationParamValue" class="timeline-interpolation-param-value">0.50</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                        <div id="timelineInterpolationParamControl" class="timeline-fps-control timeline-interpolation-param-control hidden">
-                            <label id="timelineInterpolationParamLabel" for="timelineInterpolationParam">参数</label>
-                            <input type="range" id="timelineInterpolationParam" min="0" max="1" step="0.01" value="0.50">
-                            <span id="timelineInterpolationParamValue" class="timeline-interpolation-param-value">0.50</span>
+                        <div class="timeline-header-tools timeline-control-group-separated">
+                            <div class="timeline-control-group" aria-label="关键帧">
+                                <button id="btnAddKeyframe" class="timeline-icon-btn" title="新增关键帧" aria-label="新增关键帧">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M12 5v14M5 12h14" />
+                                    </svg>
+                                </button>
+                                <button id="btnRemoveKeyframe" class="timeline-icon-btn" title="删除关键帧" aria-label="删除关键帧">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M6 12h12" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="timeline-control-group" aria-label="相机序列">
+                                <button id="btnImportCameraSequence" class="timeline-icon-btn" title="导入相机序列" aria-label="导入相机序列">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M12 20V10" />
+                                        <path d="M8.5 13.5 12 10l3.5 3.5" />
+                                        <path d="M5 6h14" />
+                                    </svg>
+                                </button>
+                                <button id="btnExportCameraSequence" class="timeline-icon-btn" title="导出相机序列" aria-label="导出相机序列">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M12 4v10" />
+                                        <path d="M8.5 10.5 12 14l3.5-3.5" />
+                                        <path d="M5 18h14" />
+                                    </svg>
+                                </button>
+                                <button id="btnClearCameraSequence" class="timeline-icon-btn" title="清空相机序列" aria-label="清空相机序列">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M8 8v9" />
+                                        <path d="M12 8v9" />
+                                        <path d="M16 8v9" />
+                                        <path d="M4 6h16" />
+                                        <path d="M9 6V4h6v2" />
+                                        <path d="M6.5 6l.7 12h9.6l.7-12" />
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
                     </div>
-                    <div class="timeline-actions">
-                        <button id="btnAddKeyframe" class="timeline-action-btn">
-                            <span class="btn-icon">+</span>
-                            <span class="btn-text">新增</span>
-                        </button>
-                        <button id="btnRemoveKeyframe" class="timeline-action-btn">
-                            <span class="btn-icon">-</span>
-                            <span class="btn-text">删除</span>
-                        </button>
-                        <button id="btnPlayCamera" class="timeline-action-btn">
-                            <span class="btn-icon">播放</span>
-                        </button>
-                        <button id="btnLoopCamera" class="timeline-action-btn">
-                            <span class="btn-icon">循环</span>
-                        </button>
+                    <div class="timeline-header-center">
+                        <div class="timeline-control-group" aria-label="播放控制">
+                            <button id="btnPlayCamera" class="timeline-icon-btn timeline-play-btn" title="播放相机动画" aria-label="播放相机动画">
+                                <svg class="timeline-play-icon timeline-play-icon-play" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="m9 7 8 5-8 5z" />
+                                </svg>
+                                <svg class="timeline-play-icon timeline-play-icon-pause" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M9 7v10" />
+                                    <path d="M15 7v10" />
+                                </svg>
+                            </button>
+                            <button id="btnLoopCamera" class="timeline-icon-btn" title="循环播放" aria-label="循环播放">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M17 7h3v3" />
+                                    <path d="M20 10a8 8 0 0 0-14.4-2.8" />
+                                    <path d="M7 17H4v-3" />
+                                    <path d="M4 14a8 8 0 0 0 14.4 2.8" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="timeline-header-right">
                         <div class="timeline-fps-control">
                             <label for="timelineSpeed">倍速</label>
                             <select id="timelineSpeed">
@@ -351,6 +465,7 @@
 
         <!-- File Input (hidden) -->
         <input type="file" id="fileInput" accept=".ply,.onnx,.glb,.gltf,.obj,.fbx,.stl,.splat,.ksplat,.spz,.sog" multiple style="display: none;">
+        <input type="file" id="cameraSequenceFileInput" accept=".json,application/json" style="display: none;">
 
         <!-- Modal for Model Loading -->
         <div id="modelModal" class="modal hidden">
@@ -399,7 +514,10 @@
         <div id="helpTipsModal" class="modal hidden">
             <div class="modal-content help-modal-content">
                 <div class="help-modal-header">
-                    <h3>操作提示</h3>
+                    <div class="help-modal-header-main">
+                        <h3>操作提示</h3>
+                        <span class="version-label help-version-label" id="versionLabel">0.1.6</span>
+                    </div>
                     <button id="helpTipsClose" class="icon-btn help-modal-close-btn" title="关闭操作提示">×</button>
                 </div>
                 <div class="modal-body help-modal-body">
@@ -419,6 +537,8 @@
                             <li><kbd>Space</kbd><span>播放 / 暂停相机动画</span></li>
                             <li><kbd>F</kbd><span>聚焦当前选中模型</span></li>
                             <li><kbd>Ctrl + F</kbd><span>在当前视角和时间新增相机关键帧；若后方无关键帧则时间轴前进 1 秒</span></li>
+                            <li><kbd>` / ~</kbd><span>切换清屏模式</span></li>
+                            <li><kbd>1 / 2 / 3</kbd><span>切换位移 / 旋转 / 缩放 gizmo；重复按同键可关闭</span></li>
                             <li><kbd>X</kbd><span>相机回正</span></li>
                             <li><kbd>?</kbd><span>打开操作提示</span></li>
                             <li><kbd>Esc</kbd><span>关闭操作提示或导出窗口</span></li>

@@ -1,5 +1,5 @@
 /**
- * Visionary Editor Application 0.1.5
+ * Visionary Editor Application 0.1.6
  * Editor version of main app with UI controls
  */
 
@@ -69,7 +69,7 @@ const SCENE_SKY_PRESETS: SceneSkyPreset[] = [
   { id: "clear_day", name: "晴空", colorHex: "#6EAEEA" },
   { id: "sunset", name: "日落", colorHex: "#E9875A" },
   { id: "dusk", name: "暮光", colorHex: "#4A5D86" },
-  { id: "night", name: "夜空", colorHex: "#050814" },
+  { id: "night", name: "夜空", colorHex: "#707070" },
 ];
 
 type EditorRenderMode = "color" | "normal" | "depth";
@@ -185,7 +185,7 @@ export class EditorApp {
   // Editor state
   private editorModels: Map<string, EditorModel> = new Map();
   private onModelsChangedCallback: ((models: EditorModel[]) => void) | null = null;
-  private sceneBackgroundColor: [number, number, number, number] = [0.02, 0.03, 0.08, 1.0];
+  private sceneBackgroundColor: [number, number, number, number] = [112 / 255, 112 / 255, 112 / 255, 1.0];
   private sceneSkyPresetId: string = "night";
   private sceneDepthRangeScale: number = 1.0;
   private renderMode: EditorRenderMode = "color";
@@ -207,7 +207,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = "0.1.5";
+  readonly VERSION = "0.1.6";
 
   private globalTimelineTime: number = 0;
 
