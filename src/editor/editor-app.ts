@@ -1,5 +1,5 @@
 /**
- * Visionary Editor Application 0.1.6
+ * Visionary Editor Application 0.1.8
  * Editor version of main app with UI controls
  */
 
@@ -34,6 +34,7 @@ import { lookAtW2C } from "../controls/orbit";
 import { GLTFModelWrapper } from "../models/gltf-model-wrapper";
 import { GizmoManager } from "../gizmo/gizmo-manager";
 import type { GizmoMode } from "../gizmo/types";
+import { RendererInitHelper } from "../utils/renderer-init-helper";
 
 const MAX_MODELS = 10000;
 const CAMERA_KEY_CODES = new Set([
@@ -89,6 +90,8 @@ const EDITOR_DEPTH_RANGE_VALUE_KEY = "__editorDepthRangeValue";
 const EDITOR_DEPTH_RANGE_UNIFORM_NAME = "uEditorDepthRange";
 const EDITOR_DEPTH_BASE_EXTENT_KEY = "__editorDepthBaseExtent";
 const EDITOR_CAMERA_SEQUENCE_HELPER_KEY = "__visionaryEditorHelper";
+const EDITOR_CAMERA_SEQUENCE_CURRENT_KEY = "__visionaryEditorCurrentCameraHelper";
+const EDITOR_MODEL_PICK_ID_KEY = "__visionaryEditorModelId";
 const CAMERA_SEQUENCE_FRUSTUM_COLOR = 0x22c55e;
 const CAMERA_SEQUENCE_PATH_COLOR = 0x4a90d9;
 const CAMERA_SEQUENCE_CURRENT_COLOR = 0xf59e0b;
@@ -148,6 +151,12 @@ interface EditorCameraTrajectoryPoint {
   z: number;
 }
 
+type CameraSequenceHelperTarget = {
+  frame: number;
+  object: THREE.Object3D;
+  hitProxy: THREE.Object3D;
+};
+
 /**
  * Editor Application
  */
@@ -168,6 +177,19 @@ export class EditorApp {
   private gizmoOverlayScene: THREE.Scene | null = null;
   private meshCamera: THREE.PerspectiveCamera | null = null;
   private fusedRenderer: GaussianThreeJSRenderer | null = null;
+  private cameraPreviewCanvas: HTMLCanvasElement | null = null;
+  private cameraPreviewRenderer: THREE.WebGPURenderer | null = null;
+  private cameraPreviewCamera: THREE.PerspectiveCamera | null = null;
+  private cameraPreviewFusedRenderer: GaussianThreeJSRenderer | null = null;
+  private cameraPreviewVisible = false;
+  private cameraPreviewAspectRatio = 16 / 9;
+  private cameraPreviewPose: EditorCameraPose | null = null;
+  private cameraPreviewOriginalEnvMap: THREE.Texture | null = null;
+  private cameraPreviewOriginalBackground: THREE.Texture | THREE.Color | null = null;
+  private cameraPreviewEnvMap: THREE.Texture | null = null;
+  private cameraPreviewBackground: THREE.Texture | null = null;
+  private cameraPreviewGaussianSignature = "";
+  private previewEditorHelperVisibilityCache: Array<{ object: THREE.Object3D; visible: boolean }> = [];
   private gizmoManager: GizmoManager | null = null;
   private meshRenderAnimationId = 0;
   private fusionLastTime = performance.now();
@@ -190,8 +212,19 @@ export class EditorApp {
   private sceneDepthRangeScale: number = 1.0;
   private renderMode: EditorRenderMode = "color";
   private cameraSequenceVisible: boolean = true;
+  private cameraSequenceAspectRatio: number = 16 / 9;
+  private cameraSequenceDisplayScale: number = 1.0;
+  private cameraSequenceBaseFrustumLength: number | null = null;
+  private cameraSequenceEditEnabled: boolean = false;
+  private cameraSequenceHighlightedFrame: number | null = null;
+  private selectedCameraSequenceFrame: number | null = null;
   private cameraSequenceGroup: THREE.Group | null = null;
   private cameraSequenceCurrentMarker: THREE.Mesh | null = null;
+  private cameraSequenceHelperTargets: Map<number, CameraSequenceHelperTarget> = new Map();
+  private onCameraSequenceSelectionCallback: ((frame: number | null) => void) | null = null;
+  private onCameraSequenceTransformCallback: ((frame: number, pose: EditorCameraPose) => void) | null = null;
+  private onCameraSequenceTransformCommitCallback: ((frame: number, pose: EditorCameraPose) => void) | null = null;
+  private onSelectedModelCallback: ((id: string | null) => void) | null = null;
   private onCameraInteractionCallback: ((kind: "drag" | "wheel" | "keyboard") => void) | null = null;
   private onViewportGizmoTransformCallback: ((id: string, model: EditorModel) => void) | null = null;
   private selectedModelId: string | null = null;
@@ -207,12 +240,18 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = "0.1.6";
+  readonly VERSION = "0.1.8";
 
   private globalTimelineTime: number = 0;
+  private globalTimelineFrame: number = 0;
 
   public setGlobalTimelineTime(timeSec: number): void {
     this.globalTimelineTime = timeSec;
+  }
+
+  public setGlobalTimelineFrame(frame: number): void {
+    if (!Number.isFinite(frame)) return;
+    this.globalTimelineFrame = Math.max(0, Math.round(Number(frame) || 0));
   }
 
   public setModelAnimTimeBounds(id: string, start: number, end: number): void {
@@ -402,6 +441,14 @@ export class EditorApp {
       void this.lookAtScenePointFromClient(e.clientX, e.clientY);
     });
 
+    this.canvas.addEventListener('click', (e) => {
+      if (this.isEditingText()) return;
+      if (this.cameraSequenceEditEnabled && this.pickCameraSequenceKeyframeFromClient(e.clientX, e.clientY)) {
+        e.preventDefault();
+        return;
+      }
+    });
+
     // Keyboard events
     window.addEventListener('keydown', (e) => this.handleCameraKeyboard(e, true));
     window.addEventListener('keyup', (e) => this.handleCameraKeyboard(e, false));
@@ -474,7 +521,7 @@ export class EditorApp {
         this.gizmoManager.setCallbacks({
           onObjectChange: () => this.handleViewportGizmoObjectChange(),
           onChangeStart: () => this.setViewportCameraInputEnabled(false),
-          onChangeEnd: () => this.setViewportCameraInputEnabled(true),
+          onChangeEnd: () => this.handleViewportGizmoChangeEnd(),
         });
         this.gizmoManager.setEnabled(false);
       }
@@ -515,28 +562,10 @@ export class EditorApp {
         }
         this.syncMeshCameraFromCoreCamera();
         this.gizmoManager?.update();
-        this.updateCameraSequenceCurrentMarkerFromMeshCamera();
+        this.updateCameraSequenceCurrentMarkerFromPreviewPose();
 
         if (this.fusedRenderer) {
-          let modelIndex = 0;
-          for (const model of this.editorModels.values()) {
-            if (model.gaussianModel) {
-              const rendererId = `model_${modelIndex}`;
-              if (model.isDynamic && model.modelEntry) {
-                const start = model.modelEntry.animStartTime ?? 0;
-                const end = model.modelEntry.animEndTime ?? 10;
-                
-                if (this.globalTimelineTime >= start && this.globalTimelineTime <= end) {
-                  this.fusedRenderer.setModelVisible(rendererId, model.visible);
-                  const localTime = (this.globalTimelineTime - start) * (model.modelEntry.animSpeed ?? 1.0);
-                  this.fusedRenderer.setModelAnimationTime(rendererId, localTime);
-                } else {
-                  this.fusedRenderer.setModelVisible(rendererId, false);
-                }
-              }
-              modelIndex++;
-            }
-          }
+          this.syncGaussianRendererModelTimelineState(this.fusedRenderer);
 
           await this.fusedRenderer.updateDynamicModels(this.meshCamera, (now - this.fusionStartTime) / 500.0);
           if (this.gizmoOverlayScene) {
@@ -547,10 +576,14 @@ export class EditorApp {
           const drew = this.fusedRenderer.drawSplats(this.meshRenderer, this.meshScene, this.meshCamera);
           if (!drew && this.renderMode !== "depth") {
             this.meshRenderer.render(this.meshScene, this.meshCamera);
+            this.renderViewportOverlayDirect();
           }
         } else {
           this.meshRenderer.render(this.meshScene, this.meshCamera);
+          this.renderViewportOverlayDirect();
         }
+
+        await this.renderCameraPreview((now - this.fusionStartTime) / 500.0);
       } finally {
         this.fusionFrameRunning = false;
       }
@@ -562,6 +595,246 @@ export class EditorApp {
     if (this.meshRenderAnimationId !== 0) {
       cancelAnimationFrame(this.meshRenderAnimationId);
       this.meshRenderAnimationId = 0;
+    }
+  }
+
+  private renderViewportOverlayDirect(): void {
+    if (!this.meshRenderer || !this.gizmoOverlayScene || !this.meshCamera) return;
+    const renderer = this.meshRenderer as THREE.WebGPURenderer & {
+      autoClear?: boolean;
+      clearDepth?: () => void;
+    };
+    const previousAutoClear = renderer.autoClear;
+    if (typeof previousAutoClear === "boolean") {
+      renderer.autoClear = false;
+    }
+    renderer.clearDepth?.();
+    renderer.render(this.gizmoOverlayScene, this.meshCamera);
+    if (typeof previousAutoClear === "boolean") {
+      renderer.autoClear = previousAutoClear;
+    }
+  }
+
+  private syncGaussianRendererModelTimelineState(renderer: GaussianThreeJSRenderer): void {
+    let modelIndex = 0;
+    for (const model of this.editorModels.values()) {
+      if (!model.gaussianModel) continue;
+      const rendererId = `model_${modelIndex}`;
+      let visible = Boolean(model.visible);
+      if (model.isDynamic && model.modelEntry) {
+        const start = model.modelEntry.animStartTime ?? 0;
+        const end = model.modelEntry.animEndTime ?? 10;
+        visible = visible && this.globalTimelineTime >= start && this.globalTimelineTime <= end;
+        if (visible) {
+          const localTime = (this.globalTimelineTime - start) * (model.modelEntry.animSpeed ?? 1.0);
+          renderer.setModelAnimationTime(rendererId, localTime);
+        }
+      }
+      renderer.setModelVisible(rendererId, visible);
+      modelIndex++;
+    }
+  }
+
+  private async ensureCameraPreviewRenderer(): Promise<boolean> {
+    if (!this.cameraPreviewCanvas || !this.meshRenderer || !this.meshScene) return false;
+    const gaussianModels = Array.from(this.editorModels.values())
+      .filter((model) => model.gaussianModel)
+      .map((model) => model.id)
+      .join("|");
+    if (
+      this.cameraPreviewRenderer &&
+      this.cameraPreviewCamera &&
+      this.cameraPreviewGaussianSignature === gaussianModels
+    ) {
+      return true;
+    }
+    if (this.cameraPreviewRenderer) {
+      this.disposeCameraPreviewRenderer();
+    }
+
+    try {
+      const backend = (this.meshRenderer as any).backend;
+      const device = backend?.device as GPUDevice | undefined;
+      if (!device) {
+        return false;
+      }
+
+      const context = this.cameraPreviewCanvas.getContext("webgpu") as GPUCanvasContext | null;
+      if (!context) {
+        return false;
+      }
+
+      context.configure({
+        device,
+        format: navigator.gpu.getPreferredCanvasFormat(),
+        alphaMode: "premultiplied",
+      });
+
+      const renderer = new THREE.WebGPURenderer({
+        canvas: this.cameraPreviewCanvas,
+        antialias: true,
+        forceWebGL: false,
+        context,
+        device,
+      });
+      await renderer.init();
+
+      const rect = this.cameraPreviewCanvas.getBoundingClientRect();
+      const width = Math.max(1, Math.floor(rect.width || 1));
+      const height = Math.max(1, Math.floor(rect.height || 1));
+
+      const initResult = await RendererInitHelper.initializeRenderer(renderer, this.meshScene, {
+        sourceRenderer: this.meshRenderer,
+        width,
+        height,
+        pixelRatio: 1,
+      });
+
+      this.cameraPreviewRenderer = renderer;
+      this.cameraPreviewEnvMap = initResult.envMap;
+      this.cameraPreviewBackground = initResult.background;
+      this.cameraPreviewCamera = new THREE.PerspectiveCamera(45, this.cameraPreviewAspectRatio, 0.01, 2000);
+      this.cameraPreviewCamera.matrixAutoUpdate = true;
+      this.cameraPreviewCamera.aspect = this.cameraPreviewAspectRatio;
+      this.cameraPreviewCamera.updateProjectionMatrix();
+
+      const gaussianModelEntries = Array.from(this.editorModels.values())
+        .map((model) => model.gaussianModel)
+        .filter((model): model is GaussianModel => Boolean(model));
+      if (gaussianModelEntries.length > 0) {
+        this.cameraPreviewFusedRenderer = new GaussianThreeJSRenderer(renderer, this.meshScene, gaussianModelEntries);
+        await this.cameraPreviewFusedRenderer.init();
+        this.cameraPreviewFusedRenderer.setDepthRangeScale(this.sceneDepthRangeScale);
+        this.cameraPreviewFusedRenderer.setPreviewMode(this.renderMode);
+      }
+      this.cameraPreviewGaussianSignature = gaussianModels;
+
+      this.syncCameraPreviewCanvasSize();
+      this.updateCameraPreviewCameraFromPose();
+      return true;
+    } catch (error) {
+      console.warn("[EditorApp] camera preview renderer init failed:", error);
+      this.disposeCameraPreviewRenderer();
+      return false;
+    }
+  }
+
+  private disposeCameraPreviewRenderer(): void {
+    if (this.cameraPreviewRenderer) {
+      this.cameraPreviewRenderer.dispose();
+    }
+    this.cameraPreviewRenderer = null;
+    this.cameraPreviewCamera = null;
+    this.cameraPreviewFusedRenderer = null;
+    this.cameraPreviewEnvMap = null;
+    this.cameraPreviewBackground = null;
+    this.cameraPreviewOriginalEnvMap = null;
+    this.cameraPreviewOriginalBackground = null;
+    this.cameraPreviewGaussianSignature = "";
+  }
+
+  private syncCameraPreviewCanvasSize(): void {
+    if (!this.cameraPreviewCanvas || !this.cameraPreviewRenderer || !this.cameraPreviewCamera) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const rect = this.cameraPreviewCanvas.getBoundingClientRect();
+    const width = Math.max(1, Math.floor((rect.width || 1) * dpr));
+    const height = Math.max(1, Math.floor((rect.height || 1) * dpr));
+    if (this.cameraPreviewCanvas.width !== width) this.cameraPreviewCanvas.width = width;
+    if (this.cameraPreviewCanvas.height !== height) this.cameraPreviewCanvas.height = height;
+    this.cameraPreviewRenderer.setPixelRatio(dpr);
+    this.cameraPreviewRenderer.setSize(rect.width || 1, rect.height || 1, false);
+    this.cameraPreviewCamera.aspect = this.cameraPreviewAspectRatio;
+    this.cameraPreviewCamera.updateProjectionMatrix();
+    this.cameraPreviewFusedRenderer?.onResize(width, height, false);
+  }
+
+  private updateCameraPreviewCameraFromPose(): void {
+    if (!this.cameraPreviewCamera || !this.cameraPreviewPose) return;
+    const pose = this.cameraPreviewPose;
+    const w2c = new THREE.Quaternion(
+      Number(pose.rotation.x) || 0,
+      Number(pose.rotation.y) || 0,
+      Number(pose.rotation.z) || 0,
+      Number(pose.rotation.w) || 1
+    );
+    const c2w = w2c.clone().invert();
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(c2w);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(c2w);
+    this.cameraPreviewCamera.position.set(
+      Number(pose.position.x) || 0,
+      Number(pose.position.y) || 0,
+      Number(pose.position.z) || 0
+    );
+    this.cameraPreviewCamera.up.copy(up);
+    this.cameraPreviewCamera.lookAt(
+      this.cameraPreviewCamera.position.x + forward.x,
+      this.cameraPreviewCamera.position.y + forward.y,
+      this.cameraPreviewCamera.position.z + forward.z
+    );
+    this.cameraPreviewCamera.fov = Math.max(1, Math.min(179, Number(pose.fovDegrees) || 45));
+    this.cameraPreviewCamera.aspect = this.cameraPreviewAspectRatio;
+    this.cameraPreviewCamera.updateProjectionMatrix();
+    this.cameraPreviewCamera.updateMatrixWorld(true);
+  }
+
+  private hideEditorHelpersForPreview(scene: THREE.Scene): void {
+    this.previewEditorHelperVisibilityCache.length = 0;
+    scene.traverse((object) => {
+      if (object.userData && object.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY]) {
+        this.previewEditorHelperVisibilityCache.push({ object, visible: object.visible });
+        object.visible = false;
+      }
+    });
+  }
+
+  private restoreEditorHelpersForPreview(): void {
+    for (const entry of this.previewEditorHelperVisibilityCache) {
+      entry.object.visible = entry.visible;
+    }
+    this.previewEditorHelperVisibilityCache.length = 0;
+  }
+
+  private async renderCameraPreview(timeValue: number): Promise<void> {
+    if (!this.cameraPreviewVisible || !this.meshScene || !this.cameraPreviewCanvas || !this.cameraPreviewPose) return;
+    const ready = await this.ensureCameraPreviewRenderer();
+    if (!ready || !this.cameraPreviewRenderer || !this.cameraPreviewCamera) return;
+    const rect = this.cameraPreviewCanvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    this.syncCameraPreviewCanvasSize();
+    this.updateCameraPreviewCameraFromPose();
+    this.hideEditorHelpersForPreview(this.meshScene);
+
+    try {
+      if (this.cameraPreviewOriginalEnvMap === null) {
+        this.cameraPreviewOriginalEnvMap = this.meshScene.environment;
+      }
+      if (this.cameraPreviewOriginalBackground === null) {
+        this.cameraPreviewOriginalBackground = this.meshScene.background as THREE.Texture | THREE.Color | null;
+      }
+      if (this.cameraPreviewEnvMap && this.cameraPreviewBackground) {
+        this.meshScene.environment = this.cameraPreviewEnvMap;
+        this.meshScene.background = this.cameraPreviewBackground;
+      }
+
+      if (this.cameraPreviewFusedRenderer) {
+        this.syncGaussianRendererModelTimelineState(this.cameraPreviewFusedRenderer);
+        await this.cameraPreviewFusedRenderer.updateDynamicModels(this.cameraPreviewCamera, timeValue);
+        this.cameraPreviewFusedRenderer.onBeforeRender(this.cameraPreviewRenderer, this.meshScene, this.cameraPreviewCamera);
+        this.cameraPreviewFusedRenderer.renderThreeScene(this.cameraPreviewCamera);
+        const drew = this.cameraPreviewFusedRenderer.drawSplats(this.cameraPreviewRenderer, this.meshScene, this.cameraPreviewCamera);
+        if (!drew && this.renderMode !== "depth") {
+          this.cameraPreviewRenderer.render(this.meshScene, this.cameraPreviewCamera);
+        }
+      } else {
+        this.cameraPreviewRenderer.render(this.meshScene, this.cameraPreviewCamera);
+      }
+    } finally {
+      if (this.cameraPreviewEnvMap && this.cameraPreviewBackground) {
+        this.meshScene.environment = this.cameraPreviewOriginalEnvMap;
+        this.meshScene.background = this.cameraPreviewOriginalBackground;
+      }
+      this.restoreEditorHelpersForPreview();
     }
   }
 
@@ -776,9 +1049,53 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     return null;
   }
 
+  private tagEditorModelPickTarget(root: THREE.Object3D | null | undefined, modelId: string): void {
+    if (!root) return;
+    root.traverse((node) => {
+      (node.userData ??= {})[EDITOR_MODEL_PICK_ID_KEY] = modelId;
+    });
+  }
+
+  private getViewportGizmoSelectionKind(): "none" | "model" | "camera" {
+    if (this.selectedModelId && this.editorModels.has(this.selectedModelId)) {
+      return "model";
+    }
+    if (this.cameraSequenceEditEnabled && this.selectedCameraSequenceFrame !== null) {
+      return "camera";
+    }
+    return "none";
+  }
+
+  private getSelectedCameraSequenceTarget(): THREE.Object3D | null {
+    if (this.selectedCameraSequenceFrame === null) return null;
+    const helperTarget = this.cameraSequenceHelperTargets.get(this.selectedCameraSequenceFrame)?.object ?? null;
+    if (helperTarget) return helperTarget;
+    if (this.cameraSequenceCurrentMarker?.visible) {
+      return this.cameraSequenceCurrentMarker;
+    }
+    return null;
+  }
+
   private syncViewportGizmoTarget(): void {
     if (!this.gizmoManager) return;
     this.setViewportCameraInputEnabled(true);
+    const selectionKind = this.getViewportGizmoSelectionKind();
+    if (selectionKind === "camera") {
+      const cameraTarget = this.getSelectedCameraSequenceTarget();
+      this.gizmoManager.setPivotMode("custom");
+      if (cameraTarget) {
+        const cameraOrigin = new THREE.Vector3();
+        cameraTarget.getWorldPosition(cameraOrigin);
+        this.gizmoManager.setPivot(cameraOrigin);
+      }
+      this.gizmoManager.setTarget(cameraTarget);
+      const cameraModeAllowed = this.viewportGizmoMode === "translate" || this.viewportGizmoMode === "rotate";
+      this.gizmoManager.setEnabled(Boolean(cameraTarget) && this.viewportGizmoEnabled && cameraModeAllowed);
+      if (cameraTarget && this.viewportGizmoEnabled && cameraModeAllowed) {
+        this.gizmoManager.setMode(this.viewportGizmoMode);
+      }
+      return;
+    }
     const model = this.selectedModelId ? this.editorModels.get(this.selectedModelId) : null;
     const target = this.getEditorModelTransformTarget(model);
     const focusPoint = model ? this.getModelFocusPoint(model) : null;
@@ -794,6 +1111,19 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   }
 
   private handleViewportGizmoObjectChange(): void {
+    const selectionKind = this.getViewportGizmoSelectionKind();
+    if (selectionKind === "camera") {
+      const frame = this.selectedCameraSequenceFrame;
+      if (frame === null) return;
+      const target = this.getSelectedCameraSequenceTarget();
+      if (!target) return;
+      const pose = this.buildCameraPoseFromHelperTarget(target);
+      if (!pose) return;
+      if (this.onCameraSequenceTransformCallback) {
+        this.onCameraSequenceTransformCallback(frame, pose);
+      }
+      return;
+    }
     if (!this.selectedModelId) return;
     const model = this.editorModels.get(this.selectedModelId);
     const target = this.getEditorModelTransformTarget(model);
@@ -807,6 +1137,23 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const nextModel = this.editorModels.get(model.id);
     if (nextModel && this.onViewportGizmoTransformCallback) {
       this.onViewportGizmoTransformCallback(model.id, nextModel);
+    }
+  }
+
+  private handleViewportGizmoChangeEnd(): void {
+    try {
+      if (this.getViewportGizmoSelectionKind() === "camera" && this.selectedCameraSequenceFrame !== null) {
+        const frame = this.selectedCameraSequenceFrame;
+        const target = this.getSelectedCameraSequenceTarget();
+        if (target) {
+          const pose = this.buildCameraPoseFromHelperTarget(target);
+          if (pose) {
+            this.onCameraSequenceTransformCommitCallback?.(frame, pose);
+          }
+        }
+      }
+    } finally {
+      this.setViewportCameraInputEnabled(true);
     }
   }
 
@@ -1029,6 +1376,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         animLoop: gltfAnimation ? gltfAnimation.getAnimationIsLoop() : true,
       };
 
+      this.tagEditorModelPickTarget(meshObject, editorModel.id);
+      this.tagEditorModelPickTarget(gaussianModel, editorModel.id);
+
       this.editorModels.set(editorModel.id, editorModel);
 
       // Setup camera for first model
@@ -1150,6 +1500,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     this.removeMeshObject(model);
 
     this.editorModels.delete(id);
+    if (this.editorModels.size === 0) {
+      this.cameraSequenceBaseFrustumLength = null;
+    }
     if (this.selectedModelId === id) {
       this.selectedModelId = null;
       this.syncViewportGizmoTarget();
@@ -1286,6 +1639,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     ids.forEach((id) => {
       this.removeModel(id);
     });
+    this.cameraSequenceBaseFrustumLength = null;
     this.notifyModelsChanged();
     console.log('[EditorApp] All models cleared');
   }
@@ -1308,13 +1662,24 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     if (id && !this.editorModels.has(id)) {
       return false;
     }
+    if (id !== null) {
+      this.selectedCameraSequenceFrame = null;
+    }
     this.selectedModelId = id;
     this.syncViewportGizmoTarget();
+    try {
+      this.onSelectedModelCallback?.(id);
+    } catch (error) {
+      console.warn("[EditorApp] selected model callback error:", error);
+    }
     return true;
   }
 
   setViewportGizmoMode(mode: GizmoMode | null): boolean {
     if (mode !== null && mode !== "translate" && mode !== "rotate" && mode !== "scale") {
+      return false;
+    }
+    if (this.getViewportGizmoSelectionKind() === "camera" && mode === "scale") {
       return false;
     }
     if (mode === null) {
@@ -1338,8 +1703,56 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     this.syncViewportGizmoTarget();
   }
 
+  setCameraSequenceEditEnabled(enabled: boolean): boolean {
+    this.cameraSequenceEditEnabled = !!enabled;
+    this.syncViewportGizmoTarget();
+    return true;
+  }
+
+  getCameraSequenceEditEnabled(): boolean {
+    return this.cameraSequenceEditEnabled;
+  }
+
+  setSelectedCameraSequenceFrame(frame: number | null): boolean {
+    if (frame !== null && !Number.isFinite(Number(frame))) {
+      return false;
+    }
+    const normalizedFrame = frame === null ? null : Math.max(0, Math.round(Number(frame)));
+    if (normalizedFrame !== null) {
+      this.selectedModelId = null;
+    }
+    this.selectedCameraSequenceFrame = normalizedFrame;
+    this.syncViewportGizmoTarget();
+    try {
+      this.onCameraSequenceSelectionCallback?.(normalizedFrame);
+    } catch (error) {
+      console.warn("[EditorApp] camera sequence selection callback error:", error);
+    }
+    return true;
+  }
+
+  getSelectedCameraSequenceFrame(): number | null {
+    return this.selectedCameraSequenceFrame;
+  }
+
+  onCameraSequenceSelection(callback: ((frame: number | null) => void) | null): void {
+    this.onCameraSequenceSelectionCallback = callback;
+  }
+
+  onCameraSequenceTransform(callback: ((frame: number, pose: EditorCameraPose) => void) | null): void {
+    this.onCameraSequenceTransformCallback = callback;
+  }
+
+  onCameraSequenceTransformCommit(callback: ((frame: number, pose: EditorCameraPose) => void) | null): void {
+    this.onCameraSequenceTransformCommitCallback = callback;
+  }
+
   onViewportGizmoTransform(callback: ((id: string, model: EditorModel) => void) | null): void {
     this.onViewportGizmoTransformCallback = callback;
+  }
+
+  onSelectedModel(callback: ((id: string | null) => void) | null): void {
+    this.onSelectedModelCallback = callback;
   }
 
   /**
@@ -1362,6 +1775,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
     this.renderMode = mode;
     this.fusedRenderer?.setPreviewMode(mode);
+    this.cameraPreviewFusedRenderer?.setPreviewMode(mode);
     let updated = 0;
     this.editorModels.forEach((model) => {
       if (this.applyRenderModeToModelEntry(model.modelEntry, mode)) {
@@ -1486,6 +1900,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     camera.rotationQ = lookAtW2C(forward, worldUp);
     this.cameraManager.syncOrbitAfterExternalLookAt(target, worldUp);
     this.syncMeshCameraFromCoreCamera();
+    this.notifyCameraInteraction("keyboard");
     console.log("[EditorApp] Look-at scene point:", result);
     return true;
   }
@@ -1533,6 +1948,44 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   } | null> {
     if (!this.meshCamera || !this.fusedRenderer) return null;
     return await this.fusedRenderer.getRawDepthFrame(this.meshCamera, source);
+  }
+
+  async probeModelPickAtFocus(id: string): Promise<{
+    id: string;
+    name: string;
+    visible: boolean;
+    focusWorld: { x: number; y: number; z: number } | null;
+    focusClient: { x: number; y: number } | null;
+    picked: Awaited<ReturnType<EditorApp["pickScenePointAtClient"]>>;
+    worldDistance: number | null;
+  } | null> {
+    const model = this.editorModels.get(id);
+    if (!model) return null;
+
+    const focus = this.getModelFocusPoint(model);
+    const focusWorld = focus
+      ? { x: Number(focus[0]) || 0, y: Number(focus[1]) || 0, z: Number(focus[2]) || 0 }
+      : null;
+    const focusClient = focusWorld ? this.projectWorldToClient(focusWorld) : null;
+    const picked = focusClient ? await this.pickScenePointAtClient(focusClient.x, focusClient.y) : null;
+
+    let worldDistance: number | null = null;
+    if (focusWorld && picked?.world) {
+      const dx = picked.world.x - focusWorld.x;
+      const dy = picked.world.y - focusWorld.y;
+      const dz = picked.world.z - focusWorld.z;
+      worldDistance = Math.hypot(dx, dy, dz);
+    }
+
+    return {
+      id: model.id,
+      name: model.name,
+      visible: Boolean(model.visible),
+      focusWorld,
+      focusClient,
+      picked,
+      worldDistance,
+    };
   }
 
   async showRawDepthPreview(source: EditorRawDepthSource = "combined"): Promise<{
@@ -1637,6 +2090,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   uprightCamera(): boolean {
     const ok = this.cameraManager.uprightCurrentView(vec3.fromValues(0, 1, 0));
     if (ok) {
+      this.notifyCameraInteraction("keyboard");
       console.log("[EditorApp] Camera upright");
     }
     return ok;
@@ -1885,6 +2339,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
    */
   resetCamera(): void {
     this.cameraManager.resetCamera();
+    this.notifyCameraInteraction("keyboard");
     console.log('[EditorApp] Camera reset');
   }
 
@@ -1910,6 +2365,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         this.sceneBackgroundColor[3]
       );
     }
+    this.cameraPreviewRenderer?.setClearColor(
+      new THREE.Color(this.sceneBackgroundColor[0], this.sceneBackgroundColor[1], this.sceneBackgroundColor[2]),
+      this.sceneBackgroundColor[3]
+    );
     return true;
   }
 
@@ -1994,6 +2453,78 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     };
   }
 
+  async attachCameraPreviewCanvas(canvas: HTMLCanvasElement | null): Promise<boolean> {
+    this.cameraPreviewCanvas = canvas;
+    if (!canvas) {
+      this.disposeCameraPreviewRenderer();
+      return true;
+    }
+    return await this.ensureCameraPreviewRenderer();
+  }
+
+  setCameraPreviewVisible(visible: boolean): boolean {
+    this.cameraPreviewVisible = !!visible;
+    return true;
+  }
+
+  getCameraPreviewVisible(): boolean {
+    return this.cameraPreviewVisible;
+  }
+
+  setCameraPreviewAspectRatio(value: number): boolean {
+    if (!Number.isFinite(value) || value <= 0) return false;
+    const safe = Math.max(0.1, Math.min(10, Number(value)));
+    this.cameraPreviewAspectRatio = safe;
+    this.cameraSequenceAspectRatio = safe;
+    if (this.cameraPreviewCamera) {
+      this.cameraPreviewCamera.aspect = safe;
+      this.cameraPreviewCamera.updateProjectionMatrix();
+    }
+    return true;
+  }
+
+  getCameraPreviewAspectRatio(): number {
+    return this.cameraPreviewAspectRatio;
+  }
+
+  setCameraPreviewPose(pose: Partial<EditorCameraPose> | null | undefined): boolean {
+    if (!pose?.position || !pose?.rotation) {
+      this.cameraPreviewPose = null;
+      this.updateCameraSequenceCurrentMarkerFromPreviewPose();
+      return false;
+    }
+
+    const normalized: EditorCameraPose = {
+      position: {
+        x: Number(pose.position.x) || 0,
+        y: Number(pose.position.y) || 0,
+        z: Number(pose.position.z) || 0,
+      },
+      rotation: {
+        x: Number(pose.rotation.x) || 0,
+        y: Number(pose.rotation.y) || 0,
+        z: Number(pose.rotation.z) || 0,
+        w: Number(pose.rotation.w) || 1,
+      },
+      fovDegrees: Number.isFinite(Number(pose.fovDegrees)) ? Number(pose.fovDegrees) : 45,
+    };
+
+    this.cameraPreviewPose = normalized;
+    this.updateCameraPreviewCameraFromPose();
+    this.updateCameraSequenceCurrentMarkerFromPreviewPose();
+    return true;
+  }
+
+  getCameraPreviewPose(): EditorCameraPose | null {
+    return this.cameraPreviewPose
+      ? {
+          position: { ...this.cameraPreviewPose.position },
+          rotation: { ...this.cameraPreviewPose.rotation },
+          fovDegrees: this.cameraPreviewPose.fovDegrees,
+        }
+      : null;
+  }
+
   /**
    * Visualize camera keyframes as frustums and center trajectory in 3D scene.
    * Reuses the same frustum geometry convention as RecordingCamera gizmo.
@@ -2009,6 +2540,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     group.visible = this.cameraSequenceVisible;
 
     this.clearCameraSequenceGroupContents();
+    this.cameraSequenceHelperTargets.clear();
 
     const normalized = (Array.isArray(keyframes) ? keyframes : [])
       .filter((item) => item && item.camera && item.camera.position && item.camera.rotation)
@@ -2018,10 +2550,6 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         camera: item.camera,
       }))
       .sort((a, b) => a.frame - b.frame);
-
-    if (normalized.length === 0) {
-      return true;
-    }
 
     const centers = normalized.map((item) =>
       new THREE.Vector3(
@@ -2034,21 +2562,23 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       .map((p) => new THREE.Vector3(Number(p?.x) || 0, Number(p?.y) || 0, Number(p?.z) || 0))
       .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
 
-    const aspect = this.meshCamera && Number.isFinite(this.meshCamera.aspect) && this.meshCamera.aspect > 0
-      ? this.meshCamera.aspect
+    const aspect = Number.isFinite(this.cameraSequenceAspectRatio) && this.cameraSequenceAspectRatio > 0
+      ? this.cameraSequenceAspectRatio
       : 16 / 9;
     const frustumLength = this.computeCameraSequenceFrustumLength();
-    const selected = Number.isFinite(Number(selectedFrame)) ? Math.round(Number(selectedFrame)) : null;
+    const highlighted = Number.isFinite(Number(selectedFrame)) ? Math.round(Number(selectedFrame)) : null;
+    this.cameraSequenceHighlightedFrame = highlighted;
 
     for (const item of normalized) {
-      const color = selected !== null && item.frame === selected
+      const color = highlighted !== null && item.frame === highlighted
         ? CAMERA_SEQUENCE_CURRENT_COLOR
         : CAMERA_SEQUENCE_FRUSTUM_COLOR;
-      const frustum = this.buildCameraFrustumWireframe(
+      const frustum = this.buildCameraFrustumHelper(
         item.camera,
+        item.frame,
         aspect,
         frustumLength,
-        selected !== null && item.frame === selected
+        highlighted !== null && item.frame === highlighted
           ? CAMERA_SEQUENCE_PATH_LINE_WIDTH_PX
           : CAMERA_SEQUENCE_FRUSTUM_LINE_WIDTH_PX,
         color
@@ -2087,14 +2617,17 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     );
     marker.renderOrder = 0;
     marker.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
+    marker.userData[EDITOR_CAMERA_SEQUENCE_CURRENT_KEY] = true;
     group.add(marker);
     this.cameraSequenceCurrentMarker = marker;
-    this.updateCameraSequenceCurrentMarkerFromMeshCamera();
+    this.updateCameraSequenceCurrentMarkerFromPreviewPose();
+    this.syncViewportGizmoTarget();
 
     return true;
   }
 
   clearCameraSequenceVisualization(): void {
+    this.cameraSequenceHighlightedFrame = null;
     this.clearCameraSequenceGroupContents();
   }
 
@@ -2109,6 +2642,20 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
   getCameraSequenceVisible(): boolean {
     return this.cameraSequenceVisible;
+  }
+
+  getCameraSequenceHighlightedFrame(): number | null {
+    return this.cameraSequenceHighlightedFrame;
+  }
+
+  setCameraSequenceDisplayScale(scale: number): boolean {
+    if (!Number.isFinite(scale)) return false;
+    this.cameraSequenceDisplayScale = Math.max(0.25, Math.min(3.0, scale));
+    return true;
+  }
+
+  getCameraSequenceDisplayScale(): number {
+    return this.cameraSequenceDisplayScale;
   }
 
   onCameraInteraction(callback: ((kind: "drag" | "wheel" | "keyboard") => void) | null): void {
@@ -2133,6 +2680,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   private clearCameraSequenceGroupContents(): void {
     if (!this.cameraSequenceGroup) {
       this.cameraSequenceCurrentMarker = null;
+      this.cameraSequenceHelperTargets.clear();
       return;
     }
 
@@ -2143,6 +2691,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       this.cameraSequenceGroup.remove(child);
     }
     this.cameraSequenceCurrentMarker = null;
+    this.cameraSequenceHelperTargets.clear();
   }
 
   private disposeObject3DResources(object: THREE.Object3D): void {
@@ -2163,6 +2712,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   }
 
   private computeCameraSequenceFrustumLength(): number {
+    if (this.cameraSequenceBaseFrustumLength !== null && Number.isFinite(this.cameraSequenceBaseFrustumLength)) {
+      return this.cameraSequenceBaseFrustumLength * this.cameraSequenceDisplayScale;
+    }
+
     const sceneBounds = new THREE.Box3();
     let hasBounds = false;
 
@@ -2194,24 +2747,26 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     }
 
     if (!hasBounds || sceneBounds.isEmpty()) {
-      return 0.35;
+      return 0.35 * this.cameraSequenceDisplayScale;
     }
 
     const size = sceneBounds.getSize(new THREE.Vector3());
     const span = Math.max(size.x, size.y, size.z);
     if (!Number.isFinite(span) || span <= 0) {
-      return 0.35;
+      return 0.35 * this.cameraSequenceDisplayScale;
     }
-    return Math.max(0.15, Math.min(3.0, span * 0.08));
+    this.cameraSequenceBaseFrustumLength = Math.max(0.15, Math.min(3.0, span * 0.08));
+    return this.cameraSequenceBaseFrustumLength * this.cameraSequenceDisplayScale;
   }
 
-  private buildCameraFrustumWireframe(
+  private buildCameraFrustumHelper(
     pose: EditorCameraPose,
+    frame: number,
     aspect: number,
     frustumLength: number,
     lineWidthPx: number,
     color: number
-  ): LineSegments2 | null {
+  ): THREE.Group | null {
     const px = Number(pose?.position?.x);
     const py = Number(pose?.position?.y);
     const pz = Number(pose?.position?.z);
@@ -2225,20 +2780,8 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       return null;
     }
 
-    const center = new THREE.Vector3(px, py, pz);
     const w2c = new THREE.Quaternion(qx, qy, qz, qw);
     const c2w = w2c.clone().invert();
-
-    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(c2w).normalize();
-    let up = new THREE.Vector3(0, 1, 0).applyQuaternion(c2w).normalize();
-    let right = new THREE.Vector3().crossVectors(forward, up);
-    if (right.lengthSq() < 1e-8) {
-      right = new THREE.Vector3(1, 0, 0);
-      up = new THREE.Vector3(0, 1, 0);
-    } else {
-      right.normalize();
-      up = new THREE.Vector3().crossVectors(right, forward).normalize();
-    }
 
     const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 16 / 9;
     const safeLength = Math.max(0.05, frustumLength);
@@ -2246,11 +2789,11 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const halfHeight = Math.tan((safeFov * Math.PI / 180) * 0.5) * safeLength;
     const halfWidth = halfHeight * safeAspect;
 
-    const baseCenter = center.clone().addScaledVector(forward, safeLength);
-    const tl = baseCenter.clone().addScaledVector(up, halfHeight).addScaledVector(right, -halfWidth);
-    const tr = baseCenter.clone().addScaledVector(up, halfHeight).addScaledVector(right, halfWidth);
-    const bl = baseCenter.clone().addScaledVector(up, -halfHeight).addScaledVector(right, -halfWidth);
-    const br = baseCenter.clone().addScaledVector(up, -halfHeight).addScaledVector(right, halfWidth);
+    const center = new THREE.Vector3(0, 0, 0);
+    const tl = new THREE.Vector3(-halfWidth, halfHeight, safeLength);
+    const tr = new THREE.Vector3(halfWidth, halfHeight, safeLength);
+    const bl = new THREE.Vector3(-halfWidth, -halfHeight, safeLength);
+    const br = new THREE.Vector3(halfWidth, -halfHeight, safeLength);
 
     const edges: Array<[THREE.Vector3, THREE.Vector3]> = [
       [center, tl],
@@ -2263,7 +2806,88 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       [bl, tl],
     ];
 
-    return this.buildScreenSpaceLineSegments(edges, color, 0.88, lineWidthPx);
+    const line = this.buildScreenSpaceLineSegments(edges, color, 0.88, lineWidthPx);
+    if (!line) return null;
+
+    const root = new THREE.Group();
+    root.name = `EditorCameraKeyframe_${frame}`;
+    root.position.set(px, py, pz);
+    root.quaternion.copy(c2w);
+    root.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
+    root.userData.cameraKeyframeFrame = frame;
+    root.userData.cameraFovDegrees = safeFov;
+    root.add(line);
+
+    const hitRadius = Math.max(0.05, safeLength * 0.18);
+    const hitProxy = new THREE.Mesh(
+      new THREE.SphereGeometry(hitRadius, 10, 8),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      })
+    );
+    hitProxy.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
+    hitProxy.userData.cameraKeyframeFrame = frame;
+    root.add(hitProxy);
+
+    this.cameraSequenceHelperTargets.set(frame, {
+      frame,
+      object: root,
+      hitProxy,
+    });
+    return root;
+  }
+
+  private pickCameraSequenceKeyframeFromClient(clientX: number, clientY: number): boolean {
+    if (!this.canvas || !this.meshCamera) return false;
+    if (this.cameraSequenceHelperTargets.size === 0 && !this.cameraSequenceCurrentMarker?.visible) return false;
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+
+    const pointer = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -(((clientY - rect.top) / rect.height) * 2 - 1)
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(pointer, this.meshCamera);
+    const targets = Array.from(this.cameraSequenceHelperTargets.values()).map((item) => item.hitProxy);
+    if (this.cameraSequenceCurrentMarker?.visible) {
+      targets.push(this.cameraSequenceCurrentMarker);
+    }
+    const hits = raycaster.intersectObjects(targets, false);
+    if (hits[0]?.object?.userData?.[EDITOR_CAMERA_SEQUENCE_CURRENT_KEY]) {
+      return this.setSelectedCameraSequenceFrame(this.globalTimelineFrame);
+    }
+    const frame = hits[0]?.object?.userData?.cameraKeyframeFrame;
+    if (!Number.isFinite(Number(frame))) return false;
+    return this.setSelectedCameraSequenceFrame(Math.round(Number(frame)));
+  }
+
+  private buildCameraPoseFromHelperTarget(target: THREE.Object3D): EditorCameraPose | null {
+    if (!target) return null;
+    target.updateMatrixWorld(true);
+    const worldPos = new THREE.Vector3();
+    const worldQuat = new THREE.Quaternion();
+    target.getWorldPosition(worldPos);
+    target.getWorldQuaternion(worldQuat);
+    const w2c = worldQuat.clone().invert();
+    const fovDegrees = Number(target.userData?.cameraFovDegrees);
+    return {
+      position: {
+        x: worldPos.x,
+        y: worldPos.y,
+        z: worldPos.z,
+      },
+      rotation: {
+        x: w2c.x,
+        y: w2c.y,
+        z: w2c.z,
+        w: w2c.w,
+      },
+      fovDegrees: Number.isFinite(fovDegrees) ? fovDegrees : 45,
+    };
   }
 
   private buildScreenSpaceLineSegments(
@@ -2302,9 +2926,25 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     return line;
   }
 
-  private updateCameraSequenceCurrentMarkerFromMeshCamera(): void {
-    if (!this.cameraSequenceCurrentMarker || !this.meshCamera) return;
-    this.cameraSequenceCurrentMarker.position.copy(this.meshCamera.position);
+  private updateCameraSequenceCurrentMarkerFromPreviewPose(): void {
+    if (!this.cameraSequenceCurrentMarker) return;
+    if (!this.cameraPreviewPose) {
+      this.cameraSequenceCurrentMarker.visible = false;
+      return;
+    }
+    this.cameraSequenceCurrentMarker.visible = true;
+    this.cameraSequenceCurrentMarker.position.set(
+      Number(this.cameraPreviewPose.position.x) || 0,
+      Number(this.cameraPreviewPose.position.y) || 0,
+      Number(this.cameraPreviewPose.position.z) || 0
+    );
+    this.cameraSequenceCurrentMarker.quaternion.set(
+      Number(this.cameraPreviewPose.rotation.x) || 0,
+      Number(this.cameraPreviewPose.rotation.y) || 0,
+      Number(this.cameraPreviewPose.rotation.z) || 0,
+      Number(this.cameraPreviewPose.rotation.w) || 1
+    );
+    this.cameraSequenceCurrentMarker.userData.cameraFovDegrees = Number(this.cameraPreviewPose.fovDegrees) || 45;
     this.cameraSequenceCurrentMarker.updateMatrixWorld(true);
   }
 
@@ -2369,6 +3009,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     this.sceneDepthRangeScale = safe;
     this.renderLoop.setDepthRangeScale(safe);
     this.fusedRenderer?.setDepthRangeScale(safe);
+    this.cameraPreviewFusedRenderer?.setDepthRangeScale(safe);
     this.editorModels.forEach((model) => {
       if (model.object3D) {
         this.syncMeshDepthRangeUniform(model.object3D);
@@ -2464,6 +3105,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     }
     this.gizmoManager?.onResize();
     this.updateCameraSequenceLineMaterialResolution();
+    this.syncCameraPreviewCanvasSize();
   }
 
   /**
@@ -2533,6 +3175,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     if (this.meshRenderer) {
       this.meshRenderer.dispose();
     }
+    this.disposeCameraPreviewRenderer();
     this.gizmoManager?.dispose();
     if (this.meshCanvas && this.meshCanvas !== this.canvas && this.meshCanvas.parentElement) {
       this.meshCanvas.parentElement.removeChild(this.meshCanvas);

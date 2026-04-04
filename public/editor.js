@@ -1,10 +1,66 @@
 /**
- * Visionary Editor UI Controller 0.1.6
+ * Visionary Editor UI Controller 0.1.8
  * Handles UI interactions and connects to EditorApp
  */
 
+import {
+    resolveAgentMessageRefreshScrollTop,
+    shouldForceAgentMessageBottomAfterRender,
+} from './editor-agent-scroll.js';
+import {
+    appendAgentSessionRetryAttempt,
+    createAgentGenerationAttempt,
+    createAgentSession,
+    createAgentThreadMessage,
+    getAgentSessionActiveAttempt,
+    patchAgentSessionAttemptBlock,
+    resolveAgentSessionActionAvailability,
+    resolveAgentSessionPagerItems,
+    setAgentSessionArchiveState,
+    toggleAgentSessionCollapsed,
+    updateAgentSessionAttempt,
+} from '../src/editor/agent-session-model.js';
+import { AgentSessionStore } from '../src/editor/agent-session-store.js';
+import {
+    CAMERA_PREVIEW_ASPECT_OPTIONS,
+    getCameraPreviewAspectOption,
+    normalizeCameraPreviewAspectId,
+} from './editor-camera-preview.js';
+import {
+    normalizeViewportGizmoModeForSelection,
+    resolveViewportSelectionKind,
+} from './editor-gizmo-selection.js';
+import {
+    resolveFloatingPanelPosition,
+    resolveFloatingPanelLayerZIndices,
+} from './editor-floating-panels.js';
+
 // DOM 元素引用
 const dom = {
+    app: document.getElementById('app'),
+    editorShell: document.getElementById('editor-shell'),
+    editorStage: document.getElementById('editor-stage'),
+    agentWorkbench: document.getElementById('agent-workbench'),
+    agentWorkbenchResizer: document.getElementById('agent-workbench-resizer'),
+    btnToggleAgentWorkbench: document.getElementById('btnToggleAgentWorkbench'),
+    agentWorkflowStatus: document.getElementById('agentWorkflowStatus'),
+    agentWorkflowTabs: document.getElementById('agentWorkflowTabs'),
+    agentContextSummary: document.getElementById('agentContextSummary'),
+    btnAgentClearConversation: document.getElementById('btnAgentClearConversation'),
+    agentMessageScroll: document.querySelector('.agent-message-scroll'),
+    agentMessageList: document.getElementById('agentMessageList'),
+    agentMessageScrollbar: document.getElementById('agentMessageScrollbar'),
+    agentMessageScrollbarThumb: document.getElementById('agentMessageScrollbarThumb'),
+    agentTaskCards: document.getElementById('agentTaskCards'),
+    agentSuggestionChips: document.getElementById('agentSuggestionChips'),
+    agentComposer: document.getElementById('agentComposer'),
+    agentComposerDock: document.getElementById('agentComposerDock'),
+    agentComposerAttachments: document.getElementById('agentComposerAttachments'),
+    agentImageInput: document.getElementById('agentImageInput'),
+    agentComposerInput: document.getElementById('agentComposerInput'),
+    btnAgentAddImage: document.getElementById('btnAgentAddImage'),
+    btnAgentSend: document.getElementById('btnAgentSend'),
+
     // Canvas 相关
     canvasContainer: document.getElementById('canvas-container'),
     canvas: document.getElementById('canvas'),
@@ -94,15 +150,24 @@ const dom = {
     btnClearCameraSequence: document.getElementById('btnClearCameraSequence'),
     btnPlayCamera: document.getElementById('btnPlayCamera'),
     btnLoopCamera: document.getElementById('btnLoopCamera'),
+    btnToggleCameraPreview: document.getElementById('btnToggleCameraPreview'),
     btnToggleCameraSettings: document.getElementById('btnToggleCameraSettings'),
+    btnCameraPreviewClose: document.getElementById('btnCameraPreviewClose'),
+    cameraPreviewPanel: document.getElementById('cameraPreviewPanel'),
+    cameraPreviewCanvas: document.getElementById('cameraPreviewCanvas'),
+    cameraPreviewViewport: document.getElementById('cameraPreviewViewport'),
+    cameraPreviewAspectRatio: document.getElementById('cameraPreviewAspectRatio'),
     btnCameraSettingsClose: document.getElementById('btnCameraSettingsClose'),
     cameraSettingsPanel: document.getElementById('cameraSettingsPanel'),
     btnToggleCameraSequence: document.getElementById('btnToggleCameraSequence'),
+    btnToggleCameraSequenceDrag: document.getElementById('btnToggleCameraSequenceDrag'),
     timelineCameraInterpolation: document.getElementById('timelineCameraInterpolation'),
     timelineInterpolationParamControl: document.getElementById('timelineInterpolationParamControl'),
     timelineInterpolationParamLabel: document.getElementById('timelineInterpolationParamLabel'),
     timelineInterpolationParam: document.getElementById('timelineInterpolationParam'),
     timelineInterpolationParamValue: document.getElementById('timelineInterpolationParamValue'),
+    cameraDisplayScale: document.getElementById('cameraDisplayScale'),
+    cameraDisplayScaleValue: document.getElementById('cameraDisplayScaleValue'),
     timelineSpeed: document.getElementById('timelineSpeed'),
     timelineFps: document.getElementById('timelineFps'),
     timelineRuler: document.getElementById('timelineRuler'),
@@ -137,10 +202,13 @@ const dom = {
 
 // 应用状态
 const state = {
-    VERSION: '0.1.6',
+    VERSION: '0.1.8',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     cameraSequenceVisible: true,
+    cameraSequenceDragEnabled: false,
+    selectedCameraSequenceFrame: null,
+    cameraMode: 'orbit',
     currentTime: 0,
     isPlaying: false,
     isLooping: false,
@@ -151,6 +219,7 @@ const state = {
     timelinePlaybackSpeed: 1.0,
     cameraInterpolationMode: 'linear',
     cameraInterpolationParam: 0.5,
+    cameraSequenceDisplayScale: 1.0,
     timelineDurationSec: 10,
     sceneBackgroundHex: '#707070',
     sceneSkyPresetId: 'night',
@@ -158,11 +227,18 @@ const state = {
     sceneCameraFov: 45.0,
     viewportGizmoMode: null,
     sceneSettingsOpen: false,
+    cameraPreviewOpen: false,
+    cameraPreviewAspectId: '16:9',
     cameraSettingsOpen: false,
     exportFlyoutOpen: false,
     clearScreenMode: false,
     clearScreenPreview: false,
     leftSidebarCollapsed: false,
+    agentWorkbenchCollapsed: false,
+    agentWorkflow: 'scene-build',
+    agentWorkflowThreads: {},
+    agentMessages: [],
+    agentPendingImages: [],
 };
 
 // EditorApp 实例 (会在 init 后设置)
@@ -176,13 +252,37 @@ let imageExportApi = null;
 let videoExportApi = null;
 let pendingExportType = null;
 let isExporting = false;
+let syncingCameraSequenceSelection = false;
+let syncingSelectedModelSelection = false;
+let cameraPreviewDragState = null;
+let activeFloatingPanelKey = 'cameraPreview';
 let keyframeMarkerDrag = null;
 let suppressMarkerClickOnce = false;
 let sidebarResizeState = null;
+let agentWorkbenchResizeState = null;
+let agentMessageScrollbarDragState = null;
+let agentPreviewManagerPromise = null;
+let agentMessageBottomPinRaf = 0;
+let agentMessageBottomPinFramesRemaining = 0;
+let agentSessionStore = null;
+let agentSessionPersistTimer = 0;
 let preferredLeftSidebarWidth = null;
 let preferredRightSidebarWidth = null;
+let preferredAgentWorkbenchWidth = null;
 let sidebarWidthDebugHistory = [];
+const agentSessionActionHandlers = {
+    onCancel: null,
+    onRetry: null,
+    onApply: null,
+};
 const THEME_STORAGE_KEY = 'visionary_editor_theme';
+const AGENT_WORKBENCH_WIDTH_STORAGE_KEY = 'visionary_editor_agent_workbench_width_v1';
+const AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY = 'visionary_editor_agent_workbench_collapsed_v1';
+const AGENT_WORKBENCH_WORKFLOW_STORAGE_KEY = 'visionary_editor_agent_workbench_workflow_v1';
+const AGENT_WORKBENCH_DEFAULT_WIDTH = 360;
+const AGENT_WORKBENCH_MIN_WIDTH = 300;
+const AGENT_WORKBENCH_MAX_WIDTH = 520;
+const AGENT_WORKBENCH_COLLAPSED_WIDTH = 64;
 const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_left_sidebar_width_v4';
 const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_right_sidebar_width';
 const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
@@ -195,6 +295,11 @@ const CAMERA_INTERPOLATION_MODE_CATMULL = 'catmull';
 const CAMERA_INTERPOLATION_MODE_EASE = 'ease';
 const CAMERA_INTERPOLATION_PARAM_STORAGE_KEY = 'visionary_editor_camera_interpolation_param';
 const CAMERA_INTERPOLATION_MODE_STORAGE_KEY = 'visionary_editor_camera_interpolation_mode';
+const CAMERA_DISPLAY_SCALE_STORAGE_KEY = 'visionary_editor_camera_display_scale';
+const CAMERA_PREVIEW_ASPECT_STORAGE_KEY = 'visionary_editor_camera_preview_aspect_ratio_v1';
+const CAMERA_DISPLAY_SCALE_MIN = 0.25;
+const CAMERA_DISPLAY_SCALE_MAX = 3.0;
+const CAMERA_DISPLAY_SCALE_DEFAULT = 1.0;
 const CAMERA_INTERPOLATION_CONFIGS = {
     [CAMERA_INTERPOLATION_MODE_LINEAR]: {
         label: '线性',
@@ -261,12 +366,1545 @@ const FALLBACK_SKY_PRESETS = [
     { id: 'night', name: '夜空', colorHex: '#707070' },
 ];
 
+const AGENT_WORKFLOW_DEFS = {
+    'scene-build': {
+        label: '场景构建',
+        starter: '可以从一张参考图或一句场景描述开始。我会先帮你拆出空间结构、主体布置和光照氛围，再给出可继续编辑的场景草案。',
+        starterSuggestions: [
+            '帮我生成这张图对应的场景',
+            '补全这个房间，保持原有镜头方向',
+            '把这个空场景扩展成可拍摄的电影空间',
+            '先给我一个室内场景搭建方案',
+        ],
+        previewLabel: '场景结果预览占位',
+        progressTitle: '场景构建中',
+        reply: (prompt) => `占位 Agent：已收到“场景构建”指令。\n建议先基于参考图抽取主体、地面和光照，再生成一个可人工接管的场景草案。\n当前不会直接改动右侧场景，后续可把这一步接到真实场景装配。`,
+    },
+    'object-insert': {
+        label: '物体插入',
+        starter: '这个流程适合补充场景里的关键资产。你可以给我一张参考图、一段文字，或者后续在画布上选点，我会把物体生成和放置策略一起整理出来。',
+        starterSuggestions: [
+            '在画面左侧补一张沙发和小茶几',
+            '帮我生成一个工业风吊灯并放到天花板中央',
+            '在镜头前景插入一辆停靠的摩托车',
+            '根据这张参考图补一个带金属质感的路灯',
+        ],
+        previewLabel: '物体结果预览占位',
+        progressTitle: '物体生成中',
+        reply: (prompt) => `占位 Agent：我会把“物体插入”拆成“生成资产”和“放置策略”两步。\n如果后续接入 canvas 选点，我会优先使用选点深度和法向来推导物体落位。\n当前仅回显方案，不执行插入。`,
+    },
+    'character-create': {
+        label: '人物创造',
+        starter: '这里用来处理角色创建。可以先做 T-Pose 人物，再继续到骨骼绑定和动作生成。我会优先把角色设定、动作来源和接入顺序整理清楚。',
+        starterSuggestions: [
+            '生成一个长风衣女主的 T-Pose 角色',
+            '帮我做一个适合近景表演的男性角色草案',
+            '为现有人物准备骨骼绑定步骤',
+            '根据参考视频生成一个缓慢转身动作',
+        ],
+        previewLabel: '人物结果预览占位',
+        progressTitle: '人物创建中',
+        reply: (prompt) => `占位 Agent：当前在“人物创造”流程中，我会优先把需求拆成角色形象、骨骼结构和动作来源三部分。\n这一步适合先输出流程卡和资产需求清单，再逐步接入角色工具链。`,
+    },
+    'camera-direct': {
+        label: '运镜生成',
+        starter: '这里可以直接用自然语言生成镜头设计。我会先理解主体、节奏和情绪，再把它拆成相机路径、关键帧和时长分配。',
+        starterSuggestions: [
+            '给这个场景做一个 8 秒推进镜头',
+            '生成一个从门外推进到人物特写的镜头序列',
+            '围绕主体做一段缓慢环绕运镜',
+            '帮我设计一个结尾停留在窗边的镜头',
+        ],
+        previewLabel: '运镜结果预览占位',
+        progressTitle: '镜头规划中',
+        reply: (prompt) => `占位 Agent：已进入“运镜生成”模式。\n我会先把自然语言拆成镜头目标、镜头运动和时长分配，再映射成相机关键帧草案。\n当前不会写入时间轴，但会按这个结构返回建议。`,
+    },
+};
+
+function createDefaultAgentMessages(workflowId = state.agentWorkflow) {
+    const workflow = AGENT_WORKFLOW_DEFS[workflowId] || getActiveAgentWorkflowDef();
+    return [
+        createAgentThreadMessage({
+            role: 'assistant',
+            workflow: workflowId,
+            text: workflow.starter,
+            promptSuggestions: workflow.starterSuggestions,
+        }),
+    ];
+}
+
 function normalizeHexColor(value) {
     if (!value) return null;
     const text = String(value).trim();
     const matched = text.match(/^#?([0-9a-fA-F]{6})$/);
     if (!matched) return null;
     return `#${matched[1].toUpperCase()}`;
+}
+
+function hexToRgb(hex) {
+    const normalized = normalizeHexColor(hex);
+    if (!normalized) return null;
+    return {
+        r: Number.parseInt(normalized.slice(1, 3), 16),
+        g: Number.parseInt(normalized.slice(3, 5), 16),
+        b: Number.parseInt(normalized.slice(5, 7), 16),
+    };
+}
+
+function clampColorChannel(value) {
+    return Math.min(255, Math.max(0, Math.round(Number(value) || 0)));
+}
+
+function rgbToHex(r, g, b) {
+    return `#${[r, g, b].map((value) => clampColorChannel(value).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+}
+
+function linearChannelToSrgb(channel) {
+    const value = Math.min(1, Math.max(0, Number(channel) || 0));
+    if (value <= 0.0031308) {
+        return value * 12.92;
+    }
+    return (1.055 * (value ** (1 / 2.4))) - 0.055;
+}
+
+// Agent/workbench 不能直接复用场景设置里的原始 #RRGGBB。
+// left-sidebar 看到的是 canvas 最终显示出来的背景色，而编辑器渲染链会把
+// scene background 当作线性空间 clear color，再经过 linear -> sRGB 输出。
+// 因此如果 agent 直接吃原始 hex，会稳定比 left-sidebar 更灰、更暗。
+// 这里先把场景设置值转换成“canvas 实际可见背景色”，再同步给 agent 的底层。
+function sceneHexToVisibleCanvasHex(hex) {
+    const rgb = hexToRgb(hex);
+    if (!rgb) return '#707070';
+    return rgbToHex(
+        linearChannelToSrgb(rgb.r / 255) * 255,
+        linearChannelToSrgb(rgb.g / 255) * 255,
+        linearChannelToSrgb(rgb.b / 255) * 255
+    );
+}
+
+function syncAgentWorkbenchLayoutVars() {
+    const width = state.agentWorkbenchCollapsed
+        ? AGENT_WORKBENCH_COLLAPSED_WIDTH
+        : clampAgentWorkbenchWidth(preferredAgentWorkbenchWidth ?? AGENT_WORKBENCH_DEFAULT_WIDTH);
+    document.documentElement.style.setProperty(
+        '--agent-workbench-shell-offset',
+        `${width}px`
+    );
+}
+
+function syncAgentWorkbenchSceneBackground() {
+    const normalized = normalizeHexColor(state.sceneBackgroundHex) || '#707070';
+    const visibleHex = sceneHexToVisibleCanvasHex(normalized);
+    document.documentElement.style.setProperty('--agent-workbench-scene-bg', visibleHex);
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function clampAgentWorkbenchWidth(value) {
+    if (value === null || value === undefined || value === '') {
+        return AGENT_WORKBENCH_DEFAULT_WIDTH;
+    }
+    const n = Number(value);
+    if (!Number.isFinite(n)) return AGENT_WORKBENCH_DEFAULT_WIDTH;
+    return Math.min(AGENT_WORKBENCH_MAX_WIDTH, Math.max(AGENT_WORKBENCH_MIN_WIDTH, Math.round(n)));
+}
+
+function getActiveAgentWorkflowDef() {
+    return AGENT_WORKFLOW_DEFS[state.agentWorkflow] || AGENT_WORKFLOW_DEFS['scene-build'];
+}
+
+function createAgentMessage(role, text, workflow = state.agentWorkflow) {
+    return createAgentThreadMessage({
+        role,
+        workflow,
+        text,
+    });
+}
+
+function ensureAgentSessionStore() {
+    if (!agentSessionStore) {
+        agentSessionStore = new AgentSessionStore();
+    }
+    return agentSessionStore;
+}
+
+function ensureAgentWorkflowThread(workflowId = state.agentWorkflow) {
+    if (!AGENT_WORKFLOW_DEFS[workflowId]) {
+        workflowId = 'scene-build';
+    }
+    if (!state.agentWorkflowThreads[workflowId]) {
+        state.agentWorkflowThreads[workflowId] = {
+            workflow: workflowId,
+            label: AGENT_WORKFLOW_DEFS[workflowId]?.label || workflowId,
+            items: createDefaultAgentMessages(workflowId),
+        };
+    }
+    return state.agentWorkflowThreads[workflowId];
+}
+
+function setCurrentAgentWorkflowThread(workflowId = state.agentWorkflow) {
+    const thread = ensureAgentWorkflowThread(workflowId);
+    state.agentMessages = thread.items;
+    return thread;
+}
+
+function buildAgentConversationSnapshot() {
+    return {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        workflows: Object.keys(AGENT_WORKFLOW_DEFS).map((workflowId) => {
+            const thread = ensureAgentWorkflowThread(workflowId);
+            return {
+                workflow: workflowId,
+                label: thread.label,
+                items: thread.items,
+            };
+        }),
+    };
+}
+
+async function persistAgentConversationsNow() {
+    const store = ensureAgentSessionStore();
+    if (!store.getStatus().enabled) return null;
+    return store.persistSnapshot(buildAgentConversationSnapshot());
+}
+
+function schedulePersistAgentConversations() {
+    window.clearTimeout(agentSessionPersistTimer);
+    agentSessionPersistTimer = window.setTimeout(() => {
+        persistAgentConversationsNow().catch((error) => {
+            console.warn('[Agent Sessions] persist failed', error);
+        });
+    }, 160);
+}
+
+// 真实后端接入约定：
+// registerAgentSessionActionHandlers({
+//   onCancel: async ({ workflow, session, attempt }) => {},
+//   onRetry: async ({ workflow, session, attempt, nextAttempt }) => {},
+//   onApply: async ({ workflow, session, attempt }) => {},
+// })
+// 当前 UI 会先完成本地占位状态切换，再调用这些回调，方便后续把真实取消/重试/应用逻辑接进来。
+function registerAgentSessionActionHandlers(handlers = {}) {
+    agentSessionActionHandlers.onCancel = typeof handlers.onCancel === 'function' ? handlers.onCancel : null;
+    agentSessionActionHandlers.onRetry = typeof handlers.onRetry === 'function' ? handlers.onRetry : null;
+    agentSessionActionHandlers.onApply = typeof handlers.onApply === 'function' ? handlers.onApply : null;
+}
+
+function invokeAgentSessionActionHandler(actionName, payload) {
+    const handler = agentSessionActionHandlers[actionName];
+    if (typeof handler !== 'function') return Promise.resolve();
+    return Promise.resolve(handler(payload));
+}
+
+function getAgentSessionArchiveThumbnail(session) {
+    if (session?.archiveSummary?.thumbnailUrl) return session.archiveSummary.thumbnailUrl;
+    for (const attempt of session?.attempts || []) {
+        for (const block of attempt.blocks || []) {
+            if (block.type === 'image' && block.status === 'ready' && block.src) {
+                return block.src;
+            }
+        }
+    }
+    return '';
+}
+
+function getAgentItemIndexById(itemId) {
+    return state.agentMessages.findIndex((item) => item.id === itemId);
+}
+
+function updateAgentSessionById(sessionId, updater, {
+    autoScroll = 'preserve-or-pin-bottom',
+} = {}) {
+    const index = getAgentItemIndexById(sessionId);
+    if (index < 0) return null;
+    const session = state.agentMessages[index];
+    if (!session || session.kind !== 'session') return null;
+    const nextSession = updater(session);
+    if (!nextSession) return null;
+    state.agentMessages[index] = nextSession;
+    renderAgentMessages({ autoScroll });
+    schedulePersistAgentConversations();
+    return nextSession;
+}
+
+function createAgentBlockId(prefix = 'block') {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createAgentProgressBlock({
+    id = createAgentBlockId('progress'),
+    title = '',
+    statusText = '',
+    value = 0,
+    indeterminate = false,
+} = {}) {
+    return {
+        id,
+        type: 'progress',
+        title,
+        statusText,
+        value,
+        indeterminate,
+    };
+}
+
+function createAgentImageBlock({
+    id = createAgentBlockId('image'),
+    title = '',
+    status = 'placeholder',
+    src = '',
+    alt = '',
+} = {}) {
+    return {
+        id,
+        type: 'image',
+        title,
+        status,
+        src,
+        alt,
+    };
+}
+
+function createAgentViewer3DBlock({
+    id = createAgentBlockId('viewer3d'),
+    title = '',
+    status = 'placeholder',
+    assetUrl = '',
+    format = 'gltf',
+    cameraPreset = 'orbit',
+    interaction = {},
+} = {}) {
+    return {
+        id,
+        type: 'viewer3d',
+        title,
+        status,
+        assetUrl,
+        format,
+        cameraPreset,
+        interaction: {
+            rotate: interaction.rotate !== false,
+            zoom: interaction.zoom !== false,
+            pan: false,
+            reset: interaction.reset !== false,
+        },
+    };
+}
+
+function isReadyAgentViewer3DBlock(block) {
+    return block?.type === 'viewer3d'
+        && block.status === 'ready'
+        && Boolean(block.assetUrl)
+        && (block.format === 'glb' || block.format === 'gltf');
+}
+
+function isImageFile(file) {
+    if (!(file instanceof File)) return false;
+    if (typeof file.type === 'string' && file.type.startsWith('image/')) return true;
+    return /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name || '');
+}
+
+function renderAgentComposerAttachments() {
+    if (!dom.agentComposerAttachments) return;
+    const attachments = state.agentPendingImages || [];
+    dom.agentComposerAttachments.classList.toggle('hidden', attachments.length === 0);
+    dom.agentComposerAttachments.innerHTML = attachments.map((file, index) => `
+        <span class="agent-composer-attachment">
+            <span class="agent-composer-attachment-name">${escapeHtml(file.name)}</span>
+            <button
+                type="button"
+                class="agent-composer-attachment-remove"
+                data-agent-attachment-remove="${index}"
+                aria-label="移除图片 ${escapeHtml(file.name)}"
+                title="移除"
+            >×</button>
+        </span>
+    `).join('');
+}
+
+function queueAgentComposerImages(files) {
+    const images = Array.from(files || []).filter(isImageFile);
+    if (images.length === 0) return 0;
+    state.agentPendingImages = [...state.agentPendingImages, ...images];
+    renderAgentComposerAttachments();
+    return images.length;
+}
+
+function getAgentMessageIndexById(messageId) {
+    return state.agentMessages.findIndex((message) => message.id === messageId);
+}
+
+function updateAgentMessageById(messageId, updater) {
+    const index = getAgentMessageIndexById(messageId);
+    if (index < 0) return null;
+    const message = state.agentMessages[index];
+    if (message?.kind === 'session') return null;
+    updater(message);
+    renderAgentMessages({ autoScroll: 'preserve-or-pin-bottom' });
+    schedulePersistAgentConversations();
+    return message;
+}
+
+function createAgentMessageHandle(messageId) {
+    return {
+        messageId,
+        updateText(nextText) {
+            updateAgentMessageById(messageId, (message) => {
+                message.text = String(nextText ?? '');
+            });
+        },
+        setBlocks(blocks) {
+            updateAgentMessageById(messageId, (message) => {
+                message.blocks = Array.isArray(blocks) ? blocks.map((block) => ({ ...block })) : [];
+            });
+        },
+        patchBlock(blockId, patch) {
+            updateAgentMessageById(messageId, (message) => {
+                const nextBlocks = Array.isArray(message.blocks) ? message.blocks : [];
+                message.blocks = nextBlocks.map((block) => (
+                    block.id === blockId ? { ...block, ...patch } : block
+                ));
+            });
+        },
+        finish() {
+            updateAgentMessageById(messageId, (message) => {
+                message.isComplete = true;
+            });
+        },
+        fail(errorText) {
+            updateAgentMessageById(messageId, (message) => {
+                message.text = String(errorText ?? 'Agent 执行失败');
+                message.blocks = (message.blocks || []).map((block) => (
+                    block.type === 'progress'
+                        ? { ...block, indeterminate: false, statusText: '失败' }
+                        : (block.type === 'image' || block.type === 'viewer3d')
+                            ? { ...block, status: 'error' }
+                            : block
+                ));
+            });
+        },
+    };
+}
+
+function createAgentSessionHandle(sessionId, attemptId) {
+    return {
+        sessionId,
+        attemptId,
+        updateText(nextText) {
+            updateAgentSessionById(sessionId, (session) => updateAgentSessionAttempt(session, {
+                attemptId,
+                text: nextText,
+            }));
+        },
+        setBlocks(blocks) {
+            updateAgentSessionById(sessionId, (session) => updateAgentSessionAttempt(session, {
+                attemptId,
+                blocks,
+            }));
+        },
+        patchBlock(blockId, patch) {
+            updateAgentSessionById(sessionId, (session) => patchAgentSessionAttemptBlock(session, {
+                attemptId,
+                blockId,
+                patch,
+            }));
+        },
+        finish({ promptSuggestions = null } = {}) {
+            updateAgentSessionById(sessionId, (session) => updateAgentSessionAttempt(session, {
+                attemptId,
+                status: 'complete',
+                promptSuggestions,
+            }));
+        },
+        fail(errorText) {
+            updateAgentSessionById(sessionId, (session) => {
+                const activeAttempt = getAgentSessionActiveAttempt(session);
+                const failedBlocks = (activeAttempt?.blocks || []).map((block) => (
+                    block.type === 'progress'
+                        ? { ...block, indeterminate: false, statusText: '失败' }
+                        : (block.type === 'image' || block.type === 'viewer3d')
+                            ? { ...block, status: 'error' }
+                            : block
+                ));
+                return updateAgentSessionAttempt(session, {
+                    attemptId,
+                    text: String(errorText ?? 'Agent 执行失败'),
+                    status: 'failed',
+                    blocks: failedBlocks,
+                });
+            });
+        },
+    };
+}
+
+function openAgentAssistantMessage({
+    workflow = state.agentWorkflow,
+    text = '',
+    blocks = [],
+    promptSuggestions = null,
+} = {}) {
+    const message = createAgentMessage('assistant', text, workflow);
+    message.blocks = Array.isArray(blocks) ? blocks : [];
+    message.promptSuggestions = Array.isArray(promptSuggestions) ? promptSuggestions : null;
+    state.agentMessages.push(message);
+    renderAgentMessages({ autoScroll: 'always' });
+    schedulePersistAgentConversations();
+    return createAgentMessageHandle(message.id);
+}
+
+function uint8ArrayToBase64(bytes) {
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+}
+
+function createMockImageDataUrl(label, tint = '#7aa2ff') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+
+    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    gradient.addColorStop(0, tint);
+    gradient.addColorStop(1, '#111827');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.fillRect(28, 28, canvas.width - 56, canvas.height - 56);
+
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = '600 28px Segoe UI';
+    ctx.fillText(label, 48, 88);
+    ctx.font = '400 18px Segoe UI';
+    ctx.fillStyle = 'rgba(248,250,252,0.88)';
+    ctx.fillText('Agent 生成预览占位', 48, 124);
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(48, 152, canvas.width - 96, canvas.height - 210);
+    ctx.beginPath();
+    ctx.moveTo(80, 356);
+    ctx.lineTo(220, 240);
+    ctx.lineTo(320, 310);
+    ctx.lineTo(430, 208);
+    ctx.lineTo(560, 330);
+    ctx.stroke();
+
+    return canvas.toDataURL('image/png');
+}
+
+function createMockGltfDataUrl(color = [0.53, 0.68, 1, 1]) {
+    const positions = new Float32Array([
+        0, 0.75, 0,
+        -0.55, -0.45, 0.55,
+        0.55, -0.45, 0.55,
+        0.55, -0.45, -0.55,
+        -0.55, -0.45, -0.55,
+    ]);
+    const indices = new Uint16Array([
+        0, 1, 2,
+        0, 2, 3,
+        0, 3, 4,
+        0, 4, 1,
+        1, 4, 3,
+        1, 3, 2,
+    ]);
+    const posBytes = new Uint8Array(positions.buffer);
+    const idxBytes = new Uint8Array(indices.buffer);
+    const buffer = new Uint8Array(posBytes.byteLength + idxBytes.byteLength);
+    buffer.set(posBytes, 0);
+    buffer.set(idxBytes, posBytes.byteLength);
+
+    const gltf = {
+        asset: { version: '2.0' },
+        scene: 0,
+        scenes: [{ nodes: [0] }],
+        nodes: [{ mesh: 0 }],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, material: 0 }] }],
+        materials: [{
+            pbrMetallicRoughness: {
+                baseColorFactor: color,
+                metallicFactor: 0.08,
+                roughnessFactor: 0.84,
+            },
+        }],
+        buffers: [{
+            byteLength: buffer.byteLength,
+            uri: `data:application/octet-stream;base64,${uint8ArrayToBase64(buffer)}`,
+        }],
+        bufferViews: [
+            { buffer: 0, byteOffset: 0, byteLength: posBytes.byteLength, target: 34962 },
+            { buffer: 0, byteOffset: posBytes.byteLength, byteLength: idxBytes.byteLength, target: 34963 },
+        ],
+        accessors: [
+            {
+                bufferView: 0,
+                componentType: 5126,
+                count: positions.length / 3,
+                type: 'VEC3',
+                min: [-0.55, -0.45, -0.55],
+                max: [0.55, 0.75, 0.55],
+            },
+            {
+                bufferView: 1,
+                componentType: 5123,
+                count: indices.length,
+                type: 'SCALAR',
+            },
+        ],
+    };
+
+    return `data:model/gltf+json;base64,${btoa(JSON.stringify(gltf))}`;
+}
+
+async function ensureAgentPreviewManager() {
+    if (!agentPreviewManagerPromise) {
+        agentPreviewManagerPromise = import('../src/editor/agent-preview-manager.js')
+            .then((module) => new module.AgentPreviewManager())
+            .catch((error) => {
+                agentPreviewManagerPromise = null;
+                console.warn('[Agent Preview] failed to load preview manager', error);
+                throw error;
+            });
+    }
+    return agentPreviewManagerPromise;
+}
+
+async function syncAgent3DBlocks() {
+    const viewerBlocks = [];
+    for (const item of state.agentMessages) {
+        const blocks = item?.kind === 'session'
+            ? (getAgentSessionActiveAttempt(item)?.blocks || [])
+            : (item.blocks || []);
+        for (const block of blocks) {
+            if (!isReadyAgentViewer3DBlock(block)) continue;
+            const host = dom.agentMessageList?.querySelector(`[data-agent-viewer-block-id="${block.id}"]`);
+            if (host instanceof HTMLElement) {
+                viewerBlocks.push({ block, host });
+            }
+        }
+    }
+
+    if (viewerBlocks.length === 0) {
+        if (!agentPreviewManagerPromise) return;
+        const manager = await agentPreviewManagerPromise;
+        manager.disposeAll();
+        return;
+    }
+
+    try {
+        const manager = await ensureAgentPreviewManager();
+        manager.sync(viewerBlocks);
+    } catch (error) {
+        console.warn('[Agent Preview] sync failed', error);
+    }
+}
+
+function renderAgentProgressBlock(block) {
+    const progress = Math.max(0, Math.min(1, Number(block.value) || 0));
+    const percentText = block.indeterminate ? '处理中' : `${Math.round(progress * 100)}%`;
+    return `
+        <section class="agent-block agent-block-progress" data-agent-block-id="${block.id}">
+            <div class="agent-block-header">
+                <span class="agent-block-title">${escapeHtml(block.title || '进度')}</span>
+                <span class="agent-block-meta">${percentText}</span>
+            </div>
+            <div class="agent-progress-track ${block.indeterminate ? 'is-indeterminate' : ''}">
+                <div class="agent-progress-fill" style="width:${Math.round(progress * 100)}%"></div>
+            </div>
+            ${block.statusText ? `<div class="agent-block-status">${escapeHtml(block.statusText)}</div>` : ''}
+        </section>
+    `;
+}
+
+function renderAgentImageBlock(block) {
+    const ready = block.status === 'ready' && block.src;
+    return `
+        <section class="agent-block agent-block-image" data-agent-block-id="${block.id}">
+            <div class="agent-block-header">
+                <span class="agent-block-title">${escapeHtml(block.title || '图像')}</span>
+                <span class="agent-block-meta">${escapeHtml(block.status || 'placeholder')}</span>
+            </div>
+            <div class="agent-image-frame ${ready ? 'is-ready' : ''}">
+                ${ready
+                    ? `<img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt || block.title || 'Agent image')}" loading="lazy">`
+                    : '<div class="agent-image-placeholder">图像生成中</div>'}
+            </div>
+        </section>
+    `;
+}
+
+function renderAgentViewer3DBlock(block) {
+    const allowReset = block.interaction?.reset !== false;
+    const isReady = block.status === 'ready';
+    return `
+        <section class="agent-block agent-block-viewer3d ${isReady ? 'is-ready' : 'is-disabled'}" data-agent-block-id="${block.id}">
+            <div class="agent-block-header">
+                <span class="agent-block-title">${escapeHtml(block.title || '3D 预览')}</span>
+                <div class="agent-block-header-actions">
+                    <span class="agent-block-meta">${escapeHtml(block.status || 'placeholder')}</span>
+                    ${allowReset ? `<button type="button" class="agent-viewer-reset" data-agent-viewer-reset="${block.id}" ${isReady ? '' : 'disabled'}>重置视角</button>` : ''}
+                </div>
+            </div>
+            <div class="agent-viewer-frame ${isReady ? 'is-ready' : 'is-disabled'}">
+                <div class="agent-viewer-surface" data-agent-viewer-block-id="${block.id}"></div>
+            </div>
+        </section>
+    `;
+}
+
+function renderAgentBlocks(blocks) {
+    if (!Array.isArray(blocks) || blocks.length === 0) return '';
+    return `
+        <div class="agent-message-blocks">
+            ${blocks.map((block) => {
+                if (block.type === 'progress') return renderAgentProgressBlock(block);
+                if (block.type === 'image') return renderAgentImageBlock(block);
+                if (block.type === 'viewer3d') return renderAgentViewer3DBlock(block);
+                return '';
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderAgentAttachments(attachments) {
+    if (!Array.isArray(attachments) || attachments.length === 0) return '';
+    return `
+        <div class="agent-message-attachments">
+            ${attachments.map((attachment) => `
+                <div class="agent-message-attachment">
+                    <div class="agent-message-attachment-frame"></div>
+                    <span class="agent-message-attachment-label">${escapeHtml(attachment.name)}</span>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+function renderAgentPromptSuggestions(promptSuggestions) {
+    if (!Array.isArray(promptSuggestions) || promptSuggestions.length === 0) return '';
+    return `
+        <div class="agent-message-suggestions">
+            ${promptSuggestions.map((suggestion) => `
+                <button
+                    type="button"
+                    class="agent-message-suggestion"
+                    data-agent-suggestion-text="${escapeHtml(suggestion)}"
+                >${escapeHtml(suggestion)}</button>
+            `).join('')}
+        </div>
+    `;
+}
+
+function renderAgentMessageItem(message) {
+    return `
+        <div class="agent-message ${message.role === 'user' ? 'is-user' : 'is-assistant'}">
+            <div class="agent-message-bubble">
+                ${message.role === 'user' ? '' : '<span class="agent-message-role">Agent</span>'}
+                ${renderAgentAttachments(message.attachments)}
+                <div class="agent-message-text">${escapeHtml(message.text)}</div>
+                ${renderAgentBlocks(message.blocks)}
+                ${renderAgentPromptSuggestions(message.promptSuggestions)}
+            </div>
+        </div>
+    `;
+}
+
+function renderAgentSessionPager(session) {
+    const total = session?.attempts?.length || 0;
+    if (total <= 1) return '';
+    const items = resolveAgentSessionPagerItems({
+        total,
+        activeIndex: session.activeAttemptIndex,
+    });
+    return `
+        <div class="agent-session-pager" aria-label="重试版本">
+            ${items.map((item) => {
+                if (item.type === 'nav') {
+                    return `
+                        <button
+                            type="button"
+                            class="agent-session-page agent-session-page-nav"
+                            data-agent-session-page="${session.id}"
+                            data-agent-session-page-index="${item.targetIndex}"
+                            title="${item.direction === 'prev' ? '上一页' : '下一页'}"
+                            aria-label="${item.direction === 'prev' ? '上一页' : '下一页'}"
+                            ${item.disabled ? 'disabled' : ''}
+                        >${item.direction === 'prev' ? '‹' : '›'}</button>
+                    `;
+                }
+                return `
+                    <button
+                        type="button"
+                        class="agent-session-page ${item.active ? 'is-active' : ''}"
+                        data-agent-session-page="${session.id}"
+                        data-agent-session-page-index="${item.index}"
+                        title="版本 ${item.page}"
+                        aria-label="切换到版本 ${item.page}"
+                    >${item.page}</button>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderAgentSessionArchiveTag(session) {
+    const summary = session.archiveSummary || {};
+    const thumbnail = summary.thumbnailUrl || getAgentSessionArchiveThumbnail(session);
+    const archiveStateClass = session.archiveState === 'applied'
+        ? 'is-applied'
+        : session.archiveState === 'canceled'
+            ? 'is-canceled'
+            : '';
+    return `
+        <button
+            type="button"
+            class="agent-session-archive-tag ${archiveStateClass}"
+            data-agent-session-toggle="${session.id}"
+            aria-expanded="false"
+            title="展开查看"
+        >
+            <span class="agent-session-archive-thumb ${thumbnail ? 'has-image' : ''}">
+                ${thumbnail ? `<img src="${escapeHtml(thumbnail)}" alt="">` : '<span>归档</span>'}
+            </span>
+            <span class="agent-session-archive-meta">
+                <span class="agent-session-archive-title">${escapeHtml(summary.label || '已归档')}</span>
+                <span class="agent-session-archive-subtitle">${escapeHtml(session.prompt || AGENT_WORKFLOW_DEFS[session.workflow]?.label || '')}</span>
+            </span>
+        </button>
+    `;
+}
+
+function renderAgentSessionItem(session) {
+    if (!session || session.kind !== 'session') return '';
+    if (session.collapsed && session.archiveState !== 'active') {
+        return `
+            <div class="agent-message is-assistant is-session is-session-collapsed">
+                ${renderAgentSessionArchiveTag(session)}
+            </div>
+        `;
+    }
+
+    const attempt = getAgentSessionActiveAttempt(session);
+    const totalAttempts = session.attempts?.length || 0;
+    const archiveStateLabel = session.archiveState === 'canceled'
+        ? '已取消'
+        : session.archiveState === 'applied'
+            ? '已应用'
+            : attempt?.status === 'failed'
+                ? '失败'
+                : attempt?.status === 'complete'
+                    ? '已完成'
+                    : '生成中';
+    const isArchivedExpanded = session.archiveState !== 'active' && !session.collapsed;
+    const actionAvailability = resolveAgentSessionActionAvailability({
+        archiveState: session.archiveState,
+        attemptStatus: attempt?.status || 'running',
+    });
+
+    return `
+        <div class="agent-message is-assistant is-session">
+            <div class="agent-session-stack">
+                <div class="agent-message-bubble agent-session-bubble">
+                    <div class="agent-session-header">
+                        <span class="agent-message-role">Agent</span>
+                        <div class="agent-session-header-meta">
+                            ${totalAttempts > 1 ? `<span class="agent-session-attempt-label">版本 ${session.activeAttemptIndex + 1}/${totalAttempts}</span>` : ''}
+                            <span class="agent-session-status">${archiveStateLabel}</span>
+                        </div>
+                    </div>
+                    <div class="agent-message-text">${escapeHtml(attempt?.text || '')}</div>
+                    ${renderAgentBlocks(attempt?.blocks)}
+                    ${renderAgentPromptSuggestions(attempt?.promptSuggestions)}
+                    <div class="agent-session-footer">
+                        ${isArchivedExpanded ? `
+                            <div class="agent-session-actions agent-session-actions-archived">
+                                <button
+                                    type="button"
+                                    class="agent-session-collapse-btn"
+                                    data-agent-session-toggle="${session.id}"
+                                    aria-expanded="true"
+                                    title="收起"
+                                    aria-label="收起"
+                                >收起</button>
+                            </div>
+                        ` : `
+                            <div class="agent-session-actions">
+                                <button type="button" class="agent-inline-btn" data-agent-session-action="cancel" data-agent-session-id="${session.id}">取消</button>
+                                <button type="button" class="agent-inline-btn" data-agent-session-action="retry" data-agent-session-id="${session.id}" ${actionAvailability.canRetry ? '' : 'disabled'}>重试</button>
+                                <button type="button" class="agent-inline-btn" data-agent-session-action="apply" data-agent-session-id="${session.id}" ${actionAvailability.canApply ? '' : 'disabled'}>应用</button>
+                            </div>
+                        `}
+                    </div>
+                </div>
+                ${renderAgentSessionPager(session)}
+            </div>
+        </div>
+    `;
+}
+
+function getAgentMessageScrollbarMetrics() {
+    if (!dom.agentMessageScroll || !dom.agentMessageScrollbar) return null;
+    const clientHeight = dom.agentMessageScroll.clientHeight;
+    const scrollHeight = dom.agentMessageScroll.scrollHeight;
+    const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+    const trackHeight = dom.agentMessageScrollbar.clientHeight;
+    if (trackHeight <= 0) {
+        return {
+            clientHeight,
+            scrollHeight,
+            maxScrollTop,
+            trackHeight: 0,
+            thumbHeight: 0,
+            thumbTravel: 0,
+            thumbTop: 0,
+        };
+    }
+    const thumbHeight = maxScrollTop <= 0
+        ? trackHeight
+        : Math.max(36, Math.min(trackHeight, (clientHeight / scrollHeight) * trackHeight));
+    const thumbTravel = Math.max(0, trackHeight - thumbHeight);
+    const thumbTop = maxScrollTop <= 0 || thumbTravel <= 0
+        ? 0
+        : (dom.agentMessageScroll.scrollTop / maxScrollTop) * thumbTravel;
+    return {
+        clientHeight,
+        scrollHeight,
+        maxScrollTop,
+        trackHeight,
+        thumbHeight,
+        thumbTravel,
+        thumbTop,
+    };
+}
+
+function syncAgentMessageScrollbar() {
+    if (!dom.agentMessageScroll || !dom.agentMessageScrollbar || !dom.agentMessageScrollbarThumb) return;
+    const metrics = getAgentMessageScrollbarMetrics();
+    if (!metrics) return;
+    const shouldHide = metrics.maxScrollTop <= 0 || metrics.trackHeight <= 0 || state.agentWorkbenchCollapsed;
+    dom.agentMessageScrollbar.classList.toggle('is-hidden', shouldHide);
+    dom.agentMessageScrollbarThumb.style.height = `${Math.max(0, metrics.thumbHeight)}px`;
+    dom.agentMessageScrollbarThumb.style.transform = `translateY(${Math.max(0, metrics.thumbTop)}px)`;
+}
+
+function beginAgentMessageScrollbarDrag(event) {
+    if (event.button !== 0 || !dom.agentMessageScroll) return;
+    const metrics = getAgentMessageScrollbarMetrics();
+    if (!metrics || metrics.maxScrollTop <= 0 || metrics.thumbTravel <= 0) return;
+    const trackRect = dom.agentMessageScrollbar?.getBoundingClientRect();
+    const thumbRect = dom.agentMessageScrollbarThumb?.getBoundingClientRect();
+    if (!trackRect || !thumbRect) return;
+
+    if (event.target === dom.agentMessageScrollbar) {
+        const targetThumbTop = Math.max(
+            0,
+            Math.min(metrics.thumbTravel, event.clientY - trackRect.top - metrics.thumbHeight / 2)
+        );
+        const ratio = metrics.thumbTravel > 0 ? targetThumbTop / metrics.thumbTravel : 0;
+        dom.agentMessageScroll.scrollTop = ratio * metrics.maxScrollTop;
+    }
+
+    agentMessageScrollbarDragState = {
+        startY: event.clientY,
+        startScrollTop: dom.agentMessageScroll.scrollTop,
+        maxScrollTop: metrics.maxScrollTop,
+        thumbTravel: metrics.thumbTravel,
+    };
+    dom.agentMessageScroll.classList.add('is-dragging-scrollbar');
+    window.addEventListener('mousemove', onAgentMessageScrollbarDragMove);
+    window.addEventListener('mouseup', endAgentMessageScrollbarDrag);
+    window.addEventListener('blur', endAgentMessageScrollbarDrag);
+    syncAgentMessageScrollbar();
+    event.preventDefault();
+}
+
+function onAgentMessageScrollbarDragMove(event) {
+    if (!agentMessageScrollbarDragState || !dom.agentMessageScroll) return;
+    const { startY, startScrollTop, maxScrollTop, thumbTravel } = agentMessageScrollbarDragState;
+    if (thumbTravel <= 0 || maxScrollTop <= 0) return;
+    const deltaY = event.clientY - startY;
+    const nextScrollTop = startScrollTop + (deltaY / thumbTravel) * maxScrollTop;
+    dom.agentMessageScroll.scrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
+    syncAgentMessageScrollbar();
+    event.preventDefault();
+}
+
+function endAgentMessageScrollbarDrag() {
+    if (!agentMessageScrollbarDragState) return;
+    agentMessageScrollbarDragState = null;
+    dom.agentMessageScroll?.classList.remove('is-dragging-scrollbar');
+    window.removeEventListener('mousemove', onAgentMessageScrollbarDragMove);
+    window.removeEventListener('mouseup', endAgentMessageScrollbarDrag);
+    window.removeEventListener('blur', endAgentMessageScrollbarDrag);
+}
+
+function forceAgentMessageScrollToBottom() {
+    if (!dom.agentMessageScroll) return;
+    dom.agentMessageScroll.scrollTop = dom.agentMessageScroll.scrollHeight;
+    syncAgentMessageScrollbar();
+}
+
+function runAgentMessageBottomPinLoop() {
+    agentMessageBottomPinRaf = 0;
+    forceAgentMessageScrollToBottom();
+    if (agentMessageBottomPinFramesRemaining <= 0) {
+        return;
+    }
+    agentMessageBottomPinFramesRemaining -= 1;
+    agentMessageBottomPinRaf = requestAnimationFrame(runAgentMessageBottomPinLoop);
+}
+
+function scheduleAgentMessageBottomPin(frames = 6) {
+    const safeFrames = Math.max(0, Number(frames) || 0);
+    if (safeFrames <= 0) return;
+    agentMessageBottomPinFramesRemaining = Math.max(agentMessageBottomPinFramesRemaining, safeFrames);
+    if (agentMessageBottomPinRaf !== 0) return;
+    agentMessageBottomPinRaf = requestAnimationFrame(runAgentMessageBottomPinLoop);
+}
+
+function bindAgentMessageAsyncBottomPin() {
+    if (!dom.agentMessageList) return;
+    dom.agentMessageList.querySelectorAll('.agent-image-frame.is-ready img').forEach((img) => {
+        if (!(img instanceof HTMLImageElement) || img.complete) return;
+        img.addEventListener('load', () => {
+            scheduleAgentMessageBottomPin(4);
+        }, { once: true });
+        img.addEventListener('error', () => {
+            scheduleAgentMessageBottomPin(2);
+        }, { once: true });
+    });
+}
+
+function renderAgentMessages({ autoScroll = 'preserve-or-pin-bottom' } = {}) {
+    if (!dom.agentMessageList) return;
+    const prevScrollTop = dom.agentMessageScroll?.scrollTop ?? 0;
+    const prevClientHeight = dom.agentMessageScroll?.clientHeight ?? 0;
+    const prevScrollHeight = dom.agentMessageScroll?.scrollHeight ?? 0;
+    const shouldForceBottomAfterRender = shouldForceAgentMessageBottomAfterRender({
+        mode: autoScroll,
+        prevScrollTop,
+        prevClientHeight,
+        prevScrollHeight,
+    });
+    dom.agentMessageList.innerHTML = state.agentMessages.map((item) => (
+        item?.kind === 'session'
+            ? renderAgentSessionItem(item)
+            : renderAgentMessageItem(item)
+    )).join('');
+    if (dom.agentMessageScroll) {
+        dom.agentMessageScroll.scrollTop = resolveAgentMessageRefreshScrollTop({
+            mode: autoScroll,
+            prevScrollTop,
+            prevClientHeight,
+            prevScrollHeight,
+            nextScrollHeight: dom.agentMessageScroll.scrollHeight,
+        });
+    }
+    syncAgentMessageScrollbar();
+    requestAnimationFrame(() => {
+        if (shouldForceBottomAfterRender) {
+            scheduleAgentMessageBottomPin(8);
+            bindAgentMessageAsyncBottomPin();
+            return;
+        }
+        syncAgentMessageScrollbar();
+    });
+    void syncAgent3DBlocks();
+}
+
+function syncAgentWorkflowTabs() {
+    dom.agentWorkflowTabs?.querySelectorAll('[data-workflow]').forEach((button) => {
+        const isActive = button.dataset.workflow === state.agentWorkflow;
+        button.classList.toggle('active', isActive);
+        button.setAttribute('aria-pressed', String(isActive));
+    });
+}
+
+function refreshAgentWorkbench() {
+    syncAgentWorkflowTabs();
+    renderAgentComposerAttachments();
+    renderAgentMessages();
+}
+
+function syncAgentWorkbenchCollapsedState() {
+    const collapsed = Boolean(state.agentWorkbenchCollapsed);
+    dom.agentWorkbench?.classList.toggle('is-collapsed', collapsed);
+    if (dom.btnToggleAgentWorkbench) {
+        dom.btnToggleAgentWorkbench.textContent = collapsed ? '›' : '‹';
+        dom.btnToggleAgentWorkbench.setAttribute('aria-expanded', String(!collapsed));
+        const label = collapsed ? '展开 Agent 工作台' : '收起 Agent 工作台';
+        dom.btnToggleAgentWorkbench.title = label;
+        dom.btnToggleAgentWorkbench.setAttribute('aria-label', label);
+    }
+    syncAgentWorkbenchLayoutVars();
+    requestAnimationFrame(syncAgentMessageScrollbar);
+}
+
+function applyAgentWorkbenchWidth(width, persist = true) {
+    preferredAgentWorkbenchWidth = clampAgentWorkbenchWidth(width);
+    document.documentElement.style.setProperty('--agent-workbench-width', `${preferredAgentWorkbenchWidth}px`);
+    if (persist) {
+        localStorage.setItem(AGENT_WORKBENCH_WIDTH_STORAGE_KEY, String(preferredAgentWorkbenchWidth));
+    }
+    syncAgentWorkbenchLayoutVars();
+    syncCanvasContainerToViewport();
+    requestAnimationFrame(syncAgentMessageScrollbar);
+}
+
+function setAgentWorkbenchCollapsed(collapsed, persist = true) {
+    state.agentWorkbenchCollapsed = Boolean(collapsed);
+    syncAgentWorkbenchCollapsedState();
+    if (persist) {
+        localStorage.setItem(AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY, String(state.agentWorkbenchCollapsed));
+    }
+    syncCanvasContainerToViewport();
+}
+
+function setAgentWorkflow(workflowId, persist = true) {
+    if (!AGENT_WORKFLOW_DEFS[workflowId]) return;
+    state.agentWorkflow = workflowId;
+    if (persist) {
+        localStorage.setItem(AGENT_WORKBENCH_WORKFLOW_STORAGE_KEY, workflowId);
+    }
+    syncAgentWorkflowTabs();
+    setCurrentAgentWorkflowThread(workflowId);
+    renderAgentMessages({ autoScroll: 'always' });
+}
+
+function appendAgentMessage(role, text, workflow = state.agentWorkflow) {
+    state.agentMessages.push(createAgentMessage(role, text, workflow));
+    renderAgentMessages({ autoScroll: 'always' });
+    schedulePersistAgentConversations();
+}
+
+function resetAgentConversation() {
+    const thread = ensureAgentWorkflowThread(state.agentWorkflow);
+    thread.items = createDefaultAgentMessages(state.agentWorkflow);
+    state.agentMessages = thread.items;
+    state.agentPendingImages = [];
+    renderAgentComposerAttachments();
+    renderAgentMessages({ autoScroll: 'always' });
+    schedulePersistAgentConversations();
+}
+
+function handleAgentMessageListClick(event) {
+    if (!(event.target instanceof Element)) return;
+    const resetButton = event.target.closest('[data-agent-viewer-reset]');
+    if (resetButton instanceof HTMLElement) {
+        const blockId = resetButton.dataset.agentViewerReset;
+        if (blockId && agentPreviewManagerPromise) {
+            agentPreviewManagerPromise.then((manager) => manager.resetViewer(blockId)).catch(() => {});
+        }
+        return;
+    }
+    const sessionToggle = event.target.closest('[data-agent-session-toggle]');
+    if (sessionToggle instanceof HTMLElement) {
+        const sessionId = sessionToggle.dataset.agentSessionToggle;
+        if (!sessionId) return;
+        updateAgentSessionById(sessionId, (session) => toggleAgentSessionCollapsed(session, !session.collapsed), {
+            autoScroll: 'preserve-or-pin-bottom',
+        });
+        return;
+    }
+    const sessionPageButton = event.target.closest('[data-agent-session-page]');
+    if (sessionPageButton instanceof HTMLElement) {
+        const sessionId = sessionPageButton.dataset.agentSessionPage;
+        const nextIndex = Number(sessionPageButton.dataset.agentSessionPageIndex);
+        if (!sessionId || !Number.isFinite(nextIndex)) return;
+        updateAgentSessionById(sessionId, (session) => ({
+            ...session,
+            activeAttemptIndex: Math.max(0, Math.min(nextIndex, (session.attempts?.length || 1) - 1)),
+            updatedAt: new Date().toISOString(),
+        }));
+        return;
+    }
+    const sessionActionButton = event.target.closest('[data-agent-session-action]');
+    if (sessionActionButton instanceof HTMLElement) {
+        const action = sessionActionButton.dataset.agentSessionAction;
+        const sessionId = sessionActionButton.dataset.agentSessionId;
+        if (!action || !sessionId) return;
+        handleAgentSessionAction(sessionId, action).catch((error) => {
+            console.warn('[Agent Sessions] action failed', error);
+            showError(`Agent 操作失败: ${error?.message || String(error)}`);
+        });
+        return;
+    }
+    const button = event.target.closest('[data-agent-suggestion-text]');
+    if (!(button instanceof HTMLElement)) return;
+    const prompt = button.dataset.agentSuggestionText;
+    if (!prompt) return;
+    submitAgentPrompt(prompt);
+}
+
+function handleAgentWorkflowClick(event) {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest('[data-workflow]');
+    if (!(button instanceof HTMLElement)) return;
+    const workflowId = button.dataset.workflow;
+    if (!workflowId) return;
+
+    if (workflowId === state.agentWorkflow && !state.agentWorkbenchCollapsed) {
+        syncAgentWorkflowTabs();
+        return;
+    }
+
+    if (state.agentWorkbenchCollapsed) {
+        setAgentWorkbenchCollapsed(false);
+    }
+    setAgentWorkflow(workflowId);
+}
+
+function handleAgentComposerKeydown(event) {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    event.preventDefault();
+    dom.agentComposer?.requestSubmit();
+}
+
+function handleAgentComposerAttachmentClick(event) {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest('[data-agent-attachment-remove]');
+    if (!(button instanceof HTMLElement)) return;
+    const index = Number(button.dataset.agentAttachmentRemove);
+    if (!Number.isFinite(index) || index < 0) return;
+    state.agentPendingImages = state.agentPendingImages.filter((_, itemIndex) => itemIndex !== index);
+    renderAgentComposerAttachments();
+}
+
+function handleAgentComposerDragOver(event) {
+    if (!event.dataTransfer) return;
+    const hasImages = Array.from(event.dataTransfer.items || []).some((item) => item.kind === 'file' && item.type.startsWith('image/'));
+    if (!hasImages) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    dom.agentComposerDock?.classList.add('is-drop-target');
+}
+
+function clearAgentComposerDropTarget() {
+    dom.agentComposerDock?.classList.remove('is-drop-target');
+}
+
+function handleAgentComposerDrop(event) {
+    if (!event.dataTransfer) return;
+    const count = queueAgentComposerImages(event.dataTransfer.files);
+    if (count > 0) {
+        event.preventDefault();
+        event.stopPropagation();
+        showInfo(`已添加 ${count} 张图片到输入区`);
+    }
+    clearAgentComposerDropTarget();
+}
+
+function openAgentImagePicker() {
+    dom.agentImageInput?.click();
+}
+
+function handleAgentImageInputChange(event) {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement)) return;
+    const count = queueAgentComposerImages(input.files);
+    if (count > 0) {
+        showInfo(`已添加 ${count} 张图片到输入区`);
+    }
+    input.value = '';
+}
+
+function simulateProgressUpdates(handle, blockId, updates, onDone) {
+    const runStep = (index) => {
+        const step = updates[index];
+        if (!step) {
+            onDone?.();
+            return;
+        }
+        window.setTimeout(() => {
+            handle.patchBlock(blockId, step.patch);
+            runStep(index + 1);
+        }, step.delayMs);
+    };
+    runStep(0);
+}
+
+function createMockAgentAttemptBlocks(workflowId) {
+    const workflow = AGENT_WORKFLOW_DEFS[workflowId] || getActiveAgentWorkflowDef();
+    const progressBlock = createAgentProgressBlock({
+        title: workflow.progressTitle,
+        statusText: '等待 Agent 启动',
+        value: 0.08,
+    });
+    const blocks = [progressBlock];
+
+    let imageBlock = null;
+    let viewerBlock = null;
+
+    if (workflowId === 'scene-build') {
+        imageBlock = createAgentImageBlock({
+            title: '场景草图',
+            status: 'placeholder',
+        });
+        blocks.push(imageBlock);
+    } else if (workflowId === 'object-insert') {
+        viewerBlock = createAgentViewer3DBlock({
+            title: '物体预览',
+            status: 'placeholder',
+            interaction: { rotate: true, zoom: true, pan: false, reset: true },
+        });
+        blocks.push(viewerBlock);
+    } else if (workflowId === 'character-create') {
+        imageBlock = createAgentImageBlock({
+            title: '人物概念图',
+            status: 'placeholder',
+        });
+        viewerBlock = createAgentViewer3DBlock({
+            title: '角色模型预览',
+            status: 'placeholder',
+            interaction: { rotate: true, zoom: true, pan: false, reset: true },
+        });
+        blocks.push(imageBlock, viewerBlock);
+    }
+
+    return {
+        workflow,
+        progressBlock,
+        imageBlock,
+        viewerBlock,
+        blocks,
+    };
+}
+
+function runMockAgentSessionAttempt({
+    workflowId,
+    prompt,
+    sessionId,
+    attemptId,
+    progressBlock,
+    imageBlock,
+    viewerBlock,
+}) {
+    const workflow = AGENT_WORKFLOW_DEFS[workflowId] || getActiveAgentWorkflowDef();
+    const handle = createAgentSessionHandle(sessionId, attemptId);
+
+    const progressUpdates = [
+        { delayMs: 380, patch: { value: 0.22, statusText: '解析任务目标' } },
+        { delayMs: 520, patch: { value: 0.46, statusText: '整理生成步骤' } },
+        { delayMs: 620, patch: { value: 0.74, statusText: '组合输出内容' } },
+        { delayMs: 520, patch: { value: 1, statusText: '已完成' } },
+    ];
+
+    simulateProgressUpdates(handle, progressBlock.id, progressUpdates, () => {
+        if (workflowId === 'scene-build' && imageBlock) {
+            handle.patchBlock(imageBlock.id, {
+                status: 'ready',
+                src: createMockImageDataUrl('场景草图', '#6ea8ff'),
+                alt: '场景草图预览',
+            });
+        }
+        if (workflowId === 'object-insert' && viewerBlock) {
+            handle.patchBlock(viewerBlock.id, {
+                status: 'ready',
+                assetUrl: createMockGltfDataUrl([0.91, 0.66, 0.28, 1]),
+                format: 'gltf',
+            });
+        }
+        if (workflowId === 'character-create') {
+            if (imageBlock) {
+                handle.patchBlock(imageBlock.id, {
+                    status: 'ready',
+                    src: createMockImageDataUrl('人物概念图', '#ff8fb3'),
+                    alt: '人物概念图预览',
+                });
+            }
+            if (viewerBlock) {
+                handle.patchBlock(viewerBlock.id, {
+                    status: 'ready',
+                    assetUrl: createMockGltfDataUrl([0.82, 0.56, 0.92, 1]),
+                    format: 'gltf',
+                });
+            }
+        }
+        handle.updateText(workflow.reply(prompt));
+        handle.finish();
+    });
+
+    return handle;
+}
+
+function startMockAgentResponse(workflowId, prompt, attachments = []) {
+    const { blocks, progressBlock, imageBlock, viewerBlock } = createMockAgentAttemptBlocks(workflowId);
+    const attempt = createAgentGenerationAttempt({
+        workflow: workflowId,
+        text: `正在处理：${prompt}`,
+        blocks,
+    });
+    const session = createAgentSession({
+        workflow: workflowId,
+        prompt,
+        attachments,
+        attempt,
+    });
+    state.agentMessages.push(session);
+    renderAgentMessages({ autoScroll: 'always' });
+    schedulePersistAgentConversations();
+    return runMockAgentSessionAttempt({
+        workflowId,
+        prompt,
+        sessionId: session.id,
+        attemptId: attempt.id,
+        progressBlock,
+        imageBlock,
+        viewerBlock,
+    });
+}
+
+async function handleAgentSessionAction(sessionId, action) {
+    const index = getAgentItemIndexById(sessionId);
+    if (index < 0) return;
+    const session = state.agentMessages[index];
+    if (!session || session.kind !== 'session') return;
+    const activeAttempt = getAgentSessionActiveAttempt(session);
+    const thumbnailUrl = getAgentSessionArchiveThumbnail(session);
+    const payload = {
+        workflow: session.workflow,
+        session,
+        attempt: activeAttempt,
+        registerCallbacks: registerAgentSessionActionHandlers,
+    };
+
+    if (action === 'cancel') {
+        updateAgentSessionById(sessionId, (current) => setAgentSessionArchiveState(current, {
+            archiveState: 'canceled',
+            summaryLabel: '已取消',
+            thumbnailUrl,
+        }));
+        await invokeAgentSessionActionHandler('onCancel', payload);
+        return;
+    }
+
+    if (action === 'apply') {
+        updateAgentSessionById(sessionId, (current) => setAgentSessionArchiveState(current, {
+            archiveState: 'applied',
+            summaryLabel: '已应用',
+            thumbnailUrl,
+        }));
+        await invokeAgentSessionActionHandler('onApply', payload);
+        return;
+    }
+
+    if (action === 'retry') {
+        const { blocks, progressBlock, imageBlock, viewerBlock } = createMockAgentAttemptBlocks(session.workflow);
+        const nextAttempt = createAgentGenerationAttempt({
+            workflow: session.workflow,
+            text: `正在处理：${session.prompt || activeAttempt?.text || '重试任务'}`,
+            blocks,
+        });
+        updateAgentSessionById(sessionId, (current) => appendAgentSessionRetryAttempt(current, nextAttempt), {
+            autoScroll: 'preserve-or-pin-bottom',
+        });
+        await invokeAgentSessionActionHandler('onRetry', {
+            ...payload,
+            nextAttempt,
+        });
+        runMockAgentSessionAttempt({
+            workflowId: session.workflow,
+            prompt: session.prompt || activeAttempt?.text || '重试任务',
+            sessionId,
+            attemptId: nextAttempt.id,
+            progressBlock,
+            imageBlock,
+            viewerBlock,
+        });
+    }
+}
+
+function submitAgentPrompt(promptText, attachments = []) {
+    const prompt = String(promptText || '').trim();
+    if (!prompt && attachments.length === 0) return;
+
+    const userMessage = createAgentMessage('user', prompt || '图片输入');
+    userMessage.attachments = attachments;
+    state.agentMessages.push(userMessage);
+    renderAgentMessages({ autoScroll: 'always' });
+    schedulePersistAgentConversations();
+    startMockAgentResponse(state.agentWorkflow, prompt || '图片输入', attachments);
+}
+
+function handleAgentComposerSubmit(event) {
+    event.preventDefault();
+    if (!dom.agentComposerInput) return;
+    const prompt = dom.agentComposerInput.value.trim();
+    const attachments = state.agentPendingImages.map((file, index) => ({
+        id: `attachment-${Date.now()}-${index}`,
+        name: file.name,
+        type: file.type || 'image/*',
+        file,
+    }));
+    if (!prompt && attachments.length === 0) return;
+
+    submitAgentPrompt(prompt, attachments);
+    dom.agentComposerInput.value = '';
+    state.agentPendingImages = [];
+    renderAgentComposerAttachments();
+}
+
+function beginAgentWorkbenchResize(event) {
+    if (event.button !== 0 || state.agentWorkbenchCollapsed) return;
+    agentWorkbenchResizeState = {
+        startX: event.clientX,
+        width: preferredAgentWorkbenchWidth ?? AGENT_WORKBENCH_DEFAULT_WIDTH,
+    };
+    dom.agentWorkbenchResizer?.classList.add('is-active');
+    document.body.classList.add('sidebar-resizing');
+    window.addEventListener('mousemove', onAgentWorkbenchResizeMove);
+    window.addEventListener('mouseup', endAgentWorkbenchResize);
+    window.addEventListener('blur', endAgentWorkbenchResize);
+    event.preventDefault();
+}
+
+function onAgentWorkbenchResizeMove(event) {
+    if (!agentWorkbenchResizeState) return;
+    const deltaX = event.clientX - agentWorkbenchResizeState.startX;
+    applyAgentWorkbenchWidth(agentWorkbenchResizeState.width + deltaX, true);
+    event.preventDefault();
+}
+
+function endAgentWorkbenchResize() {
+    if (!agentWorkbenchResizeState) return;
+    agentWorkbenchResizeState = null;
+    dom.agentWorkbenchResizer?.classList.remove('is-active');
+    document.body.classList.remove('sidebar-resizing');
+    window.removeEventListener('mousemove', onAgentWorkbenchResizeMove);
+    window.removeEventListener('mouseup', endAgentWorkbenchResize);
+    window.removeEventListener('blur', endAgentWorkbenchResize);
+}
+
+function initializeAgentWorkbench() {
+    const savedWidth = localStorage.getItem(AGENT_WORKBENCH_WIDTH_STORAGE_KEY);
+    const savedCollapsed = localStorage.getItem(AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY);
+    const savedWorkflow = localStorage.getItem(AGENT_WORKBENCH_WORKFLOW_STORAGE_KEY);
+
+    preferredAgentWorkbenchWidth = clampAgentWorkbenchWidth(savedWidth);
+    if (savedWorkflow && AGENT_WORKFLOW_DEFS[savedWorkflow]) {
+        state.agentWorkflow = savedWorkflow;
+    }
+    state.agentWorkbenchCollapsed = savedCollapsed === 'true';
+    setCurrentAgentWorkflowThread(state.agentWorkflow);
+
+    applyAgentWorkbenchWidth(preferredAgentWorkbenchWidth, false);
+    syncAgentWorkbenchCollapsedState();
+    refreshAgentWorkbench();
 }
 
 function clampSidebarWidth(value, fallback, min) {
@@ -448,9 +2086,9 @@ function initializeSidebarLayout() {
 function syncCanvasContainerToViewport() {
     if (!dom.canvasContainer || !dom.centerViewport) return;
     const viewportRect = dom.centerViewport.getBoundingClientRect();
-    const appRect = document.getElementById('app')?.getBoundingClientRect?.();
-    const hostLeft = appRect?.left || 0;
-    const hostTop = appRect?.top || 0;
+    const hostRect = dom.editorShell?.getBoundingClientRect?.() || dom.app?.getBoundingClientRect?.();
+    const hostLeft = hostRect?.left || 0;
+    const hostTop = hostRect?.top || 0;
     const width = Math.max(1, Math.round(viewportRect.width || 0));
     const height = Math.max(1, Math.round(viewportRect.height || 0));
 
@@ -649,6 +2287,9 @@ function applySceneCameraFov(value, silent = false) {
 
     state.sceneCameraFov = safe;
     syncSceneFovInputs();
+    if (state.keyframes.length === 0) {
+        syncTimelineDrivenCameraPreviewPose();
+    }
     if (!silent) {
         showInfo(`FOV: ${safe.toFixed(3)}°`);
     }
@@ -669,6 +2310,7 @@ function applySceneBackgroundHex(hex, skyPresetId = 'custom') {
 
     state.sceneBackgroundHex = normalized;
     state.sceneSkyPresetId = skyPresetId;
+    syncAgentWorkbenchSceneBackground();
     syncSceneBackgroundInputs();
     renderSkyPresetGrid();
 }
@@ -683,6 +2325,7 @@ function applySkyPreset(presetId) {
 
     state.sceneSkyPresetId = preset.id;
     state.sceneBackgroundHex = normalizeHexColor(preset.colorHex) || '#000000';
+    syncAgentWorkbenchSceneBackground();
     syncSceneBackgroundInputs();
     renderSkyPresetGrid();
     showInfo(`天空球预设: ${preset.name}`);
@@ -698,6 +2341,7 @@ function initSceneSettingsUI() {
         Number(app.getSceneCameraFovDegrees?.() || state.sceneCameraFov || 45.0)
     ) || 45.0;
 
+    syncAgentWorkbenchSceneBackground();
     syncSceneBackgroundInputs();
     syncSceneDepthRangeInputs();
     syncSceneFovInputs();
@@ -710,6 +2354,12 @@ function setModelEditorActive(active) {
 }
 
 function syncViewportGizmoControls() {
+    const selectionKind = resolveViewportSelectionKind({
+        cameraSequenceDragEnabled: state.cameraSequenceDragEnabled,
+        selectedCameraSequenceFrame: state.selectedCameraSequenceFrame,
+        selectedModelId: state.selectedModelId,
+    });
+    const cameraSelectionActive = selectionKind === 'camera';
     const buttons = [
         [dom.btnGizmoTranslate, 'translate'],
         [dom.btnGizmoRotate, 'rotate'],
@@ -717,14 +2367,26 @@ function syncViewportGizmoControls() {
     ];
     for (const [button, mode] of buttons) {
         if (!button) continue;
-        button.disabled = !app;
-        button.classList.toggle('active', state.viewportGizmoMode === mode);
+        const disabled = !app || (mode === 'scale' && cameraSelectionActive);
+        button.disabled = disabled;
+        button.classList.toggle('active', !disabled && state.viewportGizmoMode === mode);
     }
 }
 
 function setViewportGizmoMode(mode, silent = false) {
     if (!app) return false;
     const nextMode = state.viewportGizmoMode === mode ? null : mode;
+    const selectionKind = resolveViewportSelectionKind({
+        cameraSequenceDragEnabled: state.cameraSequenceDragEnabled,
+        selectedCameraSequenceFrame: state.selectedCameraSequenceFrame,
+        selectedModelId: state.selectedModelId,
+    });
+    if (nextMode === 'scale' && selectionKind === 'camera') {
+        if (!silent) {
+            showInfo('相机关键帧仅支持移动和旋转');
+        }
+        return false;
+    }
     if (!app.setViewportGizmoMode?.(nextMode)) {
         return false;
     }
@@ -733,6 +2395,89 @@ function setViewportGizmoMode(mode, silent = false) {
     if (!silent) {
         const labels = { translate: '移动', rotate: '旋转', scale: '缩放' };
         showInfo(nextMode ? `视口控件: ${labels[nextMode] || nextMode}` : '视口控件: 已关闭');
+    }
+    return true;
+}
+
+function isFreeCameraMode() {
+    if (!dom.cameraMode) {
+        return true;
+    }
+    return state.cameraMode === 'fps';
+}
+
+function syncCameraSequenceDragButton() {
+    if (!dom.btnToggleCameraSequenceDrag) return;
+    dom.btnToggleCameraSequenceDrag.classList.toggle('active', state.cameraSequenceDragEnabled);
+    const textEl = dom.btnToggleCameraSequenceDrag.querySelector('.btn-text');
+    if (textEl) {
+        textEl.textContent = '拖动';
+    } else {
+        dom.btnToggleCameraSequenceDrag.textContent = '拖动';
+    }
+}
+
+function syncSelectedCameraSequenceFrameToApp() {
+    if (!app?.setSelectedCameraSequenceFrame) return;
+    const frame = Number.isFinite(Number(state.selectedCameraSequenceFrame))
+        ? clampTimelineFrame(state.selectedCameraSequenceFrame)
+        : null;
+    syncingCameraSequenceSelection = true;
+    try {
+        app.setSelectedCameraSequenceFrame(frame);
+    } finally {
+        syncingCameraSequenceSelection = false;
+    }
+}
+
+function syncManualTimelineCameraSelection(frame) {
+    const safeFrame = clampTimelineFrame(frame);
+    if (!state.cameraSequenceDragEnabled) {
+        if (state.selectedCameraSequenceFrame !== null) {
+            state.selectedCameraSequenceFrame = null;
+            syncCameraSequenceVisualization();
+            syncViewportGizmoControls();
+            syncSelectedCameraSequenceFrameToApp();
+        }
+        return safeFrame;
+    }
+    state.selectedCameraSequenceFrame = safeFrame;
+    syncCameraSequenceVisualization();
+    syncViewportGizmoControls();
+    syncSelectedCameraSequenceFrameToApp();
+    return safeFrame;
+}
+
+function setCameraSequenceDragEnabled(enabled, silent = false) {
+    if (!app?.setCameraSequenceEditEnabled) return false;
+    const nextEnabled = Boolean(enabled);
+    if (nextEnabled && !isFreeCameraMode()) {
+        if (!silent) {
+            showInfo('请先切换到自由视角');
+        }
+        return false;
+    }
+    if (!app.setCameraSequenceEditEnabled(nextEnabled)) {
+        return false;
+    }
+    state.cameraSequenceDragEnabled = nextEnabled;
+    if (!nextEnabled) {
+        state.selectedCameraSequenceFrame = null;
+        syncSelectedCameraSequenceFrameToApp();
+    }
+    state.viewportGizmoMode = normalizeViewportGizmoModeForSelection(
+        state.viewportGizmoMode,
+        resolveViewportSelectionKind({
+            cameraSequenceDragEnabled: state.cameraSequenceDragEnabled,
+            selectedCameraSequenceFrame: state.selectedCameraSequenceFrame,
+            selectedModelId: state.selectedModelId,
+        })
+    );
+    syncCameraSequenceDragButton();
+    syncCameraSequenceVisualization();
+    syncViewportGizmoControls();
+    if (!silent) {
+        showInfo(nextEnabled ? '相机关键帧拖动: 已开启' : '相机关键帧拖动: 已关闭');
     }
     return true;
 }
@@ -748,26 +2493,24 @@ function setSceneSettingsOpen(open) {
 }
 
 function positionCameraSettingsPanel() {
-    if (!dom.cameraSettingsPanel || !dom.btnToggleCameraSettings) return;
-    const anchorRect = dom.btnToggleCameraSettings.getBoundingClientRect();
-    const viewportHeight = window.innerHeight;
-    const margin = 12;
-    const gap = 14;
-    const left = margin;
+    if (!dom.cameraSettingsPanel || !dom.btnToggleCameraSettings || !dom.editorStage) return;
+    const position = resolveFloatingPanelPosition({
+        shellRect: dom.editorStage.getBoundingClientRect(),
+        anchorRect: dom.btnToggleCameraSettings.getBoundingClientRect(),
+        panelWidth: dom.cameraSettingsPanel.offsetWidth || 290,
+        panelHeight: dom.cameraSettingsPanel.offsetHeight || 0,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+    });
 
-    const panelHeight = dom.cameraSettingsPanel.offsetHeight || 0;
-    let top = anchorRect.top - gap - panelHeight;
-    if (top < margin) {
-        top = Math.min(viewportHeight - margin - panelHeight, anchorRect.bottom + gap);
-    }
-
-    dom.cameraSettingsPanel.style.left = `${left}px`;
-    dom.cameraSettingsPanel.style.top = `${Math.max(margin, top)}px`;
+    dom.cameraSettingsPanel.style.left = `${position.left}px`;
+    dom.cameraSettingsPanel.style.top = `${position.top}px`;
 }
 
 function syncCameraSettingsPanel() {
     dom.cameraSettingsPanel?.classList.toggle('hidden', !state.cameraSettingsOpen);
     dom.btnToggleCameraSettings?.classList.toggle('active', state.cameraSettingsOpen);
+    syncFloatingPanelLayerOrder();
     if (state.cameraSettingsOpen) {
         requestAnimationFrame(positionCameraSettingsPanel);
     }
@@ -775,6 +2518,9 @@ function syncCameraSettingsPanel() {
 
 function setCameraSettingsOpen(open) {
     state.cameraSettingsOpen = Boolean(open);
+    if (state.cameraSettingsOpen) {
+        activeFloatingPanelKey = 'cameraSettings';
+    }
     syncCameraSettingsPanel();
 }
 
@@ -783,6 +2529,134 @@ function mountCameraSettingsPanelToMainUi() {
     if (!mainUi || !dom.cameraSettingsPanel) return;
     if (dom.cameraSettingsPanel.parentElement === mainUi) return;
     mainUi.appendChild(dom.cameraSettingsPanel);
+}
+
+function syncCameraPreviewViewportAspect() {
+    const option = getCameraPreviewAspectOption(state.cameraPreviewAspectId);
+    dom.cameraPreviewAspectRatio && (dom.cameraPreviewAspectRatio.value = option.id);
+    dom.cameraPreviewViewport?.style.setProperty('--camera-preview-aspect', String(option.aspect));
+}
+
+function positionCameraPreviewPanel() {
+    if (!dom.cameraPreviewPanel || !dom.editorStage) return;
+    let left = Number.parseFloat(dom.cameraPreviewPanel.style.left || '');
+    let top = Number.parseFloat(dom.cameraPreviewPanel.style.top || '');
+
+    if (!Number.isFinite(left) || !Number.isFinite(top)) {
+        const position = resolveFloatingPanelPosition({
+            shellRect: dom.editorStage.getBoundingClientRect(),
+            anchorRect: dom.btnToggleCameraPreview?.getBoundingClientRect(),
+            panelWidth: dom.cameraPreviewPanel.offsetWidth || 320,
+            panelHeight: dom.cameraPreviewPanel.offsetHeight || 0,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight,
+        });
+        left = position.left;
+        top = position.top;
+    }
+
+    const panelRect = dom.cameraPreviewPanel.getBoundingClientRect();
+    const margin = 12;
+    const shellRect = dom.editorStage.getBoundingClientRect();
+    const minLeft = Math.max(margin, shellRect.left + margin);
+    const maxLeft = Math.max(minLeft, Math.min(window.innerWidth - margin - panelRect.width, shellRect.right - margin - panelRect.width));
+    const maxTop = Math.max(margin, window.innerHeight - margin - panelRect.height);
+    dom.cameraPreviewPanel.style.left = `${Math.max(minLeft, Math.min(maxLeft, left))}px`;
+    dom.cameraPreviewPanel.style.top = `${Math.max(margin, Math.min(maxTop, top))}px`;
+}
+
+function syncCameraPreviewPanel() {
+    dom.cameraPreviewPanel?.classList.toggle('hidden', !state.cameraPreviewOpen);
+    dom.btnToggleCameraPreview?.classList.toggle('active', state.cameraPreviewOpen);
+    app?.setCameraPreviewVisible?.(state.cameraPreviewOpen);
+    syncFloatingPanelLayerOrder();
+    if (state.cameraPreviewOpen) {
+        syncTimelineDrivenCameraPreviewPose();
+        requestAnimationFrame(positionCameraPreviewPanel);
+    }
+}
+
+function setCameraPreviewOpen(open) {
+    state.cameraPreviewOpen = Boolean(open);
+    if (state.cameraPreviewOpen) {
+        activeFloatingPanelKey = 'cameraPreview';
+    }
+    syncCameraPreviewPanel();
+}
+
+function mountCameraPreviewPanelToMainUi() {
+    const mainUi = document.getElementById('main-ui');
+    if (!mainUi || !dom.cameraPreviewPanel) return;
+    if (dom.cameraPreviewPanel.parentElement === mainUi) return;
+    mainUi.appendChild(dom.cameraPreviewPanel);
+}
+
+function syncFloatingPanelLayerOrder() {
+    const { cameraSettings, cameraPreview } = resolveFloatingPanelLayerZIndices(activeFloatingPanelKey);
+    if (dom.cameraSettingsPanel) {
+        dom.cameraSettingsPanel.style.zIndex = String(state.cameraSettingsOpen ? cameraSettings : 60);
+    }
+    if (dom.cameraPreviewPanel) {
+        dom.cameraPreviewPanel.style.zIndex = String(state.cameraPreviewOpen ? cameraPreview : 60);
+    }
+}
+
+function focusFloatingPanel(panelKey) {
+    activeFloatingPanelKey = panelKey === 'cameraSettings' ? 'cameraSettings' : 'cameraPreview';
+    syncFloatingPanelLayerOrder();
+}
+
+function applyCameraPreviewAspect(aspectId, silent = false) {
+    const option = getCameraPreviewAspectOption(aspectId);
+    state.cameraPreviewAspectId = option.id;
+    syncCameraPreviewViewportAspect();
+    app?.setCameraPreviewAspectRatio?.(option.aspect);
+    syncCameraSequenceVisualization();
+    localStorage.setItem(CAMERA_PREVIEW_ASPECT_STORAGE_KEY, option.id);
+    if (!silent) {
+        showInfo(`相机预览比例: ${option.label}`);
+    }
+}
+
+function beginCameraPreviewPanelDrag(event) {
+    if (!dom.cameraPreviewPanel) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (!target.closest('.camera-preview-header')) return;
+    if (target.closest('button') || target.closest('select') || target.closest('input') || target.closest('label')) {
+        return;
+    }
+    const rect = dom.cameraPreviewPanel.getBoundingClientRect();
+    cameraPreviewDragState = {
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+    };
+    event.preventDefault();
+}
+
+function moveCameraPreviewPanel(event) {
+    if (!cameraPreviewDragState || !dom.cameraPreviewPanel) return;
+    const rect = dom.cameraPreviewPanel.getBoundingClientRect();
+    const nextLeft = event.clientX - cameraPreviewDragState.offsetX;
+    const nextTop = event.clientY - cameraPreviewDragState.offsetY;
+    const margin = 12;
+    const maxLeft = Math.max(margin, window.innerWidth - margin - rect.width);
+    const maxTop = Math.max(margin, window.innerHeight - margin - rect.height);
+    dom.cameraPreviewPanel.style.left = `${Math.max(margin, Math.min(maxLeft, nextLeft))}px`;
+    dom.cameraPreviewPanel.style.top = `${Math.max(margin, Math.min(maxTop, nextTop))}px`;
+}
+
+function endCameraPreviewPanelDrag() {
+    cameraPreviewDragState = null;
+}
+
+function initializeCameraPreviewControls() {
+    if (dom.cameraPreviewAspectRatio && dom.cameraPreviewAspectRatio.options.length === 0) {
+        dom.cameraPreviewAspectRatio.innerHTML = CAMERA_PREVIEW_ASPECT_OPTIONS
+            .map((option) => `<option value="${option.id}">${option.label}</option>`)
+            .join('');
+    }
+    syncCameraPreviewViewportAspect();
 }
 
 function syncLeftSidebarCollapsedState() {
@@ -831,6 +2705,7 @@ function applyTheme(theme, persist = false) {
     const normalized = theme === 'light' ? 'light' : 'dark';
     document.body.classList.toggle('theme-light', normalized === 'light');
     updateThemeToggleLabel(normalized);
+    syncAgentWorkbenchSceneBackground();
 
     if (persist) {
         try {
@@ -1007,6 +2882,22 @@ function setupInputLabelDrag() {
 
 function registerDebugHooks() {
     const hooks = {
+        agent: {
+            createProgressBlock: createAgentProgressBlock,
+            createImageBlock: createAgentImageBlock,
+            createViewer3DBlock: createAgentViewer3DBlock,
+            openAssistantMessage: openAgentAssistantMessage,
+            resetConversation: resetAgentConversation,
+            startMockResponse: startMockAgentResponse,
+            registerSessionActionHandlers: registerAgentSessionActionHandlers,
+            sessions: {
+                pickStorageFolder: () => ensureAgentSessionStore().pickStorageFolder(),
+                persistNow: () => persistAgentConversationsNow(),
+                exportSnapshot: (options) => ensureAgentSessionStore().exportSnapshot(buildAgentConversationSnapshot(), options),
+                getSnapshot: () => buildAgentConversationSnapshot(),
+                getStatus: () => ensureAgentSessionStore().getStatus(),
+            },
+        },
         getPreviewMode: () => state.exportMode,
         setPreviewMode: (mode) => setExportMode(mode),
         getDepthScale: () => state.sceneDepthRangeScale,
@@ -1014,6 +2905,9 @@ function registerDebugHooks() {
         getModelTrackLoopMarkerDebugInfo,
         getModelTracksDomDebugInfo,
         getSidebarLayoutDebugInfo: () => ({
+            agentWorkbenchWidth: preferredAgentWorkbenchWidth,
+            agentWorkbenchCollapsed: state.agentWorkbenchCollapsed,
+            agentWorkflow: state.agentWorkflow,
             leftWidth: dom.leftSidebar?.offsetWidth ?? null,
             rightWidth: dom.rightSidebar?.offsetWidth ?? null,
             leftCompact: dom.leftSidebar?.classList.contains('sidebar-compact') ?? false,
@@ -1051,6 +2945,7 @@ function registerDebugHooks() {
             return rows;
         },
         pickScenePointAtClient: (clientX, clientY) => app?.pickScenePointAtClient?.(clientX, clientY) ?? null,
+        probeModelPickAtFocus: (modelId) => app?.probeModelPickAtFocus?.(modelId) ?? null,
         getScenePointPickDebugInfo: (clientX, clientY) => app?.getScenePointPickDebugInfo?.(clientX, clientY) ?? null,
         lookAtScenePointAtClient: (clientX, clientY) => app?.lookAtScenePointFromClient?.(clientX, clientY) ?? false,
         showRawDepthPreview: (source = 'combined') => app?.showRawDepthPreview?.(source) ?? null,
@@ -1142,6 +3037,44 @@ function setCameraSequenceVisibility(nextVisible, silent = false) {
     return true;
 }
 
+function clampCameraSequenceDisplayScale(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return CAMERA_DISPLAY_SCALE_DEFAULT;
+    return Math.max(CAMERA_DISPLAY_SCALE_MIN, Math.min(CAMERA_DISPLAY_SCALE_MAX, n));
+}
+
+function syncCameraSequenceDisplayScaleControl() {
+    if (typeof app?.getCameraSequenceDisplayScale === 'function') {
+        const next = app.getCameraSequenceDisplayScale();
+        if (Number.isFinite(next)) {
+            state.cameraSequenceDisplayScale = clampCameraSequenceDisplayScale(next);
+        }
+    }
+    if (dom.cameraDisplayScale) {
+        dom.cameraDisplayScale.value = state.cameraSequenceDisplayScale.toFixed(2);
+    }
+    if (dom.cameraDisplayScaleValue) {
+        dom.cameraDisplayScaleValue.textContent = state.cameraSequenceDisplayScale.toFixed(2);
+    }
+}
+
+function setCameraSequenceDisplayScale(value, silent = false) {
+    const safe = clampCameraSequenceDisplayScale(value);
+    const ok = app?.setCameraSequenceDisplayScale?.(safe);
+    if (ok === false) {
+        showError('设置相机显示大小失败');
+        return false;
+    }
+    state.cameraSequenceDisplayScale = safe;
+    syncCameraSequenceDisplayScaleControl();
+    syncCameraSequenceVisualization();
+    localStorage.setItem(CAMERA_DISPLAY_SCALE_STORAGE_KEY, String(safe));
+    if (!silent) {
+        showInfo(`相机显示大小: ${safe.toFixed(2)}x`);
+    }
+    return true;
+}
+
 function updateCameraSequenceToggleButton() {
     if (!dom.btnToggleCameraSequence) return;
     const visible = syncCameraSequenceVisibilityState();
@@ -1218,18 +3151,35 @@ function updateModelList() {
 /**
  * 选择模型进行编辑
  */
-function selectModel(id) {
+function selectModel(id, options = {}) {
+    const syncAppSelection = options.syncApp !== false;
+    const allowToggle = options.allowToggle !== false;
+    const silent = options.silent === true;
     if (!id) return;
-    if (state.selectedModelId === id) {
+    if (allowToggle && state.selectedModelId === id) {
         closeEditor();
-        showInfo('已取消选中模型');
+        if (!silent) {
+            showInfo('已取消选中模型');
+        }
         return;
     }
     const model = app.getModel(id);
     if (!model) return;
 
+    const preservedFrame = clampTimelineFrame(state.selectedFrame);
     state.selectedModelId = id;
-    app.setSelectedModel?.(id);
+    if (syncAppSelection) {
+        syncingSelectedModelSelection = true;
+        try {
+            app.setSelectedModel?.(id);
+        } finally {
+            syncingSelectedModelSelection = false;
+        }
+    }
+    state.selectedCameraSequenceFrame = null;
+    if (state.selectedFrame !== preservedFrame) {
+        setTimelineFrame(preservedFrame, { applyPose: false, syncSlider: true });
+    }
 
     // 更新 UI
     if (dom.selectedModelName) dom.selectedModelName.textContent = model.name;
@@ -1246,8 +3196,12 @@ function selectModel(id) {
     // 填充编辑器值
     updateEditorValues(model);
     updateModelAnimationControls(id);
+    app.refreshSelectedModelViewportGizmo?.();
+    syncViewportGizmoControls();
     updateModelList();
-    showInfo(`选中模型: ${model.name}`);
+    if (!silent) {
+        showInfo(`选中模型: ${model.name}`);
+    }
 }
 
 /**
@@ -1316,9 +3270,15 @@ function resetTransform() {
 function closeEditor() {
     if (dom.selectedModelName) dom.selectedModelName.textContent = '未选中模型';
     state.selectedModelId = null;
-    app?.setSelectedModel?.(null);
+    syncingSelectedModelSelection = true;
+    try {
+        app?.setSelectedModel?.(null);
+    } finally {
+        syncingSelectedModelSelection = false;
+    }
     setModelEditorActive(false);
     if (dom.onnxAnimSection) dom.onnxAnimSection.classList.add('inactive');
+    syncViewportGizmoControls();
     updateModelList();
 }
 
@@ -2168,9 +4128,11 @@ async function saveScene() {
                 depthRangeScale: Number(state.sceneDepthRangeScale || 1.0),
                 cameraFov: Number(state.sceneCameraFov || 45.0),
                 cameraPose: captureCurrentCameraPose(),
-                cameraMode: String(dom.cameraMode?.value || 'orbit'),
+                cameraMode: String(dom.cameraMode?.value || state.cameraMode || 'orbit'),
                 renderMode: state.exportMode || 'color',
                 cameraSequenceVisible: Boolean(state.cameraSequenceVisible),
+                cameraDisplayScale: Number(state.cameraSequenceDisplayScale || CAMERA_DISPLAY_SCALE_DEFAULT),
+                cameraPreviewAspectId: state.cameraPreviewAspectId || '16:9',
             },
             timeline: {
                 fps: Number(state.timelineFps || 24),
@@ -2258,6 +4220,7 @@ async function loadScene() {
         state.keyframes = [];
         state.currentKeyframeIndex = -1;
         state.selectedFrame = 0;
+        state.selectedCameraSequenceFrame = null;
         state.currentTime = 0;
         updateTimelineUI();
         syncCameraSequenceVisualization();
@@ -2279,6 +4242,7 @@ async function loadScene() {
             app.setCameraPose?.(raw.env.cameraPose);
         }
         if (typeof raw?.env?.cameraMode === 'string') {
+            state.cameraMode = raw.env.cameraMode;
             dom.cameraMode && (dom.cameraMode.value = raw.env.cameraMode);
             app.setCameraMode?.(raw.env.cameraMode);
         }
@@ -2287,6 +4251,12 @@ async function loadScene() {
         }
         if (typeof raw?.env?.cameraSequenceVisible === 'boolean') {
             setCameraSequenceVisibility(raw.env.cameraSequenceVisible, true);
+        }
+        if (Number.isFinite(Number(raw?.env?.cameraDisplayScale))) {
+            setCameraSequenceDisplayScale(Number(raw.env.cameraDisplayScale), true);
+        }
+        if (typeof raw?.env?.cameraPreviewAspectId === 'string') {
+            applyCameraPreviewAspect(raw.env.cameraPreviewAspectId, true);
         }
 
         let loaded = 0;
@@ -2426,6 +4396,7 @@ async function loadScene() {
                     .sort((a, b) => a.frame - b.frame)
                 : [];
 
+            state.selectedCameraSequenceFrame = null;
             const selectedFrame = Number.isFinite(Number(timeline.selectedFrame))
                 ? Number(timeline.selectedFrame)
                 : timeToFrame(Number(timeline.currentTime) || 0);
@@ -2458,6 +4429,7 @@ function clearScene() {
         state.keyframes = [];
         state.currentKeyframeIndex = -1;
         state.selectedFrame = 0;
+        state.selectedCameraSequenceFrame = null;
         state.currentTime = 0;
         updateTimelineUI();
         syncCameraSequenceVisualization();
@@ -2483,7 +4455,35 @@ function syncCameraSequenceVisualization() {
         camera: item.camera,
     }));
     const trajectory = buildSampledCameraTrajectory();
-    app.setCameraSequenceVisualization(keyframes, state.selectedFrame, trajectory);
+    const highlightedFrame = Number.isFinite(Number(state.selectedCameraSequenceFrame))
+        ? clampTimelineFrame(state.selectedCameraSequenceFrame)
+        : state.selectedFrame;
+    app.setCameraSequenceVisualization(keyframes, highlightedFrame, trajectory);
+}
+
+function updateKeyframeCameraPose(frame, pose) {
+    const safeFrame = Math.round(Number(frame));
+    if (!Number.isFinite(safeFrame) || !pose) return false;
+    const index = state.keyframes.findIndex((keyframe) => Number(keyframe.frame) === safeFrame);
+    const keyframe = {
+        frame: safeFrame,
+        time: frameToTime(safeFrame),
+        camera: pose,
+    };
+    if (index < 0) {
+        state.keyframes.push(keyframe);
+        state.keyframes.sort((a, b) => a.frame - b.frame);
+    } else {
+        state.keyframes[index] = {
+            ...state.keyframes[index],
+            camera: pose,
+        };
+    }
+    state.currentKeyframeIndex = findKeyframeIndexByFrame(state.selectedFrame);
+    if (safeFrame === state.selectedFrame) {
+        syncTimelineDrivenCameraPreviewPose();
+    }
+    return true;
 }
 
 function normalizeCameraInterpolationMode(mode) {
@@ -2758,15 +4758,12 @@ function captureCurrentCameraPose() {
     };
 }
 
-function applyCameraPoseForTime(timeSec) {
-    if (!app || state.keyframes.length === 0) return;
-    const pose = interpolateCameraPoseAt(timeSec);
-    if (!pose) return;
-    app.setCameraPose?.(pose);
-    if (Number.isFinite(pose.fovDegrees)) {
-        state.sceneCameraFov = pose.fovDegrees;
-        syncSceneFovInputs();
-    }
+function syncTimelineDrivenCameraPreviewPose() {
+    if (!app?.setCameraPreviewPose) return;
+    const pose = state.keyframes.length > 0
+        ? interpolateCameraPoseAt(state.currentTime)
+        : captureCurrentCameraPose();
+    app.setCameraPreviewPose?.(pose || null);
 }
 
 function setTimelineFrame(frame, options = {}) {
@@ -2775,12 +4772,13 @@ function setTimelineFrame(frame, options = {}) {
     state.currentTime = frameToTime(safeFrame);
     state.currentKeyframeIndex = findKeyframeIndexByFrame(safeFrame);
 
-    if (options.applyPose !== false) {
-        applyCameraPoseForTime(state.currentTime);
-    }
+    syncTimelineDrivenCameraPreviewPose();
 
     if (app && typeof app.setGlobalTimelineTime === 'function') {
         app.setGlobalTimelineTime(state.currentTime);
+    }
+    if (app && typeof app.setGlobalTimelineFrame === 'function') {
+        app.setGlobalTimelineFrame(safeFrame);
     }
 
     if (dom.timelineSlider && options.syncSlider !== false) {
@@ -3268,6 +5266,7 @@ function renderTimelineTrack() {
             }
             const frame = Number(marker.dataset.frame);
             setTimelineFrame(frame, { applyPose: true, syncSlider: true });
+            syncManualTimelineCameraSelection(frame);
         });
     });
 }
@@ -3889,6 +5888,7 @@ function handleTimelinePointerSelection(event) {
     const target = event.currentTarget;
     const frame = timelineClientXToFrame(event.clientX, target);
     setTimelineFrame(frame, { applyPose: true, syncSlider: true });
+    syncManualTimelineCameraSelection(frame);
 }
 
 function initTimelineUI() {
@@ -3907,13 +5907,23 @@ function initTimelineUI() {
     }
     const savedInterpolationMode = localStorage.getItem(CAMERA_INTERPOLATION_MODE_STORAGE_KEY);
     const savedInterpolationParam = localStorage.getItem(CAMERA_INTERPOLATION_PARAM_STORAGE_KEY);
+    const savedCameraDisplayScale = localStorage.getItem(CAMERA_DISPLAY_SCALE_STORAGE_KEY);
+    const savedCameraPreviewAspectId = localStorage.getItem(CAMERA_PREVIEW_ASPECT_STORAGE_KEY);
     if (savedInterpolationMode) {
         state.cameraInterpolationMode = normalizeCameraInterpolationMode(savedInterpolationMode);
     }
     if (savedInterpolationParam !== null) {
         state.cameraInterpolationParam = clampCameraInterpolationParam(savedInterpolationParam, state.cameraInterpolationMode);
     }
+    if (savedCameraDisplayScale !== null) {
+        state.cameraSequenceDisplayScale = clampCameraSequenceDisplayScale(savedCameraDisplayScale);
+    }
+    if (savedCameraPreviewAspectId !== null) {
+        state.cameraPreviewAspectId = normalizeCameraPreviewAspectId(savedCameraPreviewAspectId);
+    }
     syncCameraInterpolationModeControl();
+    applyCameraPreviewAspect(state.cameraPreviewAspectId, true);
+    setCameraSequenceDisplayScale(state.cameraSequenceDisplayScale, true);
     setTimelineFrame(0, { applyPose: false, syncSlider: true });
     syncCameraSequenceVisualization();
 }
@@ -4012,6 +6022,26 @@ function initEventListeners() {
     console.log(`[Editor ${state.VERSION}] Initializing event listeners...`);
     setupInputLabelDrag();
     initPanelWheelScroll();
+    dom.btnToggleAgentWorkbench?.addEventListener('click', () => setAgentWorkbenchCollapsed(!state.agentWorkbenchCollapsed));
+    dom.agentWorkbenchResizer?.addEventListener('mousedown', beginAgentWorkbenchResize);
+    dom.agentWorkflowTabs?.addEventListener('click', handleAgentWorkflowClick);
+    dom.agentMessageScroll?.addEventListener('scroll', syncAgentMessageScrollbar);
+    dom.agentMessageScrollbar?.addEventListener('mousedown', beginAgentMessageScrollbarDrag);
+    dom.agentComposerInput?.addEventListener('keydown', handleAgentComposerKeydown);
+    dom.agentComposerAttachments?.addEventListener('click', handleAgentComposerAttachmentClick);
+    dom.agentMessageList?.addEventListener('click', handleAgentMessageListClick);
+    dom.btnAgentAddImage?.addEventListener('click', openAgentImagePicker);
+    dom.agentImageInput?.addEventListener('change', handleAgentImageInputChange);
+    dom.agentComposerDock?.addEventListener('dragenter', handleAgentComposerDragOver);
+    dom.agentComposerDock?.addEventListener('dragover', handleAgentComposerDragOver);
+    dom.agentComposerDock?.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget instanceof Node && dom.agentComposerDock?.contains(e.relatedTarget)) return;
+        clearAgentComposerDropTarget();
+    });
+    dom.agentComposerDock?.addEventListener('drop', handleAgentComposerDrop);
+    dom.agentSuggestionChips?.addEventListener('click', handleAgentSuggestionClick);
+    dom.agentComposer?.addEventListener('submit', handleAgentComposerSubmit);
+    dom.btnAgentClearConversation?.addEventListener('click', resetAgentConversation);
 
     // 场景菜单
     dom.btnSaveScene?.addEventListener('click', saveScene);
@@ -4112,8 +6142,16 @@ function initEventListeners() {
     dom.btnGizmoScale?.addEventListener('click', () => setViewportGizmoMode('scale'));
     dom.btnToggleSceneSettings?.addEventListener('click', () => setSceneSettingsOpen(!state.sceneSettingsOpen));
     dom.btnSceneSettingsClose?.addEventListener('click', () => setSceneSettingsOpen(false));
+    dom.btnToggleCameraPreview?.addEventListener('click', () => setCameraPreviewOpen(!state.cameraPreviewOpen));
+    dom.btnCameraPreviewClose?.addEventListener('click', () => setCameraPreviewOpen(false));
     dom.btnToggleCameraSettings?.addEventListener('click', () => setCameraSettingsOpen(!state.cameraSettingsOpen));
     dom.btnCameraSettingsClose?.addEventListener('click', () => setCameraSettingsOpen(false));
+    dom.cameraPreviewPanel?.addEventListener('pointerdown', () => focusFloatingPanel('cameraPreview'));
+    dom.cameraSettingsPanel?.addEventListener('pointerdown', () => focusFloatingPanel('cameraSettings'));
+    dom.cameraPreviewPanel?.addEventListener('mousedown', beginCameraPreviewPanelDrag);
+    dom.cameraPreviewAspectRatio?.addEventListener('change', (e) => {
+        applyCameraPreviewAspect(e.target.value);
+    });
     dom.sceneBgColorPicker?.addEventListener('input', (e) => {
         applySceneBackgroundHex(e.target.value, 'custom');
     });
@@ -4162,7 +6200,11 @@ function initEventListeners() {
     // 相机模式
     dom.cameraMode?.addEventListener('change', (e) => {
         const mode = e.target.value;
+        state.cameraMode = mode;
         if (app) app.setCameraMode(mode);
+        if (mode !== 'fps' && state.cameraSequenceDragEnabled) {
+            setCameraSequenceDragEnabled(false, true);
+        }
         showInfo(`相机模式: ${mode}`);
     });
 
@@ -4177,6 +6219,9 @@ function initEventListeners() {
     dom.btnToggleCameraSequence?.addEventListener('click', () => {
         setCameraSequenceVisibility(!state.cameraSequenceVisible);
     });
+    dom.btnToggleCameraSequenceDrag?.addEventListener('click', () => {
+        setCameraSequenceDragEnabled(!state.cameraSequenceDragEnabled);
+    });
     dom.timelineCameraInterpolation?.addEventListener('change', (e) => {
         setCameraInterpolationMode(e.target.value);
     });
@@ -4185,6 +6230,12 @@ function initEventListeners() {
     });
     dom.timelineInterpolationParam?.addEventListener('change', (e) => {
         setCameraInterpolationParam(e.target.value);
+    });
+    dom.cameraDisplayScale?.addEventListener('input', (e) => {
+        setCameraSequenceDisplayScale(e.target.value, true);
+    });
+    dom.cameraDisplayScale?.addEventListener('change', (e) => {
+        setCameraSequenceDisplayScale(e.target.value);
     });
     dom.timelineFps?.addEventListener('change', (e) => {
         setTimelineFps(e.target.value);
@@ -4198,6 +6249,7 @@ function initEventListeners() {
     dom.timelineSlider?.addEventListener('input', (e) => {
         const nextFrame = Math.round(Number(e.target.value || 0));
         setTimelineFrame(nextFrame, { applyPose: true, syncSlider: true });
+        syncManualTimelineCameraSelection(nextFrame);
     });
 
     // 文件拖拽
@@ -4208,6 +6260,12 @@ function initEventListeners() {
     });
 
     document.addEventListener('drop', async (e) => {
+        if (dom.agentComposerDock?.contains(e.target) && queueAgentComposerImages(e.dataTransfer?.files) > 0) {
+            e.preventDefault();
+            clearAgentComposerDropTarget();
+            showInfo('图片已加入输入区');
+            return;
+        }
         e.preventDefault();
         console.log(`[Editor ${state.VERSION}] Drop event detected`);
         const files = e.dataTransfer?.files;
@@ -4234,6 +6292,10 @@ function initEventListeners() {
     // 全局快捷键
     document.addEventListener('keydown', handleGlobalShortcuts);
     document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && state.cameraPreviewOpen) {
+            setCameraPreviewOpen(false);
+            return;
+        }
         if (e.key === 'Escape' && state.cameraSettingsOpen) {
             setCameraSettingsOpen(false);
             return;
@@ -4255,13 +6317,12 @@ function initEventListeners() {
         if (dom.exportToolFlyout?.contains(e.target)) return;
         setExportFlyoutOpen(false);
     });
-    document.addEventListener('pointerdown', (e) => {
-        if (!state.cameraSettingsOpen) return;
-        if (dom.cameraSettingsPanel?.contains(e.target)) return;
-        if (dom.btnToggleCameraSettings?.contains(e.target)) return;
-        setCameraSettingsOpen(false);
-    });
+    document.addEventListener('mousemove', moveCameraPreviewPanel);
+    document.addEventListener('mouseup', endCameraPreviewPanelDrag);
     window.addEventListener('resize', () => {
+        if (state.cameraPreviewOpen) {
+            positionCameraPreviewPanel();
+        }
         if (state.cameraSettingsOpen) {
             positionCameraSettingsPanel();
         }
@@ -4283,7 +6344,10 @@ async function init() {
         dom.versionLabel.textContent = state.VERSION;
     }
     initTheme();
+    initializeAgentWorkbench();
     syncClearScreenState();
+    initializeCameraPreviewControls();
+    mountCameraPreviewPanelToMainUi();
     mountCameraSettingsPanelToMainUi();
 
     // 检查关键 DOM 元素是否存在
@@ -4318,8 +6382,17 @@ async function init() {
         showError('Failed to initialize editor');
         return;
     }
+    await app.attachCameraPreviewCanvas?.(dom.cameraPreviewCanvas || null);
+    app.setCameraPreviewVisible?.(state.cameraPreviewOpen);
+    app.setCameraPreviewAspectRatio?.(getCameraPreviewAspectOption(state.cameraPreviewAspectId).aspect);
     state.viewportGizmoMode = app.getViewportGizmoMode?.() ?? state.viewportGizmoMode;
     state.cameraSequenceVisible = Boolean(app.getCameraSequenceVisible?.() ?? state.cameraSequenceVisible);
+    state.cameraSequenceDisplayScale = clampCameraSequenceDisplayScale(
+        app.getCameraSequenceDisplayScale?.() ?? state.cameraSequenceDisplayScale
+    );
+    state.cameraSequenceDragEnabled = Boolean(
+        app.getCameraSequenceEditEnabled?.() ?? state.cameraSequenceDragEnabled
+    );
 
     // 注册模型变化回调
     app.onModelsChanged((models) => {
@@ -4352,11 +6425,54 @@ async function init() {
         if (id !== state.selectedModelId) return;
         updateEditorValues(model);
     });
+    app.onSelectedModel?.((id) => {
+        if (syncingSelectedModelSelection) return;
+        if (!id) return;
+        selectModel(id, { syncApp: false, allowToggle: false, silent: true });
+    });
     app.onCameraInteraction?.((kind) => {
+        if (state.keyframes.length === 0) {
+            syncTimelineDrivenCameraPreviewPose();
+        }
         if (!state.isPlaying) return;
         if (kind !== 'drag' && kind !== 'wheel' && kind !== 'keyboard') return;
         stopTimelinePlayback(false);
         showInfo('相机动画: 已暂停（手动控制）');
+    });
+    app.onCameraSequenceSelection?.((frame) => {
+        if (syncingCameraSequenceSelection) return;
+        if (!Number.isFinite(Number(frame))) {
+            state.selectedCameraSequenceFrame = null;
+            syncCameraSequenceVisualization();
+            syncViewportGizmoControls();
+            return;
+        }
+        state.selectedCameraSequenceFrame = Math.round(Number(frame));
+        if (state.selectedModelId) {
+            closeEditor();
+        }
+        const normalizedMode = normalizeViewportGizmoModeForSelection(
+            state.viewportGizmoMode,
+            resolveViewportSelectionKind({
+                cameraSequenceDragEnabled: state.cameraSequenceDragEnabled,
+                selectedCameraSequenceFrame: state.selectedCameraSequenceFrame,
+                selectedModelId: state.selectedModelId,
+            })
+        );
+        if (normalizedMode !== state.viewportGizmoMode) {
+            setViewportGizmoMode('translate', true);
+        }
+        setTimelineFrame(state.selectedCameraSequenceFrame, { applyPose: false, syncSlider: true });
+        syncCameraSequenceVisualization();
+        syncViewportGizmoControls();
+    });
+    app.onCameraSequenceTransform?.((frame, pose) => {
+        updateKeyframeCameraPose(frame, pose);
+    });
+    app.onCameraSequenceTransformCommit?.((frame, pose) => {
+        if (!updateKeyframeCameraPose(frame, pose)) return;
+        updateTimelineUI();
+        syncCameraSequenceVisualization();
     });
 
     registerDebugHooks();
@@ -4370,18 +6486,23 @@ async function init() {
     syncLeftSidebarCollapsedState();
     syncCanvasContainerToViewport();
     window.addEventListener('resize', () => {
+        applyAgentWorkbenchWidth(preferredAgentWorkbenchWidth ?? AGENT_WORKBENCH_DEFAULT_WIDTH, false);
         applySidebarWidths(
             preferredLeftSidebarWidth ?? LEFT_SIDEBAR_DEFAULT_WIDTH,
             preferredRightSidebarWidth ?? RIGHT_SIDEBAR_DEFAULT_WIDTH,
             false
         );
         syncCanvasContainerToViewport();
+        syncAgentMessageScrollbar();
     });
     initSceneSettingsUI();
     initTimelineUI();
     closeEditor();
     syncSceneSettingsPanel();
+    syncCameraPreviewPanel();
     syncViewportGizmoControls();
+    syncAgentMessageScrollbar();
+    syncCameraSequenceDragButton();
     startAnimationControlsSyncLoop();
 
     // 初始化时间轴按钮状态

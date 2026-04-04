@@ -842,7 +842,9 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
             if ((globalThis as any).GS_VIDEO_EXPORT_DEBUG) {
                 console.warn('[GaussianThreeJSRenderer] drawSplats: pcs为空或长度为0');
             }
-          
+            const [viewportWidth, viewportHeight] = this.getViewport();
+            this.ensureRawDepthTextures(viewportWidth, viewportHeight);
+            this.clearGaussianRawDepthTexture();
             return false;
         }
         
@@ -976,6 +978,23 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         device.queue.submit([encoder.finish()]);
 
         return true;
+    }
+
+    private clearGaussianRawDepthTexture(): void {
+        if (!this.gaussianRawDepthTexture) return;
+        const encoder = this.device.createCommandEncoder({ label: "Gaussian Raw Depth Clear" });
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [
+                {
+                    view: this.gaussianRawDepthTexture.createView(),
+                    loadOp: "clear",
+                    storeOp: "store",
+                    clearValue: { r: -1, g: 0, b: 0, a: 0 },
+                },
+            ],
+        });
+        pass.end();
+        this.device.queue.submit([encoder.finish()]);
     }
 
     public renderOverlayScene(scene: THREE.Scene, camera: THREE.Camera): void {

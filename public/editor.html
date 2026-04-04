@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visionary Editor 0.1.6</title>
+    <title>Visionary Editor 0.1.8</title>
     <link rel="stylesheet" href="./editor.css">
 </head>
 <body class="theme-light">
     <div id="app">
+        <div id="editor-shell">
         <!-- Canvas Container -->
         <div id="canvas-container">
             <canvas id="canvas"></canvas>
@@ -42,6 +43,107 @@
         <div id="main-ui">
             <!-- Middle Section: Three-Column Layout -->
             <div id="middle-section">
+                <div id="agent-workbench-shell">
+                    <aside id="agent-workbench" aria-label="Agent 工作台">
+                        <div class="agent-workbench-topbar">
+                            <div id="agentWorkflowTabs" class="agent-workflow-tabs" aria-label="Agent 流程">
+                                <button type="button" class="agent-workflow-tab active" data-workflow="scene-build" title="场景构建" aria-label="场景构建">
+                                    <span class="agent-workflow-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4 18h16" />
+                                            <path d="M6 18V9l6-3 6 3v9" />
+                                            <path d="M12 6V4" />
+                                        </svg>
+                                    </span>
+                                    <span class="agent-workflow-label">场景</span>
+                                </button>
+                                <button type="button" class="agent-workflow-tab" data-workflow="object-insert" title="物体插入" aria-label="物体插入">
+                                    <span class="agent-workflow-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 3 5 7v10l7 4 7-4V7l-7-4Z" />
+                                            <path d="M5 7l7 4 7-4" />
+                                            <path d="M12 11v10" />
+                                        </svg>
+                                    </span>
+                                    <span class="agent-workflow-label">物体</span>
+                                </button>
+                                <button type="button" class="agent-workflow-tab" data-workflow="character-create" title="人物创造" aria-label="人物创造">
+                                    <span class="agent-workflow-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="12" cy="7" r="3" />
+                                            <path d="M12 10v7" />
+                                            <path d="M8 14l4-2 4 2" />
+                                            <path d="M9 21l3-4 3 4" />
+                                        </svg>
+                                    </span>
+                                    <span class="agent-workflow-label">人物</span>
+                                </button>
+                                <button type="button" class="agent-workflow-tab" data-workflow="camera-direct" title="运镜生成" aria-label="运镜生成">
+                                    <span class="agent-workflow-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <rect x="4" y="7" width="11" height="10" rx="2" />
+                                            <path d="m15 10 5-2v8l-5-2" />
+                                            <path d="M7 5h5" />
+                                        </svg>
+                                    </span>
+                                    <span class="agent-workflow-label">运镜</span>
+                                </button>
+                            </div>
+                            <button
+                                type="button"
+                                id="btnToggleAgentWorkbench"
+                                class="agent-workbench-toggle"
+                                aria-expanded="true"
+                                title="收起 Agent 工作台"
+                                aria-label="收起 Agent 工作台"
+                            >
+                                ‹
+                            </button>
+                        </div>
+
+                        <div class="agent-workbench-body">
+                            <div class="agent-message-pane">
+                                <div class="agent-message-scroll" aria-label="对话记录">
+                                    <div id="agentMessageList" class="agent-message-list"></div>
+                                </div>
+                                <div id="agentMessageScrollbar" class="agent-message-scrollbar" aria-hidden="true">
+                                    <div id="agentMessageScrollbarThumb" class="agent-message-scrollbar-thumb"></div>
+                                </div>
+                            </div>
+                            <div id="agentComposerDock" class="agent-composer-dock">
+                                <form id="agentComposer" class="agent-composer">
+                                    <div id="agentComposerAttachments" class="agent-composer-attachments hidden" aria-label="待发送图片"></div>
+                                    <input type="file" id="agentImageInput" accept="image/*" multiple hidden>
+                                    <textarea
+                                        id="agentComposerInput"
+                                        rows="3"
+                                        placeholder="输入一句自然语言，触发当前流程的占位 Agent 响应"
+                                    ></textarea>
+                                    <div class="agent-composer-actions">
+                                        <button type="button" id="btnAgentAddImage" class="agent-icon-btn" title="添加图片" aria-label="添加图片">
+                                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                                <rect x="4" y="5" width="16" height="14" rx="2"></rect>
+                                                <circle cx="9" cy="10" r="1.5"></circle>
+                                                <path d="m20 16-4.5-4.5L9 18"></path>
+                                            </svg>
+                                        </button>
+                                        <button type="submit" id="btnAgentSend" class="agent-send-btn">发送</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </aside>
+
+                    <div
+                        id="agent-workbench-resizer"
+                        class="agent-workbench-resizer"
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label="调整 Agent 工作台宽度"
+                    ></div>
+                </div>
+
+                <div id="editor-stage">
                 <!-- Left: Model List -->
                 <div id="left-sidebar">
                     <div class="sidebar-header">
@@ -313,6 +415,7 @@
                         </button>
                     </div>
                 </div>
+                </div>
             </div>
 
             <!-- Bottom: Timeline for Camera Keyframes -->
@@ -321,9 +424,31 @@
                     <div class="timeline-header-left">
                         <h2>相机关键帧</h2>
                         <div class="timeline-settings-anchor">
+                            <button id="btnToggleCameraPreview" class="timeline-action-btn timeline-inline-btn" title="打开相机预览">
+                                <span class="btn-text">相机预览</span>
+                            </button>
                             <button id="btnToggleCameraSettings" class="timeline-action-btn timeline-inline-btn" title="打开相机设置">
                                 <span class="btn-text">相机设置</span>
                             </button>
+                            <div id="cameraPreviewPanel" class="settings-card floating-camera-preview hidden">
+                                <div class="settings-card-header camera-preview-header">
+                                    <h3>相机预览</h3>
+                                    <button id="btnCameraPreviewClose" class="close-editor-btn floating-panel-close" title="关闭相机预览">
+                                        <span>×</span>
+                                    </button>
+                                </div>
+                                <div class="settings-card-body camera-preview-body">
+                                    <div class="property-row">
+                                        <span class="property-label">比例</span>
+                                        <div class="property-inputs">
+                                            <select id="cameraPreviewAspectRatio" aria-label="相机预览比例"></select>
+                                        </div>
+                                    </div>
+                                    <div id="cameraPreviewViewport" class="camera-preview-viewport">
+                                        <canvas id="cameraPreviewCanvas"></canvas>
+                                    </div>
+                                </div>
+                            </div>
                             <div id="cameraSettingsPanel" class="settings-card floating-camera-settings hidden">
                                 <div class="settings-card-header">
                                     <h3>相机设置</h3>
@@ -338,6 +463,16 @@
                                             <button id="btnToggleCameraSequence" class="timeline-action-btn timeline-inline-btn" title="切换相机序列可见性">
                                                 <span class="btn-text">可见</span>
                                             </button>
+                                            <button id="btnToggleCameraSequenceDrag" class="timeline-action-btn timeline-inline-btn" title="在自由视角下拖动相机关键帧">
+                                                <span class="btn-text">拖动</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="property-row timeline-camera-param-row">
+                                        <span class="property-label" for="cameraDisplayScale">大小</span>
+                                        <div class="property-inputs timeline-camera-param-inputs">
+                                            <input type="range" id="cameraDisplayScale" min="0.25" max="3" step="0.01" value="1.00">
+                                            <span id="cameraDisplayScaleValue" class="timeline-interpolation-param-value">1.00</span>
                                         </div>
                                     </div>
                                     <div class="property-row">
@@ -462,6 +597,7 @@
                 </div>
             </div>
         </div>
+        </div>
 
         <!-- File Input (hidden) -->
         <input type="file" id="fileInput" accept=".ply,.onnx,.glb,.gltf,.obj,.fbx,.stl,.splat,.ksplat,.spz,.sog" multiple style="display: none;">
@@ -516,7 +652,7 @@
                 <div class="help-modal-header">
                     <div class="help-modal-header-main">
                         <h3>操作提示</h3>
-                        <span class="version-label help-version-label" id="versionLabel">0.1.6</span>
+                        <span class="version-label help-version-label" id="versionLabel">0.1.8</span>
                     </div>
                     <button id="helpTipsClose" class="icon-btn help-modal-close-btn" title="关闭操作提示">×</button>
                 </div>
