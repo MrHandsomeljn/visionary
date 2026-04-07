@@ -31,6 +31,7 @@ export class FBXModelWrapper implements ITimelineTarget {
   private currentAction: THREE.AnimationAction | null = null;
   private isPlaying: boolean = false;
   private isPaused: boolean = false;
+  private isLooping: boolean = true;
   private animationSpeed: number = 1.0;
   private timeScale: number = 1.0;
   private timeOffset: number = 0.0;
@@ -61,12 +62,19 @@ export class FBXModelWrapper implements ITimelineTarget {
     // 如果有动画剪辑，设置第一个为当前动作
     if (clips.length > 0) {
       this.currentAction = this.mixer.clipAction(clips[0]);
-      this.currentAction.setLoop(THREE.LoopRepeat, options.loop ? Infinity : 1);
+      this.setLoop(options.loop !== false);
       
       if (options.autoPlay !== false) {
         this.startAnimation(options.defaultSpeed || 1.0);
       }
     }
+  }
+
+  private ensureActionBound(): void {
+    if (!this.currentAction) return;
+    this.currentAction.enabled = true;
+    this.currentAction.clampWhenFinished = !this.isLooping;
+    this.currentAction.play();
   }
 
   /**
@@ -124,7 +132,13 @@ export class FBXModelWrapper implements ITimelineTarget {
    */
   setAnimationTime(time: number): void {
     if (this.currentAction) {
-      this.currentAction.time = time;
+      this.ensureActionBound();
+      const safeTime = Math.max(0, Number(time) || 0);
+      const duration = this.getDuration();
+      const normalizedTime = this.isLooping && duration > 0
+        ? safeTime % duration
+        : Math.min(safeTime, duration || safeTime);
+      this.currentAction.time = normalizedTime;
       this.mixer.update(0); // 立即应用时间变化
     }
     this.frameTime = time;
@@ -147,6 +161,30 @@ export class FBXModelWrapper implements ITimelineTarget {
     return this.animationSpeed;
   }
 
+  getDuration(): number {
+    return this.clips.reduce((max, clip) => Math.max(max, Number(clip.duration) || 0), 0);
+  }
+
+  isAnimationRunning(): boolean {
+    return this.isPlaying;
+  }
+
+  isAnimationPaused(): boolean {
+    return this.isPaused;
+  }
+
+  getAnimationIsLoop(): boolean {
+    return this.isLooping;
+  }
+
+  setLoop(enabled: boolean): void {
+    this.isLooping = !!enabled;
+    if (this.currentAction) {
+      this.currentAction.setLoop(THREE.LoopRepeat, this.isLooping ? Infinity : 1);
+      this.currentAction.clampWhenFinished = !this.isLooping;
+    }
+  }
+
   /**
    * 开始动画
    */
@@ -156,8 +194,9 @@ export class FBXModelWrapper implements ITimelineTarget {
     }
     
     if (this.currentAction) {
+      this.ensureActionBound();
       this.currentAction.reset();
-      this.currentAction.play();
+      this.currentAction.paused = false;
       this.isPlaying = true;
       this.isPaused = false;
     }
@@ -178,8 +217,10 @@ export class FBXModelWrapper implements ITimelineTarget {
    */
   resumeAnimation(): void {
     if (this.currentAction) {
+      this.ensureActionBound();
       this.currentAction.paused = false;
       this.isPaused = false;
+      this.isPlaying = true;
     }
   }
 
@@ -278,7 +319,8 @@ export class FBXModelWrapper implements ITimelineTarget {
       
       // 切换到新动画
       this.currentAction = this.mixer.clipAction(this.clips[clipIndex]);
-      this.currentAction.setLoop(THREE.LoopRepeat, Infinity);
+      this.currentAction.setLoop(THREE.LoopRepeat, this.isLooping ? Infinity : 1);
+      this.currentAction.clampWhenFinished = !this.isLooping;
       this.currentAction.timeScale = this.animationSpeed * this.timeScale;
       
       // 如果之前正在播放，继续播放新动画

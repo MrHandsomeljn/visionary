@@ -269,11 +269,12 @@ export class CameraManager {
         // Note: We use the Y component and the horizontal distance
         const horizontalLength = Math.sqrt(forward[0] * forward[0] + forward[2] * forward[2]);
         const pitch = Math.atan2(-forward[1], horizontalLength);
+        const roll = resolveViewRoll(forward, currentRot);
         
         // Initialize FPS controller with calculated orientation
         if (this.controller instanceof FPSController) {
           // Set the calculated orientation
-          this.controller.setOrientation(yaw, pitch);
+          this.controller.setOrientation(yaw, pitch, roll);
           // Ensure no residual movement
           this.controller.leftMousePressed = false;
           this.controller.rightMousePressed = false;
@@ -416,7 +417,7 @@ export class CameraManager {
     if (this.controllerType === 'orbit' && this.controller instanceof CameraController) {
       const c2w = quat.invert(quat.create(), this.camera.rotationQ);
       const forward = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 0, 1), c2w);
-      const up = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 1, 0), c2w);
+      const visualUp = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 1, 0), c2w);
 
       if (vec3.length(forward) > 1e-6) {
         vec3.normalize(forward, forward);
@@ -429,7 +430,7 @@ export class CameraManager {
         dist = 3.0;
       }
       const center = vec3.scaleAndAdd(vec3.create(), this.camera.positionV, forward, dist);
-      this.syncOrbitAfterExternalLookAt(center, up);
+      this.controller.syncExternalPose(center, forward, visualUp, vec3.fromValues(0, 1, 0));
       return true;
     }
 
@@ -439,7 +440,8 @@ export class CameraManager {
       const horizontalLength = Math.sqrt(forward[0] * forward[0] + forward[2] * forward[2]);
       const yaw = Math.atan2(forward[0], forward[2]);
       const pitch = Math.atan2(-forward[1], Math.max(horizontalLength, 1e-6));
-      this.controller.setOrientation(yaw, pitch);
+      const roll = resolveViewRoll(forward, this.camera.rotationQ);
+      this.controller.setOrientation(yaw, pitch, roll);
       this.controller.leftMousePressed = false;
       this.controller.rightMousePressed = false;
       return true;
@@ -469,11 +471,6 @@ export class CameraManager {
 
     vec3.copy(this.controller.center, center);
     this.controller.resetUp(up);
-    vec3.set(this.controller.rotation, 0, 0, 0);
-    vec2.set(this.controller.shift, 0, 0);
-    this.controller.scroll = 0;
-    this.controller.leftMousePressed = false;
-    this.controller.rightMousePressed = false;
   }
 
   /**
@@ -484,7 +481,10 @@ export class CameraManager {
     if (!this.camera) return false;
 
     const c2w = quat.invert(quat.create(), this.camera.rotationQ);
-    const forward = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 0, -1), c2w);
+    const forwardAxis = this.controllerType === 'orbit'
+      ? vec3.fromValues(0, 0, 1)
+      : vec3.fromValues(0, 0, -1);
+    const forward = vec3.transformQuat(vec3.create(), forwardAxis, c2w);
     if (vec3.length(forward) < 1e-6) return false;
     vec3.normalize(forward, forward);
 
@@ -539,4 +539,78 @@ export class CameraManager {
       orbitCenter: this.getOrbitCenter()
     };
   }
+
+  getCameraControlDebugInfo(): any {
+    if (!this.camera) return null;
+
+    const c2w = quat.invert(quat.create(), this.camera.rotationQ);
+    const forwardAxis = this.controllerType === 'orbit'
+      ? vec3.fromValues(0, 0, 1)
+      : vec3.fromValues(0, 0, -1);
+    const forward = vec3.transformQuat(vec3.create(), forwardAxis, c2w);
+    const visualUp = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 1, 0), c2w);
+    const visualRight = vec3.transformQuat(vec3.create(), vec3.fromValues(1, 0, 0), c2w);
+    if (vec3.length(forward) > 1e-6) {
+      vec3.normalize(forward, forward);
+    }
+    if (vec3.length(visualUp) > 1e-6) {
+      vec3.normalize(visualUp, visualUp);
+    }
+    if (vec3.length(visualRight) > 1e-6) {
+      vec3.normalize(visualRight, visualRight);
+    }
+
+    const resolvedRollRad = resolveViewRoll(forward, this.camera.rotationQ);
+    const controllerAny = this.controller as any;
+
+    return {
+      controllerType: this.controllerType,
+      cameraPosition: Array.from(this.camera.positionV),
+      cameraRotation: Array.from(this.camera.rotationQ),
+      forward: Array.from(forward),
+      visualUp: Array.from(visualUp),
+      visualRight: Array.from(visualRight),
+      resolvedRollRad,
+      resolvedRollDeg: resolvedRollRad * 180 / Math.PI,
+      leftMousePressed: Boolean(controllerAny?.leftMousePressed),
+      rightMousePressed: Boolean(controllerAny?.rightMousePressed),
+      orbitCenter: this.getOrbitCenter() ? Array.from(this.getOrbitCenter() as vec3) : null,
+      orbitState: this.controller instanceof CameraController ? {
+        amount: Array.from(this.controller.amount),
+        shift: Array.from(this.controller.shift),
+        rotation: Array.from(this.controller.rotation),
+        altPressed: Boolean(this.controller.altPressed),
+        explicitRollDeg: this.controller.getExplicitRollDegrees(),
+      } : null,
+      fpsState: this.controller instanceof FPSController ? {
+        yawDeg: controllerAny?.yaw * 180 / Math.PI,
+        pitchDeg: controllerAny?.pitch * 180 / Math.PI,
+        rollDeg: controllerAny?.roll * 180 / Math.PI,
+        rotateVelocity: Array.isArray(controllerAny?.rotateVelocity) ? controllerAny.rotateVelocity : Array.from(controllerAny?.rotateVelocity || []),
+        moveVelocity: Array.isArray(controllerAny?.moveVelocity) ? controllerAny.moveVelocity : Array.from(controllerAny?.moveVelocity || []),
+      } : null,
+    };
+  }
+}
+
+function projectOntoForwardPlane(vector: vec3, forward: vec3, fallback: vec3): vec3 {
+  const projected = vec3.sub(
+    vec3.create(),
+    vector,
+    vec3.scale(vec3.create(), forward, vec3.dot(vector, forward)),
+  );
+  if (vec3.length(projected) < 1e-6) {
+    return vec3.normalize(vec3.create(), fallback);
+  }
+  return vec3.normalize(projected, projected);
+}
+
+function resolveViewRoll(forward: vec3, rotation: quat): number {
+  const c2w = quat.invert(quat.create(), rotation);
+  const visualUp = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 1, 0), c2w);
+  const baseUp = projectOntoForwardPlane(vec3.fromValues(0, 1, 0), forward, vec3.fromValues(1, 0, 0));
+  const projectedVisualUp = projectOntoForwardPlane(visualUp, forward, baseUp);
+  const cross = vec3.cross(vec3.create(), baseUp, projectedVisualUp);
+  const dot = Math.max(-1, Math.min(1, vec3.dot(baseUp, projectedVisualUp)));
+  return Math.atan2(vec3.dot(cross, forward), dot);
 }

@@ -788,7 +788,13 @@ body {
     gap: 6px;
 }
 
+.agent-message-attachment.is-image {
+    grid-column: 1 / -1;
+}
+
 .agent-message-attachment-frame {
+    position: relative;
+    overflow: hidden;
     width: 100%;
     aspect-ratio: 1 / 1;
     border-radius: 10px;
@@ -796,6 +802,19 @@ body {
     background:
         linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.02)),
         linear-gradient(160deg, color-mix(in srgb, var(--accent) 22%, transparent), color-mix(in srgb, var(--panel-bg) 86%, transparent));
+}
+
+.agent-message-attachment-frame.is-ready {
+    aspect-ratio: auto;
+    background: color-mix(in srgb, var(--panel-bg) 72%, transparent);
+}
+
+.agent-message-attachment-frame.is-ready img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 240px;
+    object-fit: contain;
 }
 
 .agent-message-attachment-label {

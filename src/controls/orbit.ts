@@ -126,13 +126,16 @@ export function applyRotation(
   forward: vec3,
   right: vec3,
   yawAxis: vec3,
+  poleAxis: vec3,
   yaw: number,
   pitch: number,
   roll: number
-): { forward: vec3, right: vec3, yawAxis: vec3 } {
+): { forward: vec3, right: vec3, yawAxis: vec3, pitchAppliedRatio: number } {
   let newForward = vec3.clone(forward);
   let newRight = vec3.clone(right);
   let newYawAxis = vec3.clone(yawAxis);
+  const requestedPitch = pitch;
+  let pitchClamped = false;
 
   // Apply yaw: rotate forward and right around yawAxis
   if (Math.abs(yaw) > 0) {
@@ -145,14 +148,15 @@ export function applyRotation(
 
   // Apply pitch with pole limit
   if (Math.abs(pitch) > 0) {
-    // Limit forward's angle with yawAxis to avoid getting too close to poles
+    // Limit forward's angle with the fixed up-axis to avoid getting too close to poles.
     const cosMin = Math.cos(MIN_POLE_ANGLE);
-    const dotFU = Math.max(-1, Math.min(1, vec3.dot(newForward, newYawAxis)));
+    const normalizedPoleAxis = vec3.normalize(vec3.create(), poleAxis);
+    const dotFU = Math.max(-1, Math.min(1, vec3.dot(newForward, normalizedPoleAxis)));
     
     // Predict new forward after pitch rotation
     const qPitchTest = quat.setAxisAngle(quat.create(), newRight, pitch);
     const fwdTest = vec3.transformQuat(vec3.create(), newForward, qPitchTest);
-    const dotTest = Math.max(-1, Math.min(1, vec3.dot(fwdTest, newYawAxis)));
+    const dotTest = Math.max(-1, Math.min(1, vec3.dot(fwdTest, normalizedPoleAxis)));
     
     if (Math.abs(dotTest) > cosMin) {
       // Clamp to boundary (shrink toward safe direction)
@@ -161,10 +165,26 @@ export function applyRotation(
       // Simplification: scale pitch proportionally (avoid complex inverse solving)
       const scale = Math.min(1, Math.abs((targetDot - dotFU) / (dotTest - dotFU + 1e-9)));
       pitch *= scale;
+      pitchClamped = true;
     }
     
     const qPitch = quat.setAxisAngle(quat.create(), newRight, pitch);
     newForward = vec3.transformQuat(vec3.create(), newForward, qPitch);
+    const dotClamped = Math.max(-1, Math.min(1, vec3.dot(newForward, normalizedPoleAxis)));
+    if (Math.abs(dotClamped) > cosMin) {
+      const sign = dotClamped > 0 ? 1 : -1;
+      const tangent = projectOntoPlaneNormed(newForward, normalizedPoleAxis, newRight);
+      const tangentScale = Math.sin(MIN_POLE_ANGLE);
+      newForward = vec3.normalize(
+        vec3.create(),
+        vec3.add(
+          vec3.create(),
+          vec3.scale(vec3.create(), tangent, tangentScale),
+          vec3.scale(vec3.create(), normalizedPoleAxis, sign * cosMin),
+        ),
+      );
+      pitchClamped = true;
+    }
     newYawAxis = projectOntoPlaneNormed(newYawAxis, newForward, newYawAxis); // Re-project to maintain orthogonality
     newRight = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), newForward, newYawAxis));
   }
@@ -176,7 +196,12 @@ export function applyRotation(
     newRight = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), newForward, newYawAxis));
   }
 
-  return { forward: newForward, right: newRight, yawAxis: newYawAxis };
+  const pitchAppliedRatio = Math.abs(requestedPitch) > 1e-6
+    ? (pitchClamped
+      ? Math.max(0, Math.min(0.999, Math.abs(pitch / requestedPitch)))
+      : Math.max(0, Math.min(1, Math.abs(pitch / requestedPitch))))
+    : 1;
+  return { forward: newForward, right: newRight, yawAxis: newYawAxis, pitchAppliedRatio };
 }
 
 /**

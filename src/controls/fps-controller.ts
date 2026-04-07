@@ -4,6 +4,7 @@
 import { vec2, vec3, quat } from "gl-matrix";
 import { PerspectiveCamera } from '../camera';
 import { IController } from './base-controller';
+import { lookAtW2C, WORLD_UP } from './orbit';
 
 // ---- Constants ----
 const DEFAULT_MOVEMENT_SPEED = 1.0;
@@ -64,6 +65,46 @@ export class FPSController implements IController {
   flyMode = true;
   keyYawSpeed = DEFAULT_KEY_YAW_SPEED;
   keyRollSpeed = DEFAULT_KEY_ROLL_SPEED;
+
+  private normalizeAngle(angle: number): number {
+    if (!Number.isFinite(angle)) return 0;
+    let normalized = angle;
+    while (normalized <= -Math.PI) normalized += Math.PI * 2;
+    while (normalized > Math.PI) normalized -= Math.PI * 2;
+    return normalized;
+  }
+
+  private buildForwardFromYawPitch(): vec3 {
+    const c2w = quat.identity(quat.create());
+    quat.rotateY(c2w, c2w, this.yaw);
+    quat.rotateX(c2w, c2w, this.pitch);
+    const forward = vec3.transformQuat(vec3.create(), vec3.fromValues(0, 0, -1), c2w);
+    if (vec3.length(forward) < 1e-6) {
+      return vec3.fromValues(0, 0, -1);
+    }
+    return vec3.normalize(forward, forward);
+  }
+
+  private projectOntoForwardPlane(vector: vec3, forward: vec3, fallback: vec3): vec3 {
+    const projected = vec3.sub(
+      vec3.create(),
+      vector,
+      vec3.scale(vec3.create(), forward, vec3.dot(vector, forward)),
+    );
+    if (vec3.length(projected) < 1e-6) {
+      return vec3.normalize(vec3.create(), fallback);
+    }
+    return vec3.normalize(projected, projected);
+  }
+
+  private buildCameraRotationFromForwardAndRoll(forward: vec3): quat {
+    let baseUp = this.projectOntoForwardPlane(WORLD_UP, forward, vec3.fromValues(1, 0, 0));
+    if (Math.abs(this.roll) > 1e-6) {
+      const qRoll = quat.setAxisAngle(quat.create(), forward, this.roll);
+      baseUp = vec3.transformQuat(vec3.create(), baseUp, qRoll);
+    }
+    return lookAtW2C(forward, baseUp);
+  }
 
   constructor(
     moveSpeed = DEFAULT_MOVEMENT_SPEED,
@@ -169,16 +210,8 @@ export class FPSController implements IController {
       this.roll += rollInput * this.keyRollSpeed * deltaTime;
     }
     
-    // Build camera rotation with intrinsic YXZ order
-    // First build C2W (camera to world), then invert to get W2C
-    const c2w = quat.identity(quat.create());
-    quat.rotateY(c2w, c2w, this.yaw);   // yaw about world Y  
-    quat.rotateX(c2w, c2w, this.pitch); // pitch about local X
-    quat.rotateZ(c2w, c2w, this.roll);  // roll about local Z
-    
-    // Camera needs W2C (world to camera) quaternion
-    const w2c = quat.invert(quat.create(), c2w);
-    quat.copy(camera.rotationQ, w2c); // Use copy to preserve Float32Array reference
+    const forward = this.buildForwardFromYawPitch();
+    quat.copy(camera.rotationQ, this.buildCameraRotationFromForwardAndRoll(forward));
     
     // Calculate movement input
     const inputVector = vec3.fromValues(0, 0, 0);
@@ -285,7 +318,7 @@ export class FPSController implements IController {
   setOrientation(yaw: number, pitch: number, roll: number = this.roll): void {
     this.yaw = yaw;
     this.pitch = clamp(pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
-    this.roll = roll;
+    this.roll = this.normalizeAngle(roll);
   }
   
   // Toggle fly mode

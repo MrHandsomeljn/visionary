@@ -230,7 +230,10 @@ export class FBXLoaderAdapter extends ThreeJSLoaderAdapter<THREE.Group> {
         (object3D: THREE.Group) => {
           // FBX 自带材质保持不动，只补充阴影属性
           this.applyShadowsAndMaterial(object3D);
-          resolve({ object3D, animationClips: [] });
+          const animationClips = Array.isArray((object3D as any).animations)
+            ? (object3D as any).animations
+            : [];
+          resolve({ object3D, animationClips });
         },
         (progress: any) => {
           if (options?.onProgress) {

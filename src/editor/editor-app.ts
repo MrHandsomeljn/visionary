@@ -31,10 +31,15 @@ import { initWebGPU_onnx, WebGPUContext, DEFAULT_DUMMY_MODEL_URL } from "../app/
 import { initOrtEnvironment, getDefaultOrtWasmPaths } from "../config/ort-config";
 import { PointCloud, DynamicPointCloud } from "../point_cloud";
 import { lookAtW2C } from "../controls/orbit";
+import { FBXModelWrapper } from "../models/fbx-model-wrapper";
 import { GLTFModelWrapper } from "../models/gltf-model-wrapper";
 import { GizmoManager } from "../gizmo/gizmo-manager";
 import type { GizmoMode } from "../gizmo/types";
 import { RendererInitHelper } from "../utils/renderer-init-helper";
+import {
+  createEditorMeshAnimationController,
+  getEditorModelAnimationController,
+} from "./model-animation-controller";
 
 const MAX_MODELS = 10000;
 const CAMERA_KEY_CODES = new Set([
@@ -115,6 +120,7 @@ interface EditorModel {
   object3D?: THREE.Object3D;
   gaussianModel?: GaussianModel;
   gltfAnimation?: GLTFModelWrapper;
+  fbxAnimation?: FBXModelWrapper;
   sourceFile?: File;
   sourcePath?: string;
   animDuration?: number;
@@ -548,7 +554,8 @@ export class EditorApp {
 
         this.cameraManager.update(dt);
         for (const model of this.editorModels.values()) {
-          if (!model.gltfAnimation) continue;
+          const meshAnimation = getEditorModelAnimationController(model);
+          if (!meshAnimation) continue;
           const start = model.animStartTime ?? 0;
           const end = model.animEndTime ?? model.animDuration ?? start;
           const speed = Number.isFinite(model.animSpeed) ? Number(model.animSpeed) : 1.0;
@@ -557,8 +564,8 @@ export class EditorApp {
             model.object3D.visible = Boolean(model.visible) && inWindow;
           }
           if (!inWindow) continue;
-          model.gltfAnimation.setAnimationSpeed(speed);
-          model.gltfAnimation.setAnimationTime((this.globalTimelineTime - start) * speed);
+          meshAnimation.setAnimationSpeed(speed);
+          meshAnimation.setAnimationTime((this.globalTimelineTime - start) * speed);
         }
         this.syncMeshCameraFromCoreCamera();
         this.gizmoManager?.update();
@@ -1247,6 +1254,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       let modelEntry: ModelEntry | null = null;
       let meshObject: THREE.Object3D | null = null;
       let gltfAnimation: GLTFModelWrapper | null = null;
+      let fbxAnimation: FBXModelWrapper | null = null;
       let gaussianModel: GaussianModel | null = null;
       let isDynamic = false;
       let pointCount = 0;
@@ -1290,12 +1298,16 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         }
         meshObject = loaded.object3D() as THREE.Object3D;
         const animationClips = loaded.animationClips?.() ?? [];
-        if ((lowerName.endsWith('.glb') || lowerName.endsWith('.gltf')) && animationClips.length > 0) {
-          gltfAnimation = new GLTFModelWrapper(meshObject, animationClips, {
-            autoPlay: false,
-            defaultSpeed: 1.0,
-            loop: true,
-          });
+        const meshAnimation = createEditorMeshAnimationController({
+          fileName: lowerName,
+          object3D: meshObject,
+          animationClips,
+        });
+        if (meshAnimation instanceof GLTFModelWrapper) {
+          gltfAnimation = meshAnimation;
+          isDynamic = true;
+        } else if (meshAnimation instanceof FBXModelWrapper) {
+          fbxAnimation = meshAnimation;
           isDynamic = true;
         }
         this.addMeshObjectToScene(meshObject);
@@ -1303,11 +1315,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         position = { x: meshObject.position.x, y: meshObject.position.y, z: meshObject.position.z };
         rotation = { x: meshObject.rotation.x, y: meshObject.rotation.y, z: meshObject.rotation.z };
         scale = Number(meshObject.scale.x || 1);
-        if (gltfAnimation) {
-          const duration = gltfAnimation.getDuration();
-          if (Number.isFinite(duration) && duration > 0) {
-            pointCount = Math.max(0, pointCount);
-          }
+        const meshAnimationDuration = meshAnimation?.getDuration() ?? 0;
+        if (Number.isFinite(meshAnimationDuration) && meshAnimationDuration > 0) {
+          pointCount = Math.max(0, pointCount);
         }
       } else {
         throw new Error(`Unsupported file type: ${file.name}. Supported: ${defaultLoader.getAllSupportedExtensions().join(', ')}`);
@@ -1344,6 +1354,8 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
       console.log(`[EditorApp] Model point count: ${pointCount}`);
 
+      const meshAnimationController = gltfAnimation || fbxAnimation;
+
       // Create editor model record
       const editorModel: EditorModel = {
         id: Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9),
@@ -1358,22 +1370,23 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         modelEntry: modelEntry || undefined,
         object3D: meshObject || undefined,
         gltfAnimation: gltfAnimation || undefined,
+        fbxAnimation: fbxAnimation || undefined,
         gaussianModel: gaussianModel || undefined,
         sourceFile: file,
         sourcePath: options.sourcePath || file.name,
         animDuration: Number.isFinite(Number(modelEntry?.animDuration))
           ? Number(modelEntry?.animDuration)
-          : (gltfAnimation && Number.isFinite(gltfAnimation.getDuration()) && gltfAnimation.getDuration() > 0
-            ? gltfAnimation.getDuration()
+          : (meshAnimationController && Number.isFinite(meshAnimationController.getDuration()) && meshAnimationController.getDuration() > 0
+            ? meshAnimationController.getDuration()
             : undefined),
         animSpeed: Number.isFinite(Number(modelEntry?.animSpeed)) ? Number(modelEntry?.animSpeed) : 1.0,
         animStartTime: Number.isFinite(Number(modelEntry?.animStartTime)) ? Number(modelEntry?.animStartTime) : 0,
         animEndTime: Number.isFinite(Number(modelEntry?.animEndTime))
           ? Number(modelEntry?.animEndTime)
-          : (gltfAnimation && Number.isFinite(gltfAnimation.getDuration()) && gltfAnimation.getDuration() > 0
-            ? gltfAnimation.getDuration()
+          : (meshAnimationController && Number.isFinite(meshAnimationController.getDuration()) && meshAnimationController.getDuration() > 0
+            ? meshAnimationController.getDuration()
             : undefined),
-        animLoop: gltfAnimation ? gltfAnimation.getAnimationIsLoop() : true,
+        animLoop: meshAnimationController ? meshAnimationController.getAnimationIsLoop() : true,
       };
 
       this.tagEditorModelPickTarget(meshObject, editorModel.id);
@@ -1497,6 +1510,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       }
     }
     model.gltfAnimation?.dispose();
+    model.fbxAnimation?.dispose();
     this.removeMeshObject(model);
 
     this.editorModels.delete(id);
@@ -1858,8 +1872,12 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       camera.rotationQ = lookAtW2C(correctedForward, worldUp);
     }
 
-    // Sync orbit internals so the next frame won't undo this upright pose.
-    this.cameraManager.syncOrbitAfterExternalLookAt(target, worldUp);
+    // Sync the active controller so focus keeps the upright result instead of being overwritten next frame.
+    if (this.cameraManager.getControllerType() === "orbit") {
+      this.cameraManager.syncOrbitAfterExternalLookAt(target, worldUp);
+    } else {
+      this.cameraManager.setCameraPose(camera.positionV, camera.rotationQ);
+    }
     console.log(`[EditorApp] Focused model: ${model.name}`);
     return true;
   }
@@ -2111,13 +2129,14 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       return { supported: false, isPlaying: false, isPaused: false, isLooping: true, speed: 1.0 };
     }
 
-    if (model.gltfAnimation) {
+    const meshAnimation = getEditorModelAnimationController(model);
+    if (meshAnimation) {
       return {
-        supported: model.gltfAnimation.supportsAnimation(),
-        isPlaying: model.gltfAnimation.isAnimationRunning(),
-        isPaused: model.gltfAnimation.isAnimationPaused(),
-        isLooping: model.gltfAnimation.getAnimationIsLoop(),
-        speed: model.gltfAnimation.getAnimationSpeed(),
+        supported: meshAnimation.supportsAnimation(),
+        isPlaying: meshAnimation.isAnimationRunning(),
+        isPaused: meshAnimation.isAnimationPaused(),
+        isLooping: meshAnimation.getAnimationIsLoop(),
+        speed: meshAnimation.getAnimationSpeed(),
       };
     }
 
@@ -2146,15 +2165,16 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const model = this.editorModels.get(id);
     if (!model) return false;
 
-    if (model.gltfAnimation) {
+    const meshAnimation = getEditorModelAnimationController(model);
+    if (meshAnimation) {
       if (playing) {
-        if (model.gltfAnimation.isAnimationPaused()) {
-          model.gltfAnimation.resumeAnimation();
-        } else if (!model.gltfAnimation.isAnimationRunning()) {
-          model.gltfAnimation.startAnimation(model.gltfAnimation.getAnimationSpeed());
+        if (meshAnimation.isAnimationPaused()) {
+          meshAnimation.resumeAnimation();
+        } else if (!meshAnimation.isAnimationRunning()) {
+          meshAnimation.startAnimation(meshAnimation.getAnimationSpeed());
         }
-      } else if (model.gltfAnimation.isAnimationRunning()) {
-        model.gltfAnimation.pauseAnimation();
+      } else if (meshAnimation.isAnimationRunning()) {
+        meshAnimation.pauseAnimation();
       }
       return true;
     }
@@ -2182,8 +2202,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const model = this.editorModels.get(id);
     if (!model) return false;
 
-    if (model.gltfAnimation) {
-      model.gltfAnimation.setLoop(enabled);
+    const meshAnimation = getEditorModelAnimationController(model);
+    if (meshAnimation) {
+      meshAnimation.setLoop(enabled);
       model.animLoop = enabled;
       this.notifyModelsChanged();
       return true;
@@ -2206,8 +2227,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const safeSpeed = Number.isFinite(speed) ? speed : 1.0;
     model.animSpeed = safeSpeed;
 
-    if (model.gltfAnimation) {
-      model.gltfAnimation.setAnimationSpeed(safeSpeed);
+    const meshAnimation = getEditorModelAnimationController(model);
+    if (meshAnimation) {
+      meshAnimation.setAnimationSpeed(safeSpeed);
       this.notifyModelsChanged();
       return true;
     }
@@ -2302,6 +2324,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       ...camera,
       fovDegrees: this.getSceneCameraFovDegrees(),
     };
+  }
+
+  getCameraControlDebugInfo(): any {
+    return this.cameraManager.getCameraControlDebugInfo();
   }
 
   /**

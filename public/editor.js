@@ -22,6 +22,18 @@ import {
 } from '../src/editor/agent-session-model.js';
 import { AgentSessionStore } from '../src/editor/agent-session-store.js';
 import {
+    beginDemoCameraPreview,
+    buildDemoKeyframeRevealQueue,
+    commitDemoCameraPreview,
+    createDemoSceneState,
+    createInactiveDemoSceneState,
+    DEMO_CAMERA_WORKFLOW_ID,
+    DEMO_SCENE_WORKFLOW_ID,
+    isDemoSceneFolder,
+    restoreDemoCameraBackup,
+    revealDemoCameraPreviewThroughCount,
+} from '../src/editor/demo-scene-orchestrator.js';
+import {
     CAMERA_PREVIEW_ASPECT_OPTIONS,
     getCameraPreviewAspectOption,
     normalizeCameraPreviewAspectId,
@@ -241,6 +253,7 @@ const state = {
     agentWorkflowThreads: {},
     agentMessages: [],
     agentPendingImages: [],
+    demoScene: createInactiveDemoSceneState(),
 };
 
 // EditorApp 实例 (会在 init 后设置)
@@ -272,6 +285,9 @@ let preferredLeftSidebarWidth = null;
 let preferredRightSidebarWidth = null;
 let preferredAgentWorkbenchWidth = null;
 let sidebarWidthDebugHistory = [];
+let cameraControlDebugSamples = [];
+let cameraControlDebugLastDragLogAt = 0;
+let demoSceneModelRevealTimer = 0;
 const agentSessionActionHandlers = {
     onCancel: null,
     onRetry: null,
@@ -354,6 +370,7 @@ const RIGHT_SIDEBAR_MIN_WIDTH = 272;
 const RIGHT_SIDEBAR_NARROW_WIDTH = 360;
 const RIGHT_SIDEBAR_XNARROW_WIDTH = 330;
 const CENTER_VIEWPORT_MIN_WIDTH = 350;
+const DEMO_SCENE_MODEL_REVEAL_INTERVAL_MS = 260;
 const EXPORT_PRESET_RESOLUTIONS = [
     { width: 1280, height: 720, label: '1280 x 720 (720p)' },
     { width: 1920, height: 1080, label: '1920 x 1080 (1080p)' },
@@ -988,6 +1005,29 @@ function setElementText(element, text) {
     }
 }
 
+function logCameraControlDebug(kind = 'unknown') {
+    const info = app?.getCameraControlDebugInfo?.();
+    if (!info) return null;
+    const now = performance.now();
+    if (kind === 'drag' && now - cameraControlDebugLastDragLogAt < 120) {
+        return info;
+    }
+    if (kind === 'drag') {
+        cameraControlDebugLastDragLogAt = now;
+    }
+    const sample = {
+        time: new Date().toISOString(),
+        kind,
+        info,
+    };
+    cameraControlDebugSamples.push(sample);
+    if (cameraControlDebugSamples.length > 40) {
+        cameraControlDebugSamples = cameraControlDebugSamples.slice(-40);
+    }
+    console.log(`[CameraControlDebug:${kind}]`, sample);
+    return sample;
+}
+
 function setButtonTooltip(button, tooltip, ariaLabel = tooltip) {
     if (!button) return;
     button.title = tooltip;
@@ -1472,6 +1512,168 @@ function invokeAgentSessionActionHandler(actionName, payload) {
     return Promise.resolve(handler(payload));
 }
 
+function clearDemoSceneModelRevealTimer() {
+    if (demoSceneModelRevealTimer) {
+        clearTimeout(demoSceneModelRevealTimer);
+        demoSceneModelRevealTimer = 0;
+    }
+}
+
+function resetDemoSceneState() {
+    clearDemoSceneModelRevealTimer();
+    state.demoScene = createInactiveDemoSceneState();
+}
+
+function setDemoSceneState(nextState) {
+    state.demoScene = nextState && typeof nextState === 'object'
+        ? nextState
+        : createInactiveDemoSceneState();
+}
+
+function revealNextDemoSceneModel() {
+    if (!state.demoScene?.active) return false;
+    const index = Number(state.demoScene.nextModelIndex || 0);
+    const nextEntry = state.demoScene.modelRevealQueue[index];
+    if (!nextEntry?.id) {
+        state.demoScene.sceneRevealCompleted = true;
+        state.demoScene.sceneRevealStarted = true;
+        clearDemoSceneModelRevealTimer();
+        return false;
+    }
+    app?.setModelVisibility?.(nextEntry.id, true);
+    state.demoScene.nextModelIndex = index + 1;
+    if (state.demoScene.nextModelIndex >= state.demoScene.modelRevealQueue.length) {
+        state.demoScene.sceneRevealCompleted = true;
+        clearDemoSceneModelRevealTimer();
+    }
+    return true;
+}
+
+function scheduleDemoSceneModelReveal() {
+    clearDemoSceneModelRevealTimer();
+    if (!state.demoScene?.active || state.demoScene.sceneRevealCompleted) return;
+    demoSceneModelRevealTimer = window.setTimeout(() => {
+        demoSceneModelRevealTimer = 0;
+        const revealed = revealNextDemoSceneModel();
+        if (revealed && !state.demoScene.sceneRevealCompleted) {
+            scheduleDemoSceneModelReveal();
+        }
+    }, DEMO_SCENE_MODEL_REVEAL_INTERVAL_MS);
+}
+
+function startDemoSceneModelReveal() {
+    if (!state.demoScene?.active) return false;
+    if (state.demoScene.sceneRevealStarted) {
+        return false;
+    }
+    state.demoScene.sceneRevealStarted = true;
+    if (!state.demoScene.modelRevealQueue.length) {
+        state.demoScene.sceneRevealCompleted = true;
+        return true;
+    }
+    revealNextDemoSceneModel();
+    if (!state.demoScene.sceneRevealCompleted) {
+        scheduleDemoSceneModelReveal();
+    }
+    return true;
+}
+
+function syncDemoCameraPreviewTimeline({
+    focusLatest = true,
+    resetToBackup = false,
+} = {}) {
+    if (!state.demoScene?.active) return;
+    const previewKeyframes = resetToBackup
+        ? (Array.isArray(state.demoScene.cameraTimelineBackup) ? state.demoScene.cameraTimelineBackup : [])
+        : (Array.isArray(state.demoScene.cameraPreviewKeyframes) ? state.demoScene.cameraPreviewKeyframes : []);
+    state.keyframes = previewKeyframes.map((item) => ({
+        frame: Math.round(Number(item.frame) || 0),
+        time: Number(item.time) || 0,
+        camera: item.camera,
+    }));
+    state.currentKeyframeIndex = -1;
+    const lastFrame = state.keyframes.length > 0
+        ? clampTimelineFrame(state.keyframes[state.keyframes.length - 1].frame)
+        : 0;
+    state.selectedCameraSequenceFrame = state.keyframes.length > 0 ? lastFrame : null;
+    setCameraSequenceVisibility(state.keyframes.length > 0, true);
+    setTimelineFrame(focusLatest ? lastFrame : 0, { applyPose: false, syncSlider: true });
+    updateTimelineUI();
+    syncCameraSequenceVisualization();
+}
+
+function startDemoCameraWorkflowPreview() {
+    if (!state.demoScene?.active) return false;
+    stopTimelinePlayback(false);
+    setDemoSceneState(beginDemoCameraPreview(state.demoScene, state.keyframes));
+    syncDemoCameraPreviewTimeline({ focusLatest: false });
+    return true;
+}
+
+function revealDemoCameraPreviewForProgress(progressValue) {
+    if (!state.demoScene?.active) return null;
+    const total = Array.isArray(state.demoScene.keyframeRevealQueue) ? state.demoScene.keyframeRevealQueue.length : 0;
+    const normalized = Math.max(0, Math.min(1, Number(progressValue) || 0));
+    const targetCount = total <= 0 ? 0 : Math.max(1, Math.min(total, Math.ceil(total * normalized)));
+    const nextState = revealDemoCameraPreviewThroughCount(state.demoScene, targetCount);
+    setDemoSceneState(nextState);
+    syncDemoCameraPreviewTimeline({ focusLatest: true });
+    return nextState.cameraPreviewKeyframes[nextState.cameraPreviewKeyframes.length - 1] || null;
+}
+
+async function handleDemoSceneAgentApply({ workflow }) {
+    if (!state.demoScene?.active) return;
+    if (workflow === DEMO_SCENE_WORKFLOW_ID) {
+        const started = startDemoSceneModelReveal();
+        if (!started) {
+            if (state.demoScene.sceneRevealCompleted) {
+                showInfo(state.uiLanguage === 'en' ? 'Demo scene is already filled' : 'Demo 场景已完成填充');
+            }
+            return;
+        }
+        showInfo(state.uiLanguage === 'en' ? 'Demo scene reveal started' : 'Demo 场景开始填充');
+        return;
+    }
+    if (workflow === DEMO_CAMERA_WORKFLOW_ID) {
+        if (!state.demoScene.cameraPreviewActive) {
+            showInfo(state.uiLanguage === 'en' ? 'No demo camera preview is waiting to be applied' : '当前没有待应用的 Demo 相机预览');
+            return;
+        }
+        setDemoSceneState(commitDemoCameraPreview(state.demoScene));
+        showInfo(state.uiLanguage === 'en' ? 'Demo camera timeline applied' : 'Demo 相机时间轴已应用');
+    }
+}
+
+async function handleDemoSceneAgentCancel({ workflow }) {
+    if (!state.demoScene?.active || workflow !== DEMO_CAMERA_WORKFLOW_ID || !state.demoScene.cameraPreviewActive) return;
+    setDemoSceneState(restoreDemoCameraBackup(state.demoScene));
+    syncDemoCameraPreviewTimeline({ focusLatest: false, resetToBackup: true });
+    showInfo(state.uiLanguage === 'en' ? 'Demo camera preview was canceled and restored' : 'Demo 相机预览已取消，并恢复原时间轴');
+}
+
+async function handleDemoSceneAgentRetry({ workflow }) {
+    if (!state.demoScene?.active || workflow !== DEMO_CAMERA_WORKFLOW_ID) return;
+    if (!state.demoScene.cameraPreviewActive) return;
+    setDemoSceneState(restoreDemoCameraBackup(state.demoScene));
+    syncDemoCameraPreviewTimeline({ focusLatest: false, resetToBackup: true });
+}
+
+function getDemoCameraWorkflowCompletionText() {
+    return state.uiLanguage === 'en'
+        ? 'Please review the current camera preview and confirm whether to apply it.'
+        : '请查看当前相机，并确认是否应用。';
+}
+
+function finalizeDemoCameraWorkflowPreview(handle) {
+    if (!state.demoScene?.active) return;
+    const total = Array.isArray(state.demoScene.keyframeRevealQueue) ? state.demoScene.keyframeRevealQueue.length : 0;
+    if (total > 0) {
+        revealDemoCameraPreviewForProgress(1);
+    }
+    handle.updateText(getDemoCameraWorkflowCompletionText());
+    setCameraPreviewOpen(true);
+}
+
 function getAgentSessionArchiveThumbnail(session) {
     if (session?.archiveSummary?.thumbnailUrl) return session.archiveSummary.thumbnailUrl;
     for (const attempt of session?.attempts || []) {
@@ -1949,16 +2151,58 @@ function renderAgentBlocks(blocks) {
     `;
 }
 
+function isAgentImageAttachment(attachment) {
+    if (!attachment || typeof attachment !== 'object') return false;
+    const type = String(attachment.type || '').toLowerCase();
+    if (type.startsWith('image/')) return true;
+    const dataUrl = String(attachment.dataUrl || '').toLowerCase();
+    if (dataUrl.startsWith('data:image/')) return true;
+    const name = String(attachment.name || '').toLowerCase();
+    return /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(name);
+}
+
+function resolveAgentAttachmentPreviewUrl(attachment) {
+    if (!isAgentImageAttachment(attachment)) return '';
+    if (typeof attachment.previewUrl === 'string' && attachment.previewUrl) {
+        return attachment.previewUrl;
+    }
+    if (typeof attachment.dataUrl === 'string' && attachment.dataUrl.startsWith('data:image/')) {
+        return attachment.dataUrl;
+    }
+    const blobLike = attachment.file instanceof Blob
+        ? attachment.file
+        : attachment.blob instanceof Blob
+            ? attachment.blob
+            : null;
+    if (!blobLike || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+        return '';
+    }
+    // Keep one preview URL per in-memory attachment so rerenders do not recreate blob URLs.
+    attachment.previewUrl = URL.createObjectURL(blobLike);
+    return attachment.previewUrl;
+}
+
+function renderAgentAttachment(attachment) {
+    const isImage = isAgentImageAttachment(attachment);
+    const previewUrl = isImage ? resolveAgentAttachmentPreviewUrl(attachment) : '';
+    const attachmentName = escapeHtml(attachment?.name || '');
+    return `
+        <div class="agent-message-attachment ${isImage ? 'is-image' : ''}">
+            <div class="agent-message-attachment-frame ${previewUrl ? 'is-ready' : ''}">
+                ${previewUrl
+                    ? `<img src="${escapeHtml(previewUrl)}" alt="${attachmentName}" loading="lazy">`
+                    : ''}
+            </div>
+            ${attachmentName ? `<span class="agent-message-attachment-label">${attachmentName}</span>` : ''}
+        </div>
+    `;
+}
+
 function renderAgentAttachments(attachments) {
     if (!Array.isArray(attachments) || attachments.length === 0) return '';
     return `
         <div class="agent-message-attachments">
-            ${attachments.map((attachment) => `
-                <div class="agent-message-attachment">
-                    <div class="agent-message-attachment-frame"></div>
-                    <span class="agent-message-attachment-label">${escapeHtml(attachment.name)}</span>
-                </div>
-            `).join('')}
+            ${attachments.map((attachment) => renderAgentAttachment(attachment)).join('')}
         </div>
     `;
 }
@@ -2246,7 +2490,7 @@ function scheduleAgentMessageBottomPin(frames = 6) {
 
 function bindAgentMessageAsyncBottomPin() {
     if (!dom.agentMessageList) return;
-    dom.agentMessageList.querySelectorAll('.agent-image-frame.is-ready img').forEach((img) => {
+    dom.agentMessageList.querySelectorAll('.agent-image-frame.is-ready img, .agent-message-attachment-frame.is-ready img').forEach((img) => {
         if (!(img instanceof HTMLImageElement) || img.complete) return;
         img.addEventListener('load', () => {
             scheduleAgentMessageBottomPin(4);
@@ -2490,7 +2734,7 @@ function handleAgentImageInputChange(event) {
     input.value = '';
 }
 
-function simulateProgressUpdates(handle, blockId, updates, onDone) {
+function simulateProgressUpdates(handle, blockId, updates, onDone, onStep) {
     const runStep = (index) => {
         const step = updates[index];
         if (!step) {
@@ -2499,6 +2743,7 @@ function simulateProgressUpdates(handle, blockId, updates, onDone) {
         }
         window.setTimeout(() => {
             handle.patchBlock(blockId, step.patch);
+            onStep?.(step, index);
             runStep(index + 1);
         }, step.delayMs);
     };
@@ -2563,6 +2808,10 @@ function runMockAgentSessionAttempt({
 }) {
     const workflow = AGENT_WORKFLOW_DEFS[workflowId] || getActiveAgentWorkflowDef();
     const handle = createAgentSessionHandle(sessionId, attemptId);
+    const demoCameraWorkflowActive = state.demoScene?.active && workflowId === DEMO_CAMERA_WORKFLOW_ID;
+    if (demoCameraWorkflowActive) {
+        startDemoCameraWorkflowPreview();
+    }
 
     const progressUpdates = [
         { delayMs: 380, patch: { value: 0.22, statusText: t('agent.blocks.progressParse') } },
@@ -2602,8 +2851,16 @@ function runMockAgentSessionAttempt({
                 });
             }
         }
-        handle.updateText(workflow.reply(prompt));
+        if (demoCameraWorkflowActive) {
+            finalizeDemoCameraWorkflowPreview(handle);
+        } else {
+            handle.updateText(workflow.reply(prompt));
+        }
         handle.finish();
+    }, (step) => {
+        if (demoCameraWorkflowActive) {
+            revealDemoCameraPreviewForProgress(step?.patch?.value);
+        }
     });
 
     return handle;
@@ -3814,6 +4071,14 @@ function registerDebugHooks() {
             console.table(rows);
             return rows;
         },
+        getCameraControlDebugSamples: () => cameraControlDebugSamples.slice(),
+        clearCameraControlDebugSamples: () => {
+            cameraControlDebugSamples = [];
+            cameraControlDebugLastDragLogAt = 0;
+            return true;
+        },
+        logCameraControlDebugInfo: (kind = 'manual') => logCameraControlDebug(kind),
+        getCameraControlDebugInfo: () => app?.getCameraControlDebugInfo?.() ?? null,
         pickScenePointAtClient: (clientX, clientY) => app?.pickScenePointAtClient?.(clientX, clientY) ?? null,
         probeModelPickAtFocus: (modelId) => app?.probeModelPickAtFocus?.(modelId) ?? null,
         getScenePointPickDebugInfo: (clientX, clientY) => app?.getScenePointPickDebugInfo?.(clientX, clientY) ?? null,
@@ -5083,6 +5348,9 @@ async function loadScene() {
         const raw = JSON.parse(await sceneFile.text());
         const assets = parseSceneAssets(raw);
         const timeline = parseSceneTimeline(raw);
+        // Browsers do not expose the absolute local path from showDirectoryPicker(),
+        // so the demo trigger is keyed by the chosen folder name.
+        const demoSceneActive = isDemoSceneFolder(folderHandle?.name);
 
         if (!Array.isArray(assets) || assets.length === 0) {
             throw new Error('scene.json 中没有可加载的 assets/scenes 模型条目');
@@ -5094,6 +5362,7 @@ async function loadScene() {
         }
 
         app.clearAllModels();
+        resetDemoSceneState();
         stopTimelinePlayback(false);
         state.keyframes = [];
         state.currentKeyframeIndex = -1;
@@ -5139,6 +5408,7 @@ async function loadScene() {
 
         let loaded = 0;
         let failed = 0;
+        const demoLoadedModels = [];
 
         for (let i = 0; i < assets.length; i++) {
             const asset = assets[i];
@@ -5205,6 +5475,13 @@ async function loadScene() {
                         app.setModelAnimTimeBounds?.(loadedModel.id, startTime, endTime);
                     }
                 }
+                if (demoSceneActive) {
+                    demoLoadedModels.push({
+                        id: loadedModel.id,
+                        name: loadedModel.name || asset.name || targetName,
+                    });
+                    app.setModelVisibility?.(loadedModel.id, false);
+                }
 
                 loaded++;
             } catch (assetError) {
@@ -5213,6 +5490,7 @@ async function loadScene() {
             }
         }
 
+        let loadedTimelineKeyframes = [];
         if (timeline) {
             if (Number.isFinite(timeline.durationSec)) {
                 state.timelineDurationSec = Math.max(TIMELINE_MIN_DURATION_SEC, Number(timeline.durationSec));
@@ -5241,7 +5519,7 @@ async function loadScene() {
                     dom.timelineFps.value = String(state.timelineFps);
                 }
             }
-            state.keyframes = Array.isArray(timeline.keyframes)
+            loadedTimelineKeyframes = Array.isArray(timeline.keyframes)
                 ? timeline.keyframes
                     .map((item) => {
                         const time = Number(item?.time);
@@ -5278,15 +5556,28 @@ async function loadScene() {
             const selectedFrame = Number.isFinite(Number(timeline.selectedFrame))
                 ? Number(timeline.selectedFrame)
                 : timeToFrame(Number(timeline.currentTime) || 0);
-            setTimelineFrame(selectedFrame, { applyPose: true, syncSlider: true });
+            state.keyframes = demoSceneActive ? [] : loadedTimelineKeyframes;
+            setTimelineFrame(demoSceneActive ? 0 : selectedFrame, { applyPose: true, syncSlider: true });
             updateTimelineUI();
             syncCameraSequenceVisualization();
         } else {
             setCameraInterpolationMode(CAMERA_INTERPOLATION_MODE_LINEAR, true);
         }
 
+        if (demoSceneActive) {
+            setDemoSceneState(createDemoSceneState({
+                folderName: folderHandle?.name || '',
+                models: demoLoadedModels,
+                keyframes: buildDemoKeyframeRevealQueue(loadedTimelineKeyframes),
+            }));
+        }
+
         showLoading(false);
-        showInfo(`场景加载完成（${folderHandle.name}）：成功 ${loaded}，失败 ${failed}`);
+        showInfo(
+            demoSceneActive
+                ? `场景加载完成（${folderHandle.name} Demo）：成功 ${loaded}，失败 ${failed}`
+                : `场景加载完成（${folderHandle.name}）：成功 ${loaded}，失败 ${failed}`
+        );
     } catch (error) {
         showLoading(false);
         if (error?.name === 'AbortError') {
@@ -5304,6 +5595,7 @@ async function loadScene() {
 function clearScene() {
     if (confirm('确定要清空所有模型吗？')) {
         stopTimelinePlayback(false);
+        resetDemoSceneState();
         state.keyframes = [];
         state.currentKeyframeIndex = -1;
         state.selectedFrame = 0;
@@ -6301,6 +6593,10 @@ function exportCameraSequence() {
 function clearCameraSequence() {
     if (!confirm('确定要清空当前相机序列吗？')) return;
     stopTimelinePlayback(false);
+    if (state.demoScene?.active) {
+        state.demoScene.keyframeRevealQueue = [];
+        state.demoScene.nextKeyframeIndex = 0;
+    }
     state.keyframes = [];
     state.currentKeyframeIndex = -1;
     setTimelineFrame(0, { applyPose: false, syncSlider: true });
@@ -7312,13 +7608,10 @@ async function init() {
         selectModel(id, { syncApp: false, allowToggle: false, silent: true });
     });
     app.onCameraInteraction?.((kind) => {
+        logCameraControlDebug(kind);
         if (state.keyframes.length === 0) {
             syncTimelineDrivenCameraPreviewPose();
         }
-        if (!state.isPlaying) return;
-        if (kind !== 'drag' && kind !== 'wheel' && kind !== 'keyboard') return;
-        stopTimelinePlayback(false);
-        showInfo('相机动画: 已暂停（手动控制）');
     });
     app.onCameraSequenceSelection?.((frame) => {
         if (syncingCameraSequenceSelection) return;
@@ -7356,6 +7649,11 @@ async function init() {
         syncCameraSequenceVisualization();
     });
 
+    registerAgentSessionActionHandlers({
+        onCancel: handleDemoSceneAgentCancel,
+        onRetry: handleDemoSceneAgentRetry,
+        onApply: handleDemoSceneAgentApply,
+    });
     registerDebugHooks();
 
     // 同步渲染模式（颜色/深度/法向）到核心渲染器

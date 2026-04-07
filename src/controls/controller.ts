@@ -11,6 +11,7 @@ import {
   applyPanning, 
   applyRotation, 
   applyDecay,
+  projectOntoPlaneNormed,
   WORLD_UP 
 } from './orbit';
 
@@ -46,6 +47,7 @@ export class CameraController implements IController {
 
   // --- Key: stable orbit up state ---
   private orbitUp = vec3.clone(WORLD_UP);
+  private explicitRoll = 0;
   private keyYawLeftPressed = false;
   private keyYawRightPressed = false;
   private keyRollPressed = false;
@@ -66,9 +68,53 @@ export class CameraController implements IController {
     this.keyRollSpeed = 1.6;
   }
 
+  private normalizeAngle(angle: number): number {
+    if (!Number.isFinite(angle)) return 0;
+    let normalized = angle;
+    while (normalized <= -Math.PI) normalized += Math.PI * 2;
+    while (normalized > Math.PI) normalized -= Math.PI * 2;
+    return normalized;
+  }
+
+  private clearTransientInputState(): void {
+    vec3.set(this.rotation, 0, 0, 0);
+    vec2.set(this.shift, 0, 0);
+    this.scroll = 0;
+    this.leftMousePressed = false;
+    this.rightMousePressed = false;
+  }
+
   // Allow external reset of orbit up (e.g., when switching views)
   resetUp(u?: vec3) {
     this.orbitUp = vec3.normalize(vec3.create(), u ?? WORLD_UP);
+    this.explicitRoll = 0;
+    this.clearTransientInputState();
+  }
+
+  syncExternalPose(center: vec3, forward: vec3, visualUp: vec3, upReference: vec3 = WORLD_UP): void {
+    const normalizedForward = vec3.length(forward) > 1e-6
+      ? vec3.normalize(vec3.create(), forward)
+      : vec3.fromValues(0, 0, -1);
+    const normalizedUpReference = vec3.length(upReference) > 1e-6
+      ? vec3.normalize(vec3.create(), upReference)
+      : vec3.clone(WORLD_UP);
+    const normalizedVisualUp = vec3.length(visualUp) > 1e-6
+      ? vec3.normalize(vec3.create(), visualUp)
+      : vec3.clone(normalizedUpReference);
+    const fallbackUp = projectOntoPlaneNormed(
+      normalizedVisualUp,
+      normalizedForward,
+      Math.abs(normalizedForward[1]) < 0.99 ? WORLD_UP : vec3.fromValues(1, 0, 0),
+    );
+    const stableUp = projectOntoPlaneNormed(normalizedUpReference, normalizedForward, fallbackUp);
+    const projectedVisualUp = projectOntoPlaneNormed(normalizedVisualUp, normalizedForward, stableUp);
+    const cross = vec3.cross(vec3.create(), stableUp, projectedVisualUp);
+    const dot = Math.max(-1, Math.min(1, vec3.dot(stableUp, projectedVisualUp)));
+
+    vec3.copy(this.center, center);
+    vec3.copy(this.orbitUp, normalizedUpReference);
+    this.explicitRoll = this.normalizeAngle(Math.atan2(vec3.dot(cross, normalizedForward), dot));
+    this.clearTransientInputState();
   }
 
   processKeyboard(code: string, pressed: boolean): boolean {
@@ -133,7 +179,6 @@ export class CameraController implements IController {
 
     // === 1) Orbit basis (from pos/center), and stabilize orbitUp ===
     // Use persistent orbit-up as default to avoid singular flips near poles.
-    // If external up is provided, use it as reference and sync orbit-up to it.
     const upRef = this.up
       ? vec3.normalize(vec3.create(), this.up)
       : vec3.normalize(vec3.create(), this.orbitUp);
@@ -153,10 +198,10 @@ export class CameraController implements IController {
     const pos = vec3.scale(vec3.create(), forward, -dist1); // pos = center - forward * dist
     vec3.add(cam.positionV, this.center, pos);
 
-    // === 4) Rotation (yaw around yawAxis, pitch around right; Alt enables roll around forward) ===
+    // === 4) Rotation (yaw around current visual up, pitch around current visual right) ===
     let yaw   =  this.rotation[0] * dtSec * this.sensitivity;
     let pitch = -this.rotation[1] * dtSec * this.sensitivity;
-    let roll  = this.rotation[2] * dtSec * this.sensitivity;
+    let rollDelta = 0;
 
     // Keyboard yaw: Q/E controls look-left/look-right.
     const keyYawInput = (this.keyYawRightPressed ? 1 : 0) - (this.keyYawLeftPressed ? 1 : 0);
@@ -167,19 +212,14 @@ export class CameraController implements IController {
     // Keyboard roll: R and Shift+R.
     if (this.keyRollPressed) {
       const rollDir = this.shiftPressed ? -1 : 1;
-      roll += rollDir * this.keyRollSpeed * dtSec;
+      rollDelta += rollDir * this.keyRollSpeed * dtSec;
     }
 
-    if (this.altPressed) { 
-      roll += -this.rotation[1] * dtSec * this.sensitivity; 
-      yaw = 0; 
-      pitch = 0; 
-    }
-
-    const rotationResult = applyRotation(forward, right, yawAxis, yaw, pitch, roll);
+    const rotationResult = applyRotation(forward, right, yawAxis, upRef, yaw, pitch, 0);
     forward = rotationResult.forward;
-    right = rotationResult.right;
-    yawAxis = rotationResult.yawAxis;
+    yawAxis = projectOntoPlaneNormed(upRef, forward, rotationResult.yawAxis);
+    right = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), forward, yawAxis));
+    this.explicitRoll = this.normalizeAngle(this.explicitRoll + rollDelta);
 
     // Keyboard translation (FPS-like): move camera and center together.
     if (this.amount[0] !== 0 || this.amount[1] !== 0 || this.amount[2] !== 0) {
@@ -200,14 +240,29 @@ export class CameraController implements IController {
     // Update position: pos = center - forward * dist1
     vec3.add(cam.positionV, this.center, vec3.scale(vec3.create(), forward, -dist1));
 
-    // === 5) Use stable lookAt to rebuild world->camera; and update stable orbitUp state ===
-    
-    cam.rotationQ = lookAtW2C(forward, upRef);
-    // Record new orbitUp (orthogonalized yawAxis), use directly next frame, avoid back-and-forth switching
-    vec3.copy(this.orbitUp, yawAxis);
+    // === 5) Rebuild world->camera from stable orbit-up plus explicit keyboard roll ===
+    let visualUp = vec3.clone(yawAxis);
+    if (Math.abs(this.explicitRoll) > 1e-6) {
+      const qRoll = quat.setAxisAngle(quat.create(), forward, this.explicitRoll);
+      visualUp = vec3.transformQuat(vec3.create(), visualUp, qRoll);
+    }
+    cam.rotationQ = lookAtW2C(forward, visualUp);
 
     // === 6) Decay (consistent with Rust) ===
-    const decayResult = applyDecay(this.rotation, this.shift, this.scroll, dtSec);
+    const rotationForDecay = vec3.clone(this.rotation);
+    if (this.leftMousePressed) {
+      // Mouse orbit should follow the current drag directly instead of accumulating
+      // cross-frame pitch/yaw momentum. Near the top pole that stale momentum can turn
+      // a tiny horizontal drag into a sudden multi-degree spin.
+      rotationForDecay[0] = 0;
+      rotationForDecay[1] = 0;
+    }
+    if (rotationResult.pitchAppliedRatio < 0.999) {
+      // Pole protection clipped this frame's pitch. Drop the blocked pitch residue so it
+      // cannot accumulate and explode into a sudden spin on the next small drag.
+      rotationForDecay[1] = 0;
+    }
+    const decayResult = applyDecay(rotationForDecay, this.shift, this.scroll, dtSec);
     vec3.copy(this.rotation, decayResult.rotation);
     vec2.copy(this.shift, decayResult.shift);
     this.scroll = decayResult.scroll;
@@ -236,6 +291,10 @@ export class CameraController implements IController {
     return 'orbit';
   }
 
+  getExplicitRollDegrees(): number {
+    return this.explicitRoll * 180 / Math.PI;
+  }
+
   // Optional: Add resetOrientation for compatibility
   resetOrientation(): void {
     // Reset to default view for orbit controller
@@ -245,6 +304,7 @@ export class CameraController implements IController {
     this.scroll = 0;
     this.amount = vec3.fromValues(0, 0, 0);
     this.orbitUp = vec3.clone(WORLD_UP);
+    this.explicitRoll = 0;
     this.keyYawLeftPressed = false;
     this.keyYawRightPressed = false;
     this.keyRollPressed = false;
