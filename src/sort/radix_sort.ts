@@ -1,4 +1,8 @@
-// GPU Radix Sort implementation - extracted from rs_gpu.ts
+// GPU Radix Sort implementation - deadlock-free 3-phase scatter
+// Replaces the original decoupled look-back (cross-workgroup spin-wait) with:
+//   Phase 1 (scatter_local): each workgroup computes local histogram + writes reduction
+//   Phase 2 (scatter_prefix_pass): single-workgroup pass scans all partition reductions
+//   Phase 3 (scatter_apply): each workgroup reads precomputed prefix and scatters
 
 import { radixSortShader } from '../shaders';
 import { ISorter, SortedSplats } from './index';
@@ -61,10 +65,10 @@ export interface PointCloudSortStuff extends SortedSplats {
 }
 
 function shuffleArray(array: any[]) {
-  const arr = array.slice(); // 复制一份，不修改原数组
+  const arr = array.slice();
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1)); // 0 到 i 之间的随机下标
-    [arr[i], arr[j]] = [arr[j], arr[i]]; // 交换元素
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
 }
@@ -77,22 +81,22 @@ export class GPURSSorter implements ISorter {
     private zero_p!: GPUComputePipeline;
     private histogram_p!: GPUComputePipeline;
     private prefix_p!: GPUComputePipeline;
-    private scatter_even_p!: GPUComputePipeline;
-    private scatter_odd_p!: GPUComputePipeline;
+    // 3-phase scatter pipelines
+    private scatter_local_even_p!: GPUComputePipeline;
+    private scatter_local_odd_p!: GPUComputePipeline;
+    private scatter_prefix_p!: GPUComputePipeline;
+    private scatter_apply_even_p!: GPUComputePipeline;
+    private scatter_apply_odd_p!: GPUComputePipeline;
 
     public subgroupSize!: number;
 
-    // Private constructor to be called by the async factory method.
     private constructor() {}
 
     /**
      * Asynchronously creates and initializes a new GPURSSorter.
-     * This factory pattern is used because the constructor needs to be async.
-     * It determines the best subgroup size by testing various configurations.
      */
     public static async create(device: GPUDevice, queue: GPUQueue): Promise<GPURSSorter> {
         console.debug("Searching for the maximum subgroup size...");
-        // WebGPU doesn't expose subgroup sizes directly, so we test common values.
         const potentialSubgroupSizes = [16, 32, 16, 8, 1];
 
         for (const size of potentialSubgroupSizes) {
@@ -101,7 +105,6 @@ export class GPURSSorter implements ISorter {
                 const sorter = new GPURSSorter();
                 await sorter.initializeWithSubgroupSize(device, size);
                 const sortSuccess = await sorter.testSort(device, queue);
-                // return sorter;
                 if (sortSuccess) {
                     console.log(`Subgroup size ${size} works.`);
                     return sorter;
@@ -129,7 +132,6 @@ export class GPURSSorter implements ISorter {
             bindGroupLayouts: [this.bindGroupLayout],
         });
 
-        // Prepend constants to the shader code, similar to the Rust implementation
         const processedShaderCode = this.processShaderTemplate(radixSortShader);
 
         const shaderModule = device.createShaderModule({
@@ -137,7 +139,7 @@ export class GPURSSorter implements ISorter {
             code: processedShaderCode,
         });
 
-        // Create all the necessary compute pipelines
+        // Create all compute pipelines
         this.zero_p = await device.createComputePipelineAsync({
             label: "Zero the histograms",
             layout: pipelineLayout,
@@ -153,21 +155,35 @@ export class GPURSSorter implements ISorter {
             layout: pipelineLayout,
             compute: { module: shaderModule, entryPoint: "prefix_histogram" },
         });
-        this.scatter_even_p = await device.createComputePipelineAsync({
-            label: "scatter_even",
+        // 3-phase scatter pipelines
+        this.scatter_local_even_p = await device.createComputePipelineAsync({
+            label: "scatter_local_even",
             layout: pipelineLayout,
-            compute: { module: shaderModule, entryPoint: "scatter_even" },
+            compute: { module: shaderModule, entryPoint: "scatter_local_even" },
         });
-        this.scatter_odd_p = await device.createComputePipelineAsync({
-            label: "scatter_odd",
+        this.scatter_local_odd_p = await device.createComputePipelineAsync({
+            label: "scatter_local_odd",
             layout: pipelineLayout,
-            compute: { module: shaderModule, entryPoint: "scatter_odd" },
+            compute: { module: shaderModule, entryPoint: "scatter_local_odd" },
+        });
+        this.scatter_prefix_p = await device.createComputePipelineAsync({
+            label: "scatter_prefix_pass",
+            layout: pipelineLayout,
+            compute: { module: shaderModule, entryPoint: "scatter_prefix_pass" },
+        });
+        this.scatter_apply_even_p = await device.createComputePipelineAsync({
+            label: "scatter_apply_even",
+            layout: pipelineLayout,
+            compute: { module: shaderModule, entryPoint: "scatter_apply_even" },
+        });
+        this.scatter_apply_odd_p = await device.createComputePipelineAsync({
+            label: "scatter_apply_odd",
+            layout: pipelineLayout,
+            compute: { module: shaderModule, entryPoint: "scatter_apply_odd" },
         });
     }
  
     private processShaderTemplate(shaderCode: string): string {
-        // Calculate derived constants
-        // const histogram_sg_size = 32; // Assuming subgroup size of 32 for web
         const histogram_sg_size = Math.max(1, this.subgroupSize | 0);
 
         const rs_sweep_0_size = Math.floor(RS_RADIX_SIZE / histogram_sg_size);
@@ -180,7 +196,6 @@ export class GPURSSorter implements ISorter {
         const rs_mem_sweep_1_offset = rs_mem_sweep_0_offset + rs_sweep_0_size;
         const rs_mem_sweep_2_offset = rs_mem_sweep_1_offset + rs_sweep_1_size;
         
-        // Prepend constant definitions
         const constantDefinitions = `const histogram_sg_size: u32 = ${histogram_sg_size}u;
             const histogram_wg_size: u32 = ${HISTOGRAM_WG_SIZE}u;
             const rs_radix_log2: u32 = ${RS_RADIX_LOG2}u;
@@ -194,13 +209,11 @@ export class GPURSSorter implements ISorter {
             const rs_mem_sweep_2_offset: u32 = ${rs_mem_sweep_2_offset}u;
             `;
 
-        // Replace template placeholders
         let processedCode = shaderCode
             .replace(/{histogram_wg_size}/g, HISTOGRAM_WG_SIZE.toString())
             .replace(/{prefix_wg_size}/g, PREFIX_WG_SIZE.toString())
             .replace(/{scatter_wg_size}/g, SCATTER_WG_SIZE.toString());
         
-        // Prepend constants to the shader
         return constantDefinitions + processedCode;
     }
 
@@ -208,7 +221,7 @@ export class GPURSSorter implements ISorter {
      * Runs a small test sort to verify the current configuration works.
      */
     private async testSort(device: GPUDevice, queue: GPUQueue): Promise<boolean> {
-        const n = 8192; // Needs 2 workgroups, a good test case
+        const n = 8192;
         const scrambledData = new Float32Array(
             shuffleArray(Array.from({ length: n }, (_, i) => n - 1 - i))
         );
@@ -218,7 +231,6 @@ export class GPURSSorter implements ISorter {
 
         const sortStuff = this.createSortStuff(device, n);
 
-        // Upload initial data
         queue.writeBuffer(sortStuff.key_a, 0, scrambledData.buffer);
 
         const commandEncoder = device.createCommandEncoder({ label: "GPURSSorter test_sort" });
@@ -255,8 +267,8 @@ export class GPURSSorter implements ISorter {
 
         return {
             numPoints,
-            num_points: numPoints, // Compatibility field for renderer
-            sortedIndices: payload_a, // payload_a contains the sorted indices
+            num_points: numPoints,
+            sortedIndices: payload_a,
             indirectBuffer: sorter_dis,
             sorter_uni,
             sorter_dis,
@@ -271,92 +283,64 @@ export class GPURSSorter implements ISorter {
         };
     }
 
+    /**
+     * Records sort commands using direct dispatch (known key count).
+     * Each radix pass is: scatter_local -> scatter_prefix -> scatter_apply (3 separate compute passes)
+     */
     public recordSort(sortStuff: SortedSplats, numPoints: number, encoder: GPUCommandEncoder): void {
         const radixStuff = sortStuff as PointCloudSortStuff;
-        const passes = 4; // Hardcoded for 32-bit keys
         this.recordCalculateHistogram(radixStuff.sorter_bg, numPoints, encoder);
-        this.recordPrefixHistogram(radixStuff.sorter_bg, passes, encoder);
-        this.recordScatterKeys(radixStuff.sorter_bg, passes, numPoints, encoder);
+        this.recordPrefixHistogram(radixStuff.sorter_bg, 4, encoder);
+        this.recordScatterKeys(radixStuff.sorter_bg, numPoints, encoder);
     }
     
-    public recordSortIndirect_one(sortStuff: SortedSplats, dispatchBuffer: GPUBuffer, encoder: GPUCommandEncoder): void {
-        const radixStuff = sortStuff as PointCloudSortStuff;
-        const passes = 4; // Hardcoded for 32-bit keys
-        
-        // Histogram (indirect)
-        const histoPass = encoder.beginComputePass({ label: "Radix Sort :: Indirect Histogram Pass" });
-        histoPass.setBindGroup(0, radixStuff.sorter_bg);
-        histoPass.setPipeline(this.zero_p);
-        histoPass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
-        histoPass.setPipeline(this.histogram_p);
-        histoPass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
-        histoPass.end();
-
-        // Prefix (direct)
-        this.recordPrefixHistogram(radixStuff.sorter_bg, passes, encoder);
-
-        // Scatter (indirect)
-        const scatterPass = encoder.beginComputePass({ label: "Radix Sort :: Indirect Scatter Pass" });
-        scatterPass.setBindGroup(0, radixStuff.sorter_bg);
-        scatterPass.setPipeline(this.scatter_even_p);
-        scatterPass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
-        scatterPass.setPipeline(this.scatter_odd_p);
-        scatterPass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
-        scatterPass.setPipeline(this.scatter_even_p);
-        scatterPass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
-        scatterPass.setPipeline(this.scatter_odd_p);
-        scatterPass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
-        scatterPass.end();
-    }
-
-
+    /**
+     * Records sort commands using indirect dispatch (GPU-determined key count).
+     * Same 3-phase scatter approach, using dispatchWorkgroupsIndirect.
+     */
     public recordSortIndirect(sortStuff: SortedSplats, dispatchBuffer: GPUBuffer, encoder: GPUCommandEncoder): void {
-    const radixStuff = sortStuff as PointCloudSortStuff;
-    const passes = 4;
+        const radixStuff = sortStuff as PointCloudSortStuff;
 
-    // Zero (indirect)
-    {
-        const pass = encoder.beginComputePass({ label: "RS::Zero (Indirect)" });
-        pass.setBindGroup(0, radixStuff.sorter_bg);
-        pass.setPipeline(this.zero_p);
-        pass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
-        pass.end();
+        // Zero (indirect)
+        {
+            const pass = encoder.beginComputePass({ label: "RS::Zero (Indirect)" });
+            pass.setBindGroup(0, radixStuff.sorter_bg);
+            pass.setPipeline(this.zero_p);
+            pass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
+            pass.end();
+        }
+
+        // Histogram (indirect)
+        {
+            const pass = encoder.beginComputePass({ label: "RS::Histogram (Indirect)" });
+            pass.setBindGroup(0, radixStuff.sorter_bg);
+            pass.setPipeline(this.histogram_p);
+            pass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
+            pass.end();
+        }
+
+        // Prefix (direct, always 4 passes)
+        this.recordPrefixHistogram(radixStuff.sorter_bg, 4, encoder);
+
+        // 4 radix passes: even, odd, even, odd — each as 3-phase scatter
+        this.recordScatterPassIndirect(radixStuff.sorter_bg, dispatchBuffer, true, encoder);  // pass 0 (even)
+        this.recordScatterPassIndirect(radixStuff.sorter_bg, dispatchBuffer, false, encoder); // pass 1 (odd)
+        this.recordScatterPassIndirect(radixStuff.sorter_bg, dispatchBuffer, true, encoder);  // pass 2 (even)
+        this.recordScatterPassIndirect(radixStuff.sorter_bg, dispatchBuffer, false, encoder); // pass 3 (odd)
     }
 
-    // Histogram (indirect)
-    {
-        const pass = encoder.beginComputePass({ label: "RS::Histogram (Indirect)" });
-        pass.setBindGroup(0, radixStuff.sorter_bg);
-        pass.setPipeline(this.histogram_p);
-        pass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
-        pass.end();
+    public recordSortIndirect_one(sortStuff: SortedSplats, dispatchBuffer: GPUBuffer, encoder: GPUCommandEncoder): void {
+        // Alias to recordSortIndirect for backward compatibility
+        this.recordSortIndirect(sortStuff, dispatchBuffer, encoder);
     }
-
-    // Prefix（保持不变：单独一个 pass）
-    this.recordPrefixHistogram(radixStuff.sorter_bg, passes, encoder);
-
-    // Scatter (indirect) — 四个独立 pass
-    const run = (pipe: GPUComputePipeline, label: string) => {
-        const pass = encoder.beginComputePass({ label });
-        pass.setBindGroup(0, radixStuff.sorter_bg);
-        pass.setPipeline(pipe);
-        pass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
-        pass.end();
-    };
-    run(this.scatter_even_p, "RS::Scatter0_even (Indirect)");
-    run(this.scatter_odd_p,  "RS::Scatter1_odd (Indirect)");
-    run(this.scatter_even_p, "RS::Scatter2_even (Indirect)");
-    run(this.scatter_odd_p,  "RS::Scatter3_odd (Indirect)");
-    }
-
 
     // Static methods for bind group layouts
     public static createRenderBindGroupLayout(device: GPUDevice): GPUBindGroupLayout {
         return device.createBindGroupLayout({
             label: "Radix Sort Render Bind Group Layout",
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }, // infos
-                { binding: 4, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }, // payload_a
+                { binding: 0, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
             ],
         });
     }
@@ -365,35 +349,31 @@ export class GPURSSorter implements ISorter {
         return device.createBindGroupLayout({
             label: "Radix Sort Preprocess Bind Group Layout",
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // infos
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // keyval_a
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // payload_a
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // dispatch_buffer
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
             ],
         });
     }
 
     public recordResetIndirectBuffer(indirectBuffer: GPUBuffer, uniformBuffer: GPUBuffer, queue: GPUQueue) {
-        // This creates a 4-byte buffer containing a single 32-bit integer with a value of 0.
         const zeroBuffer = new Uint32Array([0]);
-
-        // Nulling dispatch x: Writes 4 bytes of 0 to the start of the indirect buffer.
         queue.writeBuffer(indirectBuffer, 0, zeroBuffer);
-        // Nulling keysize: Writes 4 bytes of 0 to the start of the uniform buffer.
         queue.writeBuffer(uniformBuffer, 0, zeroBuffer);
     }
 
-    // Private implementation methods (remaining methods from original implementation)
+    // Private implementation methods
     private createBindGroupLayout(device: GPUDevice): GPUBindGroupLayout {
         return device.createBindGroupLayout({
             label: "Radix Sort Bind Group Layout",
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // infos
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // histograms
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // keys
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // keys_b
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // payload_a
-                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // payload_b
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
             ],
         });
     }
@@ -429,7 +409,7 @@ export class GPURSSorter implements ISorter {
         });
 
         if (bytesPerPayloadElem !== 4) {
-            console.warn("Currently only 4-byte payloads are fully supported, matching the original Rust implementation.");
+            console.warn("Currently only 4-byte payloads are fully supported.");
         }
         const payloadSize = Math.max(1, keysize * bytesPerPayloadElem);
         const payload_a = device.createBuffer({
@@ -449,7 +429,11 @@ export class GPURSSorter implements ISorter {
     private createInternalMemBuffer(device: GPUDevice, keysize: number): GPUBuffer {
         const { scatter_blocks_ru } = this.getScatterHistogramSizes(keysize);
         const histo_size = RS_RADIX_SIZE * Uint32Array.BYTES_PER_ELEMENT;
-        const internal_size = (RS_KEYVAL_SIZE + scatter_blocks_ru - 1 + 1) * histo_size;
+        // Layout: histograms + partitions + prefix areas
+        // histograms: RS_KEYVAL_SIZE rows
+        // partitions: (scatter_blocks_ru + 1) rows  (+1 for safety addition from preprocess)
+        // prefix:     (scatter_blocks_ru + 1) rows
+        const internal_size = (RS_KEYVAL_SIZE + (scatter_blocks_ru + 1) * 2) * histo_size;
   
         return device.createBuffer({
             label: "Internal radix sort buffer",
@@ -478,7 +462,7 @@ export class GPURSSorter implements ISorter {
         };
         const uniform_buffer = device.createBuffer({
             label: "Radix uniform buffer",
-            size: 5 * Uint32Array.BYTES_PER_ELEMENT, // GeneralInfo has 5 u32 fields
+            size: 5 * Uint32Array.BYTES_PER_ELEMENT,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST| GPUBufferUsage.COPY_SRC,
             mappedAtCreation: true,
         });
@@ -498,7 +482,7 @@ export class GPURSSorter implements ISorter {
         };
         const dispatch_buffer = device.createBuffer({
             label: "Dispatch indirect buffer",
-            size: 3 * Uint32Array.BYTES_PER_ELEMENT, // IndirectDispatch has 3 u32 fields
+            size: 3 * Uint32Array.BYTES_PER_ELEMENT,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.INDIRECT,
             mappedAtCreation: true,
         });
@@ -555,51 +539,29 @@ export class GPURSSorter implements ISorter {
         });
     }
 
-    // private recordCalculateHistogram(bind_group: GPUBindGroup, keysize: number, encoder: GPUCommandEncoder) {
-    //     const { count_ru_histo } = this.getScatterHistogramSizes(keysize);
-    //     const histo_block_kvs = HISTOGRAM_WG_SIZE * RS_HISTOGRAM_BLOCK_ROWS;
-    //     const hist_blocks_ru = Math.ceil(count_ru_histo / histo_block_kvs);
-
-    //     const pass = encoder.beginComputePass({ label: "Radix Sort :: Histogram Pass" });
-    //     pass.setBindGroup(0, bind_group);
-
-    //     // Zero histograms
-    //     pass.setPipeline(this.zero_p);
-    //     pass.dispatchWorkgroups(hist_blocks_ru, 1, 1);
-
-    //     // Calculate histograms
-    //     pass.setPipeline(this.histogram_p);
-    //     pass.setBindGroup(0, bind_group);
-    //     pass.dispatchWorkgroups(hist_blocks_ru, 1, 1);
-
-    //     pass.end();
-    // }
-    
     private recordCalculateHistogram(bind_group: GPUBindGroup, keysize: number, encoder: GPUCommandEncoder) {
-    const { count_ru_histo } = this.getScatterHistogramSizes(keysize);
-    const histo_block_kvs = HISTOGRAM_WG_SIZE * RS_HISTOGRAM_BLOCK_ROWS;
-    const hist_blocks_ru = Math.ceil(count_ru_histo / histo_block_kvs);
+        const { count_ru_histo } = this.getScatterHistogramSizes(keysize);
+        const histo_block_kvs = HISTOGRAM_WG_SIZE * RS_HISTOGRAM_BLOCK_ROWS;
+        const hist_blocks_ru = Math.ceil(count_ru_histo / histo_block_kvs);
 
-    // Pass A: Zero
-    {
-        const pass = encoder.beginComputePass({ label: "RS::Zero" });
-        pass.setBindGroup(0, bind_group);
-        pass.setPipeline(this.zero_p);
-        pass.dispatchWorkgroups(hist_blocks_ru, 1, 1);
-        pass.end();
+        // Pass A: Zero
+        {
+            const pass = encoder.beginComputePass({ label: "RS::Zero" });
+            pass.setBindGroup(0, bind_group);
+            pass.setPipeline(this.zero_p);
+            pass.dispatchWorkgroups(hist_blocks_ru, 1, 1);
+            pass.end();
+        }
+
+        // Pass B: Histogram
+        {
+            const pass = encoder.beginComputePass({ label: "RS::Histogram" });
+            pass.setBindGroup(0, bind_group);
+            pass.setPipeline(this.histogram_p);
+            pass.dispatchWorkgroups(hist_blocks_ru, 1, 1);
+            pass.end();
+        }
     }
-
-    // Pass B: Histogram
-    {
-        const pass = encoder.beginComputePass({ label: "RS::Histogram" });
-        pass.setBindGroup(0, bind_group);
-        pass.setPipeline(this.histogram_p);
-        pass.dispatchWorkgroups(hist_blocks_ru, 1, 1);
-        pass.end();
-    }
-    }
-
-
 
     private recordPrefixHistogram(bind_group: GPUBindGroup, passes: number, encoder: GPUCommandEncoder) {
         const pass = encoder.beginComputePass({ label: "Radix Sort :: Prefix Sum Pass" });
@@ -609,24 +571,89 @@ export class GPURSSorter implements ISorter {
         pass.end();
     }
 
-    private recordScatterKeys(bind_group: GPUBindGroup, passes: number, keysize: number, encoder: GPUCommandEncoder) {
-    if (passes !== 4) throw new Error("Only 4 passes are supported for 32-bit keys.");
-    const { scatter_blocks_ru } = this.getScatterHistogramSizes(keysize);
+    /**
+     * Records the 4 radix scatter passes using direct dispatch.
+     * Each radix pass is 3 compute passes: scatter_local -> scatter_prefix -> scatter_apply
+     */
+    private recordScatterKeys(bind_group: GPUBindGroup, keysize: number, encoder: GPUCommandEncoder) {
+        const { scatter_blocks_ru } = this.getScatterHistogramSizes(keysize);
 
-    const run = (pipe: GPUComputePipeline, label: string) => {
-        const pass = encoder.beginComputePass({ label });
-        pass.setBindGroup(0, bind_group);
-        pass.setPipeline(pipe);
-        pass.dispatchWorkgroups(scatter_blocks_ru, 1, 1);
-        pass.end();
-    };
+        const recordScatterPass = (
+            localPipeline: GPUComputePipeline,
+            applyPipeline: GPUComputePipeline,
+            labelPrefix: string
+        ) => {
+            // Phase 1: scatter_local
+            {
+                const pass = encoder.beginComputePass({ label: `${labelPrefix}::Local` });
+                pass.setBindGroup(0, bind_group);
+                pass.setPipeline(localPipeline);
+                pass.dispatchWorkgroups(scatter_blocks_ru, 1, 1);
+                pass.end();
+            }
+            // Phase 2: scatter_prefix_pass (single workgroup scans all partitions)
+            {
+                const pass = encoder.beginComputePass({ label: `${labelPrefix}::Prefix` });
+                pass.setBindGroup(0, bind_group);
+                pass.setPipeline(this.scatter_prefix_p);
+                pass.dispatchWorkgroups(1, 1, 1);
+                pass.end();
+            }
+            // Phase 3: scatter_apply
+            {
+                const pass = encoder.beginComputePass({ label: `${labelPrefix}::Apply` });
+                pass.setBindGroup(0, bind_group);
+                pass.setPipeline(applyPipeline);
+                pass.dispatchWorkgroups(scatter_blocks_ru, 1, 1);
+                pass.end();
+            }
+        };
 
-    run(this.scatter_even_p, "RS::Scatter0_even");
-    run(this.scatter_odd_p,  "RS::Scatter1_odd");
-    run(this.scatter_even_p, "RS::Scatter2_even");
-    run(this.scatter_odd_p,  "RS::Scatter3_odd");
+        // 4 radix passes: even, odd, even, odd
+        recordScatterPass(this.scatter_local_even_p, this.scatter_apply_even_p, "RS::Scatter0_even");
+        recordScatterPass(this.scatter_local_odd_p,  this.scatter_apply_odd_p,  "RS::Scatter1_odd");
+        recordScatterPass(this.scatter_local_even_p, this.scatter_apply_even_p, "RS::Scatter2_even");
+        recordScatterPass(this.scatter_local_odd_p,  this.scatter_apply_odd_p,  "RS::Scatter3_odd");
     }
 
+    /**
+     * Records a single 3-phase scatter pass using indirect dispatch.
+     */
+    private recordScatterPassIndirect(
+        bind_group: GPUBindGroup,
+        dispatchBuffer: GPUBuffer,
+        isEven: boolean,
+        encoder: GPUCommandEncoder
+    ) {
+        const localPipeline = isEven ? this.scatter_local_even_p : this.scatter_local_odd_p;
+        const applyPipeline = isEven ? this.scatter_apply_even_p : this.scatter_apply_odd_p;
+        const label = isEven ? "even" : "odd";
+
+        // Phase 1: scatter_local (indirect)
+        {
+            const pass = encoder.beginComputePass({ label: `RS::ScatterLocal_${label} (Indirect)` });
+            pass.setBindGroup(0, bind_group);
+            pass.setPipeline(localPipeline);
+            pass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
+            pass.end();
+        }
+        // Phase 2: scatter_prefix_pass (always 1 workgroup, direct dispatch)
+        {
+            const pass = encoder.beginComputePass({ label: `RS::ScatterPrefix_${label} (Indirect)` });
+            pass.setBindGroup(0, bind_group);
+            pass.setPipeline(this.scatter_prefix_p);
+            pass.dispatchWorkgroups(1, 1, 1);
+            pass.end();
+        }
+        // Phase 3: scatter_apply (indirect)
+        {
+            const pass = encoder.beginComputePass({ label: `RS::ScatterApply_${label} (Indirect)` });
+            pass.setBindGroup(0, bind_group);
+            pass.setPipeline(applyPipeline);
+            pass.dispatchWorkgroupsIndirect(dispatchBuffer, 0);
+            pass.end();
+        }
+    }
 
     /**
      * Helper function to download buffer data from the GPU.
