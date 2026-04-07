@@ -524,8 +524,8 @@ body {
 }
 
 .agent-session-stack {
-    width: min(92%, 336px);
-    max-width: min(92%, 336px);
+    width: min(88%, 320px);
+    max-width: min(88%, 320px);
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -817,11 +817,6 @@ body {
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-}
-
-.agent-session-actions-archived {
-    width: 100%;
-    justify-content: flex-end;
 }
 
 .agent-session-collapse-btn {
@@ -1172,6 +1167,11 @@ body {
     line-height: 1.5;
     font-family: inherit;
     outline: none;
+}
+
+.agent-composer textarea::placeholder {
+    color: currentColor;
+    opacity: 0.5;
 }
 
 .agent-composer textarea:focus {

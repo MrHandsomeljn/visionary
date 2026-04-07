@@ -2928,7 +2928,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
   private updateCameraSequenceCurrentMarkerFromPreviewPose(): void {
     if (!this.cameraSequenceCurrentMarker) return;
-    if (!this.cameraPreviewPose) {
+    if (!this.cameraPreviewPose || !this.cameraSequenceEditEnabled) {
       this.cameraSequenceCurrentMarker.visible = false;
       return;
     }

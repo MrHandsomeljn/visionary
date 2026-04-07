@@ -75,6 +75,7 @@ const dom = {
     btnClearScene: document.getElementById('btnClearScene'),
     btnHelpTips: document.getElementById('btnHelpTips'),
     btnThemeToggle: document.getElementById('btnThemeToggle'),
+    btnLanguageToggle: document.getElementById('btnLanguageToggle'),
     btnClearScreen: document.getElementById('btnClearScreen'),
     exportToolFlyout: document.getElementById('exportToolFlyout'),
     btnExportFlyout: document.getElementById('btnExportFlyout'),
@@ -233,6 +234,7 @@ const state = {
     exportFlyoutOpen: false,
     clearScreenMode: false,
     clearScreenPreview: false,
+    uiLanguage: 'zh',
     leftSidebarCollapsed: false,
     agentWorkbenchCollapsed: false,
     agentWorkflow: 'scene-build',
@@ -276,6 +278,7 @@ const agentSessionActionHandlers = {
     onApply: null,
 };
 const THEME_STORAGE_KEY = 'visionary_editor_theme';
+const UI_LANGUAGE_STORAGE_KEY = 'visionary_editor_ui_language_v1';
 const AGENT_WORKBENCH_WIDTH_STORAGE_KEY = 'visionary_editor_agent_workbench_width_v1';
 const AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY = 'visionary_editor_agent_workbench_collapsed_v1';
 const AGENT_WORKBENCH_WORKFLOW_STORAGE_KEY = 'visionary_editor_agent_workbench_workflow_v1';
@@ -302,19 +305,19 @@ const CAMERA_DISPLAY_SCALE_MAX = 3.0;
 const CAMERA_DISPLAY_SCALE_DEFAULT = 1.0;
 const CAMERA_INTERPOLATION_CONFIGS = {
     [CAMERA_INTERPOLATION_MODE_LINEAR]: {
-        label: '线性',
+        get label() { return t('timeline.interpolationModes.linear'); },
         tunable: false,
         defaultParam: 0.5,
     },
     [CAMERA_INTERPOLATION_MODE_SQUAD]: {
-        label: 'Squad',
+        get label() { return t('timeline.interpolationModes.squad'); },
         tunable: false,
         defaultParam: 0.5,
     },
     [CAMERA_INTERPOLATION_MODE_CATMULL]: {
-        label: 'Catmull',
+        get label() { return t('timeline.interpolationModes.catmull'); },
         tunable: true,
-        paramLabel: '张力',
+        get paramLabel() { return t('timeline.interpolationParams.catmull'); },
         min: 0,
         max: 1,
         step: 0.01,
@@ -322,9 +325,9 @@ const CAMERA_INTERPOLATION_CONFIGS = {
         format: (value) => value.toFixed(2),
     },
     [CAMERA_INTERPOLATION_MODE_EASE]: {
-        label: 'Ease',
+        get label() { return t('timeline.interpolationModes.ease'); },
         tunable: true,
-        paramLabel: '强度',
+        get paramLabel() { return t('timeline.interpolationParams.ease'); },
         min: 0,
         max: 1,
         step: 0.01,
@@ -358,66 +361,931 @@ const EXPORT_PRESET_RESOLUTIONS = [
     { width: 3840, height: 2160, label: '3840 x 2160 (4K)' },
 ];
 
+const UI_TEXT = {
+    zh: {
+        loading: {
+            default: '加载中...',
+            loadingModel: '加载模型中... ({current}/{total})',
+            renderingVideo: '渲染视频中...',
+            renderingImage: '渲染图片中...',
+            savingAssets: '保存资源中... ({current}/{total})',
+            writingSceneJson: '写入 scene.json ...',
+            loadingSceneAssets: '加载场景资源中... ({current}/{total})',
+        },
+        common: {
+            agent: 'Agent',
+            addImage: '添加图片',
+            send: '发送',
+            remove: '移除',
+            removeImage: '移除图片 {name}',
+            expand: '展开',
+            collapse: '收起',
+            close: '关闭',
+            settings: '设置',
+            cancel: '取消',
+            confirm: '确定',
+            render: '渲染',
+            rendering: '渲染中...',
+            reset: '重置',
+            archived: '已归档',
+            version: '版本 {current}/{total}',
+            previousPage: '上一页',
+            nextPage: '下一页',
+            retryVersions: '重试版本',
+            switchToVersion: '切换到版本 {page}',
+            errorPrefix: '错误',
+            currentWindow: '当前窗口',
+            active: '已开启',
+            inactive: '已关闭',
+            visible: '可见',
+            hidden: '隐藏',
+            applied: '已应用',
+            canceled: '已取消',
+            completed: '已完成',
+            generating: '生成中',
+            failed: '失败',
+        },
+        theme: {
+            switchToLight: '切换到白天',
+            switchToDark: '切换到夜间',
+            toggle: '切换主题',
+        },
+        language: {
+            buttonWhenZh: 'En',
+            buttonWhenEn: '简',
+            switchToEnglish: '切换到英文',
+            switchToChinese: '切换到中文',
+            toggle: '切换语言',
+        },
+        canvas: {
+            loading: '加载中...',
+            noWebgpuTitle: '不支持 WebGPU',
+            noWebgpuIntro: '此应用需要浏览器支持 WebGPU。',
+            noWebgpuBrowserHint: '请使用以下浏览器之一：',
+            noWebgpuCheck: '检查浏览器支持',
+        },
+        agent: {
+            workbench: 'Agent 工作台',
+            workflowTabs: 'Agent 流程',
+            messageHistory: '对话记录',
+            pendingImages: '待发送图片',
+            inputPlaceholder: '输入一句自然语言，触发当前流程的占位 Agent 响应',
+            collapsedTooltip: '收起 Agent 工作台',
+            expandedTooltip: '展开 Agent 工作台',
+            resizeAria: '调整 Agent 工作台宽度',
+            promptProcessing: '处理中',
+            imageLoading: '图像生成中',
+            resetView: '重置视角',
+            archivePreview: '展开查看',
+            collapseSession: '收起',
+            actions: {
+                cancel: '取消',
+                retry: '重试',
+                apply: '应用',
+            },
+            workflows: {
+                'scene-build': {
+                    title: '场景构建',
+                    short: '场景',
+                    starter: '可以从一张参考图或一句场景描述开始。我会先帮你拆出空间结构、主体布置和光照氛围，再给出可继续编辑的场景草案。',
+                    suggestions: [
+                        '帮我生成这张图对应的场景',
+                        '补全这个房间，保持原有镜头方向',
+                        '把这个空场景扩展成可拍摄的电影空间',
+                        '先给我一个室内场景搭建方案',
+                    ],
+                    progressTitle: '场景构建中',
+                    reply: '占位 Agent：已收到“场景构建”指令。\n建议先基于参考图抽取主体、地面和光照，再生成一个可人工接管的场景草案。\n当前不会直接改动右侧场景，后续可把这一步接到真实场景装配。',
+                    sceneSketch: '场景草图',
+                    sceneSketchAlt: '场景草图预览',
+                },
+                'object-insert': {
+                    title: '物体插入',
+                    short: '物体',
+                    starter: '这个流程适合补充场景里的关键资产。你可以给我一张参考图、一段文字，或者后续在画布上选点，我会把物体生成和放置策略一起整理出来。',
+                    suggestions: [
+                        '在画面左侧补一张沙发和小茶几',
+                        '帮我生成一个工业风吊灯并放到天花板中央',
+                        '在镜头前景插入一辆停靠的摩托车',
+                        '根据这张参考图补一个带金属质感的路灯',
+                    ],
+                    progressTitle: '物体生成中',
+                    reply: '占位 Agent：我会把“物体插入”拆成“生成资产”和“放置策略”两步。\n如果后续接入 canvas 选点，我会优先使用选点深度和法向来推导物体落位。\n当前仅回显方案，不执行插入。',
+                    objectPreview: '物体预览',
+                },
+                'character-create': {
+                    title: '人物创造',
+                    short: '人物',
+                    starter: '这里用来处理角色创建。可以先做 T-Pose 人物，再继续到骨骼绑定和动作生成。我会优先把角色设定、动作来源和接入顺序整理清楚。',
+                    suggestions: [
+                        '生成一个长风衣女主的 T-Pose 角色',
+                        '帮我做一个适合近景表演的男性角色草案',
+                        '为现有人物准备骨骼绑定步骤',
+                        '根据参考视频生成一个缓慢转身动作',
+                    ],
+                    progressTitle: '人物创建中',
+                    reply: '占位 Agent：当前在“人物创造”流程中，我会优先把需求拆成角色形象、骨骼结构和动作来源三部分。\n这一步适合先输出流程卡和资产需求清单，再逐步接入角色工具链。',
+                    characterConcept: '人物概念图',
+                    characterConceptAlt: '人物概念图预览',
+                    characterPreview: '角色模型预览',
+                },
+                'camera-direct': {
+                    title: '运镜生成',
+                    short: '运镜',
+                    starter: '这里可以直接用自然语言生成镜头设计。我会先理解主体、节奏和情绪，再把它拆成相机路径、关键帧和时长分配。',
+                    suggestions: [
+                        '给这个场景做一个 8 秒推进镜头',
+                        '生成一个从门外推进到人物特写的镜头序列',
+                        '围绕主体做一段缓慢环绕运镜',
+                        '帮我设计一个结尾停留在窗边的镜头',
+                    ],
+                    progressTitle: '镜头规划中',
+                    reply: '占位 Agent：已进入“运镜生成”模式。\n我会先把自然语言拆成镜头目标、镜头运动和时长分配，再映射成相机关键帧草案。\n当前不会写入时间轴，但会按这个结构返回建议。',
+                },
+            },
+            blocks: {
+                progress: '进度',
+                image: '图像',
+                viewer3d: '3D 预览',
+                placeholder: '占位',
+                ready: '已完成',
+                progressQueued: '等待 Agent 启动',
+                progressParse: '解析任务目标',
+                progressPlan: '整理生成步骤',
+                progressCompose: '组合输出内容',
+                progressDone: '已完成',
+            },
+        },
+        sidebar: {
+            title: '场景管理',
+            loadModel: '加载模型',
+            loadScene: '加载场景',
+            saveScene: '保存场景',
+            clearScene: '清空场景',
+            collapsePanel: '收起模型面板',
+            expandPanel: '展开模型面板',
+            emptyTitle: '暂无模型',
+            emptyHint: '拖拽文件到此处，或点击加号按钮',
+            transform: '变换',
+            animation: '动画',
+            position: '位置',
+            rotation: '旋转',
+            scale: '缩放',
+            speed: '速率',
+            pointCount: '{count} 点',
+            toggleVisibility: '切换可见性',
+            deleteModel: '删除',
+        },
+        sceneSettings: {
+            title: '场景设置',
+            close: '收起设置',
+            background: '背景色',
+            preset: '预设',
+            mode: '模式',
+            depthScale: '深度倍率',
+            aspect: '比例',
+            fov: 'FOV',
+            renderModes: {
+                color: '图片',
+                depth: '深度图',
+                normal: '法向图',
+            },
+            skyPresets: {
+                studio: '工作室',
+                black: '纯黑',
+                white: '纯白',
+                clear_day: '晴空',
+                sunset: '日落',
+                dusk: '暮光',
+                night: '夜空',
+            },
+        },
+        toolbar: {
+            transformTools: '变换工具',
+            clearTools: '清屏工具',
+            exportTools: '导出工具',
+            panelTools: '面板工具',
+            translate: '移动',
+            rotate: '旋转',
+            scale: '缩放',
+            clearScreen: '清屏',
+            export: '导出',
+            exportImage: '导出图片',
+            exportVideo: '导出视频',
+            sceneSettings: '场景设置',
+            help: '操作提示',
+        },
+        timeline: {
+            title: '相机关键帧',
+            cameraPreview: '相机预览',
+            cameraSettings: '相机设置',
+            openCameraPreview: '打开相机预览',
+            closeCameraPreview: '关闭相机预览',
+            openCameraSettings: '打开相机设置',
+            previewRatio: '比例',
+            track: '轨迹',
+            drag: '拖动',
+            dragHint: '在自由视角下拖动相机关键帧',
+            toggleSequenceVisibility: '切换相机序列可见性',
+            size: '大小',
+            interpolation: '插值',
+            parameter: '参数',
+            keyframes: '关键帧',
+            cameraSequence: '相机序列',
+            addKeyframe: '新增关键帧',
+            removeKeyframe: '删除关键帧',
+            importSequence: '导入相机序列',
+            exportSequence: '导出相机序列',
+            clearSequence: '清空相机序列',
+            playbackControls: '播放控制',
+            playCamera: '播放相机动画',
+            loopPlayback: '循环播放',
+            speed: '倍速',
+            placeholder: '添加关键帧开始录制相机运动',
+            interpolationModes: {
+                linear: '线性',
+                squad: 'Squad',
+                catmull: 'Catmull',
+                ease: 'Ease',
+            },
+            interpolationParams: {
+                catmull: '张力',
+                ease: '强度',
+            },
+        },
+        modal: {
+            modelTitle: '选择模型文件',
+            modelHint: '选择要添加的模型文件（支持 .ply, .onnx, .glb, .gltf, .obj, .fbx, .stl, .splat, .ksplat, .spz, .sog）',
+            exportTitle: '导出',
+            exportVideoTitle: '渲染视频',
+            exportImageTitle: '渲染图片',
+            resolution: '分辨率',
+            renderMode: '渲染模式',
+            helpTitle: '操作提示',
+            closeHelp: '关闭操作提示',
+            gotIt: '知道了',
+            helpSections: {
+                mouse: '鼠标操作',
+                keyboard: '键盘快捷键',
+                camera: '相机移动',
+            },
+            helpItems: {
+                mouseRotate: '旋转视角',
+                mousePan: '平移视角',
+                mouseZoom: '缩放视角',
+                mouseLookAt: '聚焦到双击位置的场景点',
+                dropFiles: '导入模型到场景',
+                playPause: '播放 / 暂停相机动画',
+                focusModel: '聚焦当前选中模型',
+                addKeyframe: '在当前视角和时间新增相机关键帧；若后方无关键帧则时间轴前进 1 秒',
+                toggleClean: '切换清屏模式',
+                toggleGizmo: '切换位移 / 旋转 / 缩放 gizmo；重复按同键可关闭',
+                uprightCamera: '相机回正',
+                openHelp: '打开操作提示',
+                closeOverlay: '关闭操作提示或导出窗口',
+                movePlane: '前后左右移动',
+                moveVertical: '上升 / 下降',
+                speedUp: '加速移动',
+            },
+            exportCurrentFrame: '将导出当前视角的单帧图像',
+            exportTimeline: '时间轴导出: {duration}s, {fps} FPS, {frames} 帧, 关键帧 {keyframes}',
+        },
+    },
+    en: {
+        loading: {
+            default: 'Loading...',
+            loadingModel: 'Loading models... ({current}/{total})',
+            renderingVideo: 'Rendering video...',
+            renderingImage: 'Rendering image...',
+            savingAssets: 'Saving assets... ({current}/{total})',
+            writingSceneJson: 'Writing scene.json ...',
+            loadingSceneAssets: 'Loading scene assets... ({current}/{total})',
+        },
+        common: {
+            agent: 'Agent',
+            addImage: 'Add image',
+            send: 'Send',
+            remove: 'Remove',
+            removeImage: 'Remove image {name}',
+            expand: 'Expand',
+            collapse: 'Collapse',
+            close: 'Close',
+            settings: 'Settings',
+            cancel: 'Cancel',
+            confirm: 'Confirm',
+            render: 'Render',
+            rendering: 'Rendering...',
+            reset: 'Reset',
+            archived: 'Archived',
+            version: 'Version {current}/{total}',
+            previousPage: 'Previous page',
+            nextPage: 'Next page',
+            retryVersions: 'Retry versions',
+            switchToVersion: 'Switch to version {page}',
+            errorPrefix: 'Error',
+            currentWindow: 'Current viewport',
+            active: 'On',
+            inactive: 'Off',
+            visible: 'Visible',
+            hidden: 'Hidden',
+            applied: 'Applied',
+            canceled: 'Canceled',
+            completed: 'Completed',
+            generating: 'Generating',
+            failed: 'Failed',
+        },
+        theme: {
+            switchToLight: 'Switch to light mode',
+            switchToDark: 'Switch to dark mode',
+            toggle: 'Toggle theme',
+        },
+        language: {
+            buttonWhenZh: 'En',
+            buttonWhenEn: '简',
+            switchToEnglish: 'Switch to English',
+            switchToChinese: '切换到中文',
+            toggle: 'Toggle language',
+        },
+        canvas: {
+            loading: 'Loading...',
+            noWebgpuTitle: 'WebGPU Not Supported',
+            noWebgpuIntro: 'This application requires WebGPU support.',
+            noWebgpuBrowserHint: 'Please use one of the following browsers:',
+            noWebgpuCheck: 'Check Browser Support',
+        },
+        agent: {
+            workbench: 'Agent Workbench',
+            workflowTabs: 'Agent Workflows',
+            messageHistory: 'Conversation history',
+            pendingImages: 'Pending images',
+            inputPlaceholder: 'Type a natural-language request to trigger the placeholder agent for the current workflow',
+            collapsedTooltip: 'Collapse agent workbench',
+            expandedTooltip: 'Expand agent workbench',
+            resizeAria: 'Resize agent workbench',
+            promptProcessing: 'Processing',
+            imageLoading: 'Generating image',
+            resetView: 'Reset view',
+            archivePreview: 'Expand details',
+            collapseSession: 'Collapse',
+            actions: {
+                cancel: 'Cancel',
+                retry: 'Retry',
+                apply: 'Apply',
+            },
+            workflows: {
+                'scene-build': {
+                    title: 'Scene Build',
+                    short: 'Scene',
+                    starter: 'Start from one reference image or a scene prompt. I will break down the spatial structure, subject layout, and lighting mood first, then return an editable scene draft.',
+                    suggestions: [
+                        'Build the scene that matches this image',
+                        'Complete this room while keeping the current camera direction',
+                        'Expand this empty setup into a filmable cinematic space',
+                        'Give me an indoor scene construction plan first',
+                    ],
+                    progressTitle: 'Building scene',
+                    reply: 'Placeholder agent: the scene-build request is received.\nI would first extract the main subject, ground plane, and lighting from the reference, then assemble an editable scene draft for manual takeover.\nThis demo does not modify the scene on the right yet, but it is structured to connect to real scene assembly later.',
+                    sceneSketch: 'Scene sketch',
+                    sceneSketchAlt: 'Scene sketch preview',
+                },
+                'object-insert': {
+                    title: 'Object Insert',
+                    short: 'Object',
+                    starter: 'Use this workflow to add key assets into the scene. You can provide a reference image, text, or later pick a point on the canvas. I will organize both asset generation and placement strategy.',
+                    suggestions: [
+                        'Add a sofa and a small tea table on the left side of the frame',
+                        'Generate an industrial pendant light and place it at the center of the ceiling',
+                        'Insert a parked motorcycle into the foreground',
+                        'Use this reference image to add a metallic street lamp',
+                    ],
+                    progressTitle: 'Generating object',
+                    reply: 'Placeholder agent: I would split object insertion into asset generation and placement strategy.\nOnce canvas point picking is connected, I will prefer pick depth and normals to infer placement.\nThis demo only echoes the plan and does not insert anything yet.',
+                    objectPreview: 'Object preview',
+                },
+                'character-create': {
+                    title: 'Character Create',
+                    short: 'Character',
+                    starter: 'Use this workflow for character creation. Start with a T-pose character, then continue to rigging and animation generation. I will clarify the character concept, motion source, and integration order first.',
+                    suggestions: [
+                        'Generate a T-pose heroine in a long trench coat',
+                        'Draft a male character suitable for close-up acting shots',
+                        'Prepare a rigging workflow for the current character',
+                        'Generate a slow turning motion from this reference video',
+                    ],
+                    progressTitle: 'Creating character',
+                    reply: 'Placeholder agent: in the character-creation workflow, I would break the request into character identity, skeleton structure, and motion source.\nThis step is best for producing a process card and asset checklist first, then connecting the character toolchain incrementally.',
+                    characterConcept: 'Character concept',
+                    characterConceptAlt: 'Character concept preview',
+                    characterPreview: 'Character model preview',
+                },
+                'camera-direct': {
+                    title: 'Camera Direct',
+                    short: 'Camera',
+                    starter: 'Use natural language here to generate shot design directly. I will parse the subject, rhythm, and mood first, then map them into camera paths, keyframes, and timing.',
+                    suggestions: [
+                        'Create an 8-second push-in shot for this scene',
+                        'Generate a shot sequence that pushes from the doorway to a character close-up',
+                        'Make a slow orbit around the main subject',
+                        'Design an ending shot that settles by the window',
+                    ],
+                    progressTitle: 'Planning camera motion',
+                    reply: 'Placeholder agent: camera-direct mode is active.\nI would first decompose the prompt into shot goal, camera motion, and duration allocation, then map that into a draft camera keyframe sequence.\nThis demo does not write into the timeline yet, but it will return suggestions in that structure.',
+                },
+            },
+            blocks: {
+                progress: 'Progress',
+                image: 'Image',
+                viewer3d: '3D preview',
+                placeholder: 'Placeholder',
+                ready: 'Ready',
+                progressQueued: 'Waiting for agent start',
+                progressParse: 'Parsing request',
+                progressPlan: 'Organizing generation steps',
+                progressCompose: 'Composing output',
+                progressDone: 'Completed',
+            },
+        },
+        sidebar: {
+            title: 'Scene Manager',
+            loadModel: 'Load model',
+            loadScene: 'Load scene',
+            saveScene: 'Save scene',
+            clearScene: 'Clear scene',
+            collapsePanel: 'Collapse scene panel',
+            expandPanel: 'Expand scene panel',
+            emptyTitle: 'No models yet',
+            emptyHint: 'Drop files here, or click the plus button',
+            transform: 'Transform',
+            animation: 'Animation',
+            position: 'Position',
+            rotation: 'Rotation',
+            scale: 'Scale',
+            speed: 'Speed',
+            pointCount: '{count} pts',
+            toggleVisibility: 'Toggle visibility',
+            deleteModel: 'Delete',
+        },
+        sceneSettings: {
+            title: 'Scene Settings',
+            close: 'Close settings',
+            background: 'Background',
+            preset: 'Preset',
+            mode: 'Mode',
+            depthScale: 'Depth scale',
+            aspect: 'Aspect',
+            fov: 'FOV',
+            renderModes: {
+                color: 'Color',
+                depth: 'Depth',
+                normal: 'Normal',
+            },
+            skyPresets: {
+                studio: 'Studio',
+                black: 'Pure black',
+                white: 'Pure white',
+                clear_day: 'Clear day',
+                sunset: 'Sunset',
+                dusk: 'Dusk',
+                night: 'Night',
+            },
+        },
+        toolbar: {
+            transformTools: 'Transform tools',
+            clearTools: 'Clean-view tools',
+            exportTools: 'Export tools',
+            panelTools: 'Panel tools',
+            translate: 'Translate',
+            rotate: 'Rotate',
+            scale: 'Scale',
+            clearScreen: 'Clean view',
+            export: 'Export',
+            exportImage: 'Export image',
+            exportVideo: 'Export video',
+            sceneSettings: 'Scene settings',
+            help: 'Help',
+        },
+        timeline: {
+            title: 'Camera Keyframes',
+            cameraPreview: 'Camera Preview',
+            cameraSettings: 'Camera Settings',
+            openCameraPreview: 'Open camera preview',
+            closeCameraPreview: 'Close camera preview',
+            openCameraSettings: 'Open camera settings',
+            previewRatio: 'Aspect',
+            track: 'Path',
+            drag: 'Drag',
+            dragHint: 'Drag camera keyframes in free camera mode',
+            toggleSequenceVisibility: 'Toggle camera sequence visibility',
+            size: 'Size',
+            interpolation: 'Interpolation',
+            parameter: 'Parameter',
+            keyframes: 'Keyframes',
+            cameraSequence: 'Camera sequence',
+            addKeyframe: 'Add keyframe',
+            removeKeyframe: 'Remove keyframe',
+            importSequence: 'Import camera sequence',
+            exportSequence: 'Export camera sequence',
+            clearSequence: 'Clear camera sequence',
+            playbackControls: 'Playback controls',
+            playCamera: 'Play camera animation',
+            loopPlayback: 'Loop playback',
+            speed: 'Speed',
+            placeholder: 'Add a keyframe to start recording camera motion',
+            interpolationModes: {
+                linear: 'Linear',
+                squad: 'Squad',
+                catmull: 'Catmull',
+                ease: 'Ease',
+            },
+            interpolationParams: {
+                catmull: 'Tension',
+                ease: 'Strength',
+            },
+        },
+        modal: {
+            modelTitle: 'Select model files',
+            modelHint: 'Choose model files to add (.ply, .onnx, .glb, .gltf, .obj, .fbx, .stl, .splat, .ksplat, .spz, .sog supported)',
+            exportTitle: 'Export',
+            exportVideoTitle: 'Render Video',
+            exportImageTitle: 'Render Image',
+            resolution: 'Resolution',
+            renderMode: 'Render mode',
+            helpTitle: 'Help',
+            closeHelp: 'Close help',
+            gotIt: 'Got it',
+            helpSections: {
+                mouse: 'Mouse',
+                keyboard: 'Keyboard shortcuts',
+                camera: 'Camera movement',
+            },
+            helpItems: {
+                mouseRotate: 'Rotate view',
+                mousePan: 'Pan view',
+                mouseZoom: 'Zoom view',
+                mouseLookAt: 'Focus the scene point under the double-click',
+                dropFiles: 'Import models into the scene',
+                playPause: 'Play / pause camera animation',
+                focusModel: 'Focus the selected model',
+                addKeyframe: 'Add a camera keyframe at the current view and time; advance the timeline by 1 second if there is no later keyframe',
+                toggleClean: 'Toggle clean-view mode',
+                toggleGizmo: 'Switch translate / rotate / scale gizmo; press the same key again to disable it',
+                uprightCamera: 'Upright the camera',
+                openHelp: 'Open help',
+                closeOverlay: 'Close help or the export dialog',
+                movePlane: 'Move forward / backward / sideways',
+                moveVertical: 'Move up / down',
+                speedUp: 'Move faster',
+            },
+            exportCurrentFrame: 'Exports a single frame from the current view',
+            exportTimeline: 'Timeline export: {duration}s, {fps} FPS, {frames} frames, {keyframes} keyframes',
+        },
+    },
+};
+
+function getUiTextValue(language, key) {
+    if (!key) return undefined;
+    return key.split('.').reduce((value, segment) => {
+        if (value == null) return undefined;
+        return value[segment];
+    }, UI_TEXT[language]);
+}
+
+function formatUiText(template, params = {}) {
+    if (typeof template !== 'string') return template;
+    return template.replace(/\{(\w+)\}/g, (_, key) => {
+        const value = params[key];
+        return value == null ? '' : String(value);
+    });
+}
+
+function t(key, params = {}) {
+    const preferred = state.uiLanguage === 'en' ? 'en' : 'zh';
+    const fallback = preferred === 'en' ? 'zh' : 'en';
+    let entry = getUiTextValue(preferred, key);
+    if (entry === undefined) {
+        entry = getUiTextValue(fallback, key);
+    }
+    if (typeof entry === 'function') {
+        return entry(params);
+    }
+    if (Array.isArray(entry)) {
+        return entry.map((item) => formatUiText(item, params));
+    }
+    return formatUiText(entry, params);
+}
+
+function normalizeUiLanguage(value) {
+    return value === 'en' ? 'en' : 'zh';
+}
+
+function getCurrentTheme() {
+    return document.body.classList.contains('theme-light') ? 'light' : 'dark';
+}
+
+function setElementText(element, text) {
+    if (element) {
+        element.textContent = text;
+    }
+}
+
+function setButtonTooltip(button, tooltip, ariaLabel = tooltip) {
+    if (!button) return;
+    button.title = tooltip;
+    button.setAttribute('data-tooltip', tooltip);
+    button.setAttribute('aria-label', ariaLabel);
+}
+
+function getSkyPresetDisplayName(presetOrId) {
+    const presetId = typeof presetOrId === 'string' ? presetOrId : presetOrId?.id;
+    const fallbackName = typeof presetOrId === 'object' ? presetOrId?.name : '';
+    if (!presetId) return fallbackName || '';
+    return t(`sceneSettings.skyPresets.${presetId}`) || fallbackName || presetId;
+}
+
+function getAgentWorkflowShortLabel(workflowId) {
+    return AGENT_WORKFLOW_DEFS[workflowId]?.shortLabel || AGENT_WORKFLOW_DEFS[workflowId]?.label || workflowId;
+}
+
+function getAgentBlockStatusLabel(status) {
+    if (status === 'ready') return t('agent.blocks.ready');
+    if (status === 'placeholder') return t('agent.blocks.placeholder');
+    if (status === 'error') return t('common.failed');
+    return status || '';
+}
+
+function updateLanguageToggleLabel() {
+    if (!dom.btnLanguageToggle) return;
+    const nextLanguage = state.uiLanguage === 'en' ? 'zh' : 'en';
+    const tooltip = nextLanguage === 'en'
+        ? t('language.switchToEnglish')
+        : t('language.switchToChinese');
+    dom.btnLanguageToggle.textContent = state.uiLanguage === 'en'
+        ? t('language.buttonWhenEn')
+        : t('language.buttonWhenZh');
+    dom.btnLanguageToggle.title = tooltip;
+    dom.btnLanguageToggle.setAttribute('data-tooltip', tooltip);
+    dom.btnLanguageToggle.setAttribute('aria-label', t('language.toggle'));
+}
+
+function updateLocalizedStaticUi() {
+    document.documentElement.lang = state.uiLanguage === 'en' ? 'en' : 'zh-CN';
+
+    if (dom.loadingOverlay && dom.loadingOverlay.classList.contains('hidden')) {
+        setElementText(dom.loadingOverlay.querySelector('.loading-text'), t('canvas.loading'));
+    }
+    setElementText(dom.noWebGPU?.querySelector('h2'), t('canvas.noWebgpuTitle'));
+    const noWebGpuParagraphs = dom.noWebGPU?.querySelectorAll('p') || [];
+    setElementText(noWebGpuParagraphs[0], t('canvas.noWebgpuIntro'));
+    setElementText(noWebGpuParagraphs[1], t('canvas.noWebgpuBrowserHint'));
+    const noWebGpuButton = dom.noWebGPU?.querySelector('a.button');
+    setElementText(noWebGpuButton, t('canvas.noWebgpuCheck'));
+
+    dom.agentWorkbench?.setAttribute('aria-label', t('agent.workbench'));
+    dom.agentWorkflowTabs?.setAttribute('aria-label', t('agent.workflowTabs'));
+    dom.agentMessageScroll?.setAttribute('aria-label', t('agent.messageHistory'));
+    dom.agentComposerAttachments?.setAttribute('aria-label', t('agent.pendingImages'));
+    if (dom.agentComposerInput) {
+        dom.agentComposerInput.placeholder = t('agent.inputPlaceholder');
+    }
+    setButtonTooltip(dom.btnAgentAddImage, t('common.addImage'));
+    setElementText(dom.btnAgentSend, t('common.send'));
+    dom.agentWorkbenchResizer?.setAttribute('aria-label', t('agent.resizeAria'));
+    document.querySelectorAll('.agent-workflow-tab').forEach((button) => {
+        const workflowId = button.dataset.workflow;
+        const label = AGENT_WORKFLOW_DEFS[workflowId]?.label || workflowId;
+        const shortLabel = getAgentWorkflowShortLabel(workflowId);
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        setElementText(button.querySelector('.agent-workflow-label'), shortLabel);
+    });
+
+    setElementText(document.querySelector('#left-sidebar .sidebar-header h2'), t('sidebar.title'));
+    setButtonTooltip(dom.btnAddModel, t('sidebar.loadModel'));
+    setButtonTooltip(dom.btnLoadScene, t('sidebar.loadScene'));
+    setButtonTooltip(dom.btnSaveScene, t('sidebar.saveScene'));
+    setButtonTooltip(dom.btnClearScene, t('sidebar.clearScene'));
+    setElementText(document.querySelector('#modelTransformSection .subsection-title'), t('sidebar.transform'));
+    setButtonTooltip(dom.btnResetTransform, t('common.reset'));
+    const transformLabels = dom.modelTransformSection?.querySelectorAll('.transform-property-row .property-label span') || [];
+    setElementText(transformLabels[0], t('sidebar.position'));
+    setElementText(transformLabels[1], t('sidebar.rotation'));
+    setElementText(transformLabels[2], t('sidebar.scale'));
+    setElementText(document.querySelector('#onnxAnimSection .subsection-title'), t('sidebar.animation'));
+    setElementText(document.querySelector('#onnxAnimSection .property-label span'), t('sidebar.speed'));
+    dom.modelAnimSpeedValue?.setAttribute('aria-label', t('sidebar.speed'));
+
+    setElementText(document.querySelector('#sceneSettingsPanel .settings-card-header h3'), t('sceneSettings.title'));
+    setButtonTooltip(dom.btnSceneSettingsClose, t('sceneSettings.close'), t('sceneSettings.close'));
+    const sceneSettingLabels = dom.sceneSettingsPanel?.querySelectorAll('.property-row .property-label span') || [];
+    setElementText(sceneSettingLabels[0], t('sceneSettings.background'));
+    setElementText(sceneSettingLabels[1], t('sceneSettings.preset'));
+    setElementText(sceneSettingLabels[2], t('sceneSettings.mode'));
+    setElementText(sceneSettingLabels[3], t('sceneSettings.depthScale'));
+    setElementText(sceneSettingLabels[4], t('sceneSettings.fov'));
+    setElementText(dom.modeColor?.querySelector('.menu-btn-text'), t('sceneSettings.renderModes.color'));
+    setElementText(dom.modeDepth?.querySelector('.menu-btn-text'), t('sceneSettings.renderModes.depth'));
+    setElementText(dom.modeNormal?.querySelector('.menu-btn-text'), t('sceneSettings.renderModes.normal'));
+    dom.sceneDepthScaleNumber?.setAttribute('aria-label', t('sceneSettings.depthScale'));
+
+    const floatingGroups = dom.rightSidebar?.querySelectorAll('.floating-tool-group') || [];
+    floatingGroups[0]?.setAttribute('aria-label', t('toolbar.transformTools'));
+    floatingGroups[1]?.setAttribute('aria-label', t('toolbar.clearTools'));
+    floatingGroups[2]?.setAttribute('aria-label', t('toolbar.exportTools'));
+    floatingGroups[3]?.setAttribute('aria-label', t('toolbar.panelTools'));
+    setButtonTooltip(dom.btnGizmoTranslate, t('toolbar.translate'));
+    setButtonTooltip(dom.btnGizmoRotate, t('toolbar.rotate'));
+    setButtonTooltip(dom.btnGizmoScale, t('toolbar.scale'));
+    setButtonTooltip(dom.btnClearScreen, t('toolbar.clearScreen'));
+    dom.exportToolFlyout?.setAttribute('aria-label', t('toolbar.export'));
+    setButtonTooltip(dom.btnRenderImage, t('toolbar.exportImage'), t('toolbar.exportImage'));
+    setButtonTooltip(dom.btnRenderVideo, t('toolbar.exportVideo'), t('toolbar.exportVideo'));
+    setButtonTooltip(dom.btnExportFlyout, t('toolbar.export'));
+    setButtonTooltip(dom.btnToggleSceneSettings, t('toolbar.sceneSettings'));
+    setButtonTooltip(dom.btnHelpTips, t('toolbar.help'));
+
+    setElementText(document.querySelector('#bottom-timeline .timeline-header h2'), t('timeline.title'));
+    setButtonTooltip(dom.btnToggleCameraPreview, t('timeline.openCameraPreview'), t('timeline.openCameraPreview'));
+    setElementText(dom.btnToggleCameraPreview?.querySelector('.btn-text'), t('timeline.cameraPreview'));
+    setButtonTooltip(dom.btnToggleCameraSettings, t('timeline.openCameraSettings'), t('timeline.openCameraSettings'));
+    setElementText(dom.btnToggleCameraSettings?.querySelector('.btn-text'), t('timeline.cameraSettings'));
+    setElementText(document.querySelector('#cameraPreviewPanel .settings-card-header h3'), t('timeline.cameraPreview'));
+    setButtonTooltip(dom.btnCameraPreviewClose, t('timeline.closeCameraPreview'), t('timeline.closeCameraPreview'));
+    setElementText(document.querySelector('#cameraPreviewPanel .property-label'), t('timeline.previewRatio'));
+    setElementText(document.querySelector('#cameraSettingsPanel .settings-card-header h3'), t('timeline.cameraSettings'));
+    setButtonTooltip(dom.btnCameraSettingsClose, t('sceneSettings.close'), t('sceneSettings.close'));
+    const cameraSettingLabels = dom.cameraSettingsPanel?.querySelectorAll('.property-row .property-label') || [];
+    setElementText(cameraSettingLabels[0], t('timeline.track'));
+    setElementText(cameraSettingLabels[1], t('timeline.size'));
+    setElementText(cameraSettingLabels[2], t('timeline.interpolation'));
+    setElementText(dom.timelineInterpolationParamLabel, t('timeline.parameter'));
+    setElementText(dom.btnToggleCameraSequenceDrag?.querySelector('.btn-text'), t('timeline.drag'));
+    setButtonTooltip(dom.btnToggleCameraSequenceDrag, t('timeline.dragHint'), t('timeline.dragHint'));
+    dom.btnToggleCameraSequence?.setAttribute('title', t('timeline.toggleSequenceVisibility'));
+    dom.btnToggleCameraSequence?.setAttribute('aria-label', t('timeline.toggleSequenceVisibility'));
+    dom.btnAddKeyframe?.closest('.timeline-control-group')?.setAttribute('aria-label', t('timeline.keyframes'));
+    dom.btnImportCameraSequence?.closest('.timeline-control-group')?.setAttribute('aria-label', t('timeline.cameraSequence'));
+    setButtonTooltip(dom.btnAddKeyframe, t('timeline.addKeyframe'), t('timeline.addKeyframe'));
+    setButtonTooltip(dom.btnRemoveKeyframe, t('timeline.removeKeyframe'), t('timeline.removeKeyframe'));
+    setButtonTooltip(dom.btnImportCameraSequence, t('timeline.importSequence'), t('timeline.importSequence'));
+    setButtonTooltip(dom.btnExportCameraSequence, t('timeline.exportSequence'), t('timeline.exportSequence'));
+    setButtonTooltip(dom.btnClearCameraSequence, t('timeline.clearSequence'), t('timeline.clearSequence'));
+    dom.btnPlayCamera?.closest('.timeline-control-group')?.setAttribute('aria-label', t('timeline.playbackControls'));
+    setButtonTooltip(dom.btnPlayCamera, t('timeline.playCamera'), t('timeline.playCamera'));
+    setButtonTooltip(dom.btnLoopCamera, t('timeline.loopPlayback'), t('timeline.loopPlayback'));
+    setElementText(document.querySelector('.timeline-header-right .timeline-fps-control:first-child label'), t('timeline.speed'));
+    setElementText(document.querySelector('.timeline-placeholder .placeholder-text'), t('timeline.placeholder'));
+    const interpolationOptions = dom.timelineCameraInterpolation?.options || [];
+    if (interpolationOptions[0]) interpolationOptions[0].textContent = t('timeline.interpolationModes.linear');
+    if (interpolationOptions[1]) interpolationOptions[1].textContent = t('timeline.interpolationModes.squad');
+    if (interpolationOptions[2]) interpolationOptions[2].textContent = t('timeline.interpolationModes.catmull');
+    if (interpolationOptions[3]) interpolationOptions[3].textContent = t('timeline.interpolationModes.ease');
+
+    setElementText(dom.modelModal?.querySelector('h3'), t('modal.modelTitle'));
+    setElementText(dom.modelModal?.querySelector('.modal-body p'), t('modal.modelHint'));
+    setElementText(dom.modalCancel, t('common.cancel'));
+    setElementText(dom.modalConfirm, t('common.confirm'));
+    if (!pendingExportType) {
+        setElementText(dom.exportModalTitle, t('modal.exportTitle'));
+    }
+    setElementText(document.querySelector('label[for="exportResolution"]'), t('modal.resolution'));
+    setElementText(document.querySelector('label[for="exportMode"]'), t('modal.renderMode'));
+    const exportModeOptions = dom.exportMode?.options || [];
+    if (exportModeOptions[0]) exportModeOptions[0].textContent = t('sceneSettings.renderModes.color');
+    if (exportModeOptions[1]) exportModeOptions[1].textContent = t('sceneSettings.renderModes.depth');
+    if (exportModeOptions[2]) exportModeOptions[2].textContent = t('sceneSettings.renderModes.normal');
+    setElementText(dom.exportCancel, t('common.cancel'));
+
+    setElementText(document.querySelector('#helpTipsModal h3'), t('modal.helpTitle'));
+    setButtonTooltip(dom.helpTipsClose, t('modal.closeHelp'), t('modal.closeHelp'));
+    const helpSectionTitles = dom.helpTipsModal?.querySelectorAll('.help-section h4') || [];
+    setElementText(helpSectionTitles[0], t('modal.helpSections.mouse'));
+    setElementText(helpSectionTitles[1], t('modal.helpSections.keyboard'));
+    setElementText(helpSectionTitles[2], t('modal.helpSections.camera'));
+    const helpSpans = dom.helpTipsModal?.querySelectorAll('.help-list span') || [];
+    const helpTexts = [
+        t('modal.helpItems.mouseRotate'),
+        t('modal.helpItems.mousePan'),
+        t('modal.helpItems.mouseZoom'),
+        t('modal.helpItems.mouseLookAt'),
+        t('modal.helpItems.dropFiles'),
+        t('modal.helpItems.playPause'),
+        t('modal.helpItems.focusModel'),
+        t('modal.helpItems.addKeyframe'),
+        t('modal.helpItems.toggleClean'),
+        t('modal.helpItems.toggleGizmo'),
+        t('modal.helpItems.uprightCamera'),
+        t('modal.helpItems.openHelp'),
+        t('modal.helpItems.closeOverlay'),
+        t('modal.helpItems.movePlane'),
+        t('modal.helpItems.movePlane'),
+        t('modal.helpItems.moveVertical'),
+        t('modal.helpItems.speedUp'),
+    ];
+    helpSpans.forEach((span, index) => setElementText(span, helpTexts[index] || span.textContent));
+    setElementText(dom.helpTipsConfirm, t('modal.gotIt'));
+}
+
+function refreshAgentWorkflowLanguageState() {
+    for (const workflowId of Object.keys(AGENT_WORKFLOW_DEFS)) {
+        const thread = state.agentWorkflowThreads[workflowId];
+        if (!thread) continue;
+        thread.label = AGENT_WORKFLOW_DEFS[workflowId]?.label || workflowId;
+        if (
+            Array.isArray(thread.items)
+            && thread.items.length === 1
+            && thread.items[0]?.kind !== 'session'
+            && thread.items[0]?.role === 'assistant'
+        ) {
+            thread.items[0].text = AGENT_WORKFLOW_DEFS[workflowId]?.starter || '';
+            thread.items[0].promptSuggestions = [...(AGENT_WORKFLOW_DEFS[workflowId]?.starterSuggestions || [])];
+        }
+    }
+}
+
+function applyLanguage(language, persist = false) {
+    state.uiLanguage = normalizeUiLanguage(language);
+    updateLocalizedStaticUi();
+    updateThemeToggleLabel(getCurrentTheme());
+    updateLanguageToggleLabel();
+    refreshAgentWorkflowLanguageState();
+    renderAgentComposerAttachments();
+    renderAgentMessages();
+    renderSkyPresetGrid();
+    updateModelList();
+    updateCameraSequenceToggleButton();
+    syncCameraSequenceDragButton();
+    updatePlayButtonUI();
+    syncLeftSidebarCollapsedState();
+    syncAgentWorkbenchCollapsedState();
+    setExportModalBusy(Boolean(isExporting));
+    updateExportTimelineHint(pendingExportType);
+    if (persist) {
+        try {
+            localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, state.uiLanguage);
+        } catch (error) {
+            console.warn(`[Editor ${state.VERSION}] Failed to persist language:`, error);
+        }
+    }
+}
+
+function initLanguage() {
+    let savedLanguage = 'zh';
+    try {
+        savedLanguage = normalizeUiLanguage(localStorage.getItem(UI_LANGUAGE_STORAGE_KEY));
+    } catch (error) {
+        console.warn(`[Editor ${state.VERSION}] Failed to load language:`, error);
+    }
+    applyLanguage(savedLanguage, false);
+}
+
+function toggleLanguage() {
+    applyLanguage(state.uiLanguage === 'en' ? 'zh' : 'en', true);
+}
+
 const FALLBACK_SKY_PRESETS = [
-    { id: 'studio', name: '工作室', colorHex: '#10131C' },
-    { id: 'clear_day', name: '晴空', colorHex: '#6EAEEA' },
-    { id: 'sunset', name: '日落', colorHex: '#E9875A' },
-    { id: 'dusk', name: '暮光', colorHex: '#4A5D86' },
-    { id: 'night', name: '夜空', colorHex: '#707070' },
+    { id: 'studio', get name() { return t('sceneSettings.skyPresets.studio'); }, colorHex: '#10131C' },
+    { id: 'clear_day', get name() { return t('sceneSettings.skyPresets.clear_day'); }, colorHex: '#6EAEEA' },
+    { id: 'sunset', get name() { return t('sceneSettings.skyPresets.sunset'); }, colorHex: '#E9875A' },
+    { id: 'dusk', get name() { return t('sceneSettings.skyPresets.dusk'); }, colorHex: '#4A5D86' },
+    { id: 'night', get name() { return t('sceneSettings.skyPresets.night'); }, colorHex: '#707070' },
 ];
 
 const AGENT_WORKFLOW_DEFS = {
     'scene-build': {
-        label: '场景构建',
-        starter: '可以从一张参考图或一句场景描述开始。我会先帮你拆出空间结构、主体布置和光照氛围，再给出可继续编辑的场景草案。',
-        starterSuggestions: [
-            '帮我生成这张图对应的场景',
-            '补全这个房间，保持原有镜头方向',
-            '把这个空场景扩展成可拍摄的电影空间',
-            '先给我一个室内场景搭建方案',
-        ],
-        previewLabel: '场景结果预览占位',
-        progressTitle: '场景构建中',
-        reply: (prompt) => `占位 Agent：已收到“场景构建”指令。\n建议先基于参考图抽取主体、地面和光照，再生成一个可人工接管的场景草案。\n当前不会直接改动右侧场景，后续可把这一步接到真实场景装配。`,
+        get label() { return t('agent.workflows.scene-build.title'); },
+        get shortLabel() { return t('agent.workflows.scene-build.short'); },
+        get starter() { return t('agent.workflows.scene-build.starter'); },
+        get starterSuggestions() { return t('agent.workflows.scene-build.suggestions'); },
+        get previewLabel() { return t('agent.workflows.scene-build.sceneSketch'); },
+        get progressTitle() { return t('agent.workflows.scene-build.progressTitle'); },
+        reply: () => t('agent.workflows.scene-build.reply'),
     },
     'object-insert': {
-        label: '物体插入',
-        starter: '这个流程适合补充场景里的关键资产。你可以给我一张参考图、一段文字，或者后续在画布上选点，我会把物体生成和放置策略一起整理出来。',
-        starterSuggestions: [
-            '在画面左侧补一张沙发和小茶几',
-            '帮我生成一个工业风吊灯并放到天花板中央',
-            '在镜头前景插入一辆停靠的摩托车',
-            '根据这张参考图补一个带金属质感的路灯',
-        ],
-        previewLabel: '物体结果预览占位',
-        progressTitle: '物体生成中',
-        reply: (prompt) => `占位 Agent：我会把“物体插入”拆成“生成资产”和“放置策略”两步。\n如果后续接入 canvas 选点，我会优先使用选点深度和法向来推导物体落位。\n当前仅回显方案，不执行插入。`,
+        get label() { return t('agent.workflows.object-insert.title'); },
+        get shortLabel() { return t('agent.workflows.object-insert.short'); },
+        get starter() { return t('agent.workflows.object-insert.starter'); },
+        get starterSuggestions() { return t('agent.workflows.object-insert.suggestions'); },
+        get previewLabel() { return t('agent.workflows.object-insert.objectPreview'); },
+        get progressTitle() { return t('agent.workflows.object-insert.progressTitle'); },
+        reply: () => t('agent.workflows.object-insert.reply'),
     },
     'character-create': {
-        label: '人物创造',
-        starter: '这里用来处理角色创建。可以先做 T-Pose 人物，再继续到骨骼绑定和动作生成。我会优先把角色设定、动作来源和接入顺序整理清楚。',
-        starterSuggestions: [
-            '生成一个长风衣女主的 T-Pose 角色',
-            '帮我做一个适合近景表演的男性角色草案',
-            '为现有人物准备骨骼绑定步骤',
-            '根据参考视频生成一个缓慢转身动作',
-        ],
-        previewLabel: '人物结果预览占位',
-        progressTitle: '人物创建中',
-        reply: (prompt) => `占位 Agent：当前在“人物创造”流程中，我会优先把需求拆成角色形象、骨骼结构和动作来源三部分。\n这一步适合先输出流程卡和资产需求清单，再逐步接入角色工具链。`,
+        get label() { return t('agent.workflows.character-create.title'); },
+        get shortLabel() { return t('agent.workflows.character-create.short'); },
+        get starter() { return t('agent.workflows.character-create.starter'); },
+        get starterSuggestions() { return t('agent.workflows.character-create.suggestions'); },
+        get previewLabel() { return t('agent.workflows.character-create.characterConcept'); },
+        get progressTitle() { return t('agent.workflows.character-create.progressTitle'); },
+        reply: () => t('agent.workflows.character-create.reply'),
     },
     'camera-direct': {
-        label: '运镜生成',
-        starter: '这里可以直接用自然语言生成镜头设计。我会先理解主体、节奏和情绪，再把它拆成相机路径、关键帧和时长分配。',
-        starterSuggestions: [
-            '给这个场景做一个 8 秒推进镜头',
-            '生成一个从门外推进到人物特写的镜头序列',
-            '围绕主体做一段缓慢环绕运镜',
-            '帮我设计一个结尾停留在窗边的镜头',
-        ],
-        previewLabel: '运镜结果预览占位',
-        progressTitle: '镜头规划中',
-        reply: (prompt) => `占位 Agent：已进入“运镜生成”模式。\n我会先把自然语言拆成镜头目标、镜头运动和时长分配，再映射成相机关键帧草案。\n当前不会写入时间轴，但会按这个结构返回建议。`,
+        get label() { return t('agent.workflows.camera-direct.title'); },
+        get shortLabel() { return t('agent.workflows.camera-direct.short'); },
+        get starter() { return t('agent.workflows.camera-direct.starter'); },
+        get starterSuggestions() { return t('agent.workflows.camera-direct.suggestions'); },
+        get previewLabel() { return t('agent.workflows.camera-direct.title'); },
+        get progressTitle() { return t('agent.workflows.camera-direct.progressTitle'); },
+        reply: () => t('agent.workflows.camera-direct.reply'),
     },
 };
 
@@ -723,8 +1591,8 @@ function renderAgentComposerAttachments() {
                 type="button"
                 class="agent-composer-attachment-remove"
                 data-agent-attachment-remove="${index}"
-                aria-label="移除图片 ${escapeHtml(file.name)}"
-                title="移除"
+                aria-label="${escapeHtml(t('common.removeImage', { name: file.name }))}"
+                title="${escapeHtml(t('common.remove'))}"
             >×</button>
         </span>
     `).join('');
@@ -781,10 +1649,10 @@ function createAgentMessageHandle(messageId) {
         },
         fail(errorText) {
             updateAgentMessageById(messageId, (message) => {
-                message.text = String(errorText ?? 'Agent 执行失败');
+                message.text = String(errorText ?? (state.uiLanguage === 'en' ? 'Agent execution failed' : 'Agent 执行失败'));
                 message.blocks = (message.blocks || []).map((block) => (
                     block.type === 'progress'
-                        ? { ...block, indeterminate: false, statusText: '失败' }
+                        ? { ...block, indeterminate: false, statusText: t('common.failed') }
                         : (block.type === 'image' || block.type === 'viewer3d')
                             ? { ...block, status: 'error' }
                             : block
@@ -829,14 +1697,14 @@ function createAgentSessionHandle(sessionId, attemptId) {
                 const activeAttempt = getAgentSessionActiveAttempt(session);
                 const failedBlocks = (activeAttempt?.blocks || []).map((block) => (
                     block.type === 'progress'
-                        ? { ...block, indeterminate: false, statusText: '失败' }
+                        ? { ...block, indeterminate: false, statusText: t('common.failed') }
                         : (block.type === 'image' || block.type === 'viewer3d')
                             ? { ...block, status: 'error' }
                             : block
                 ));
                 return updateAgentSessionAttempt(session, {
                     attemptId,
-                    text: String(errorText ?? 'Agent 执行失败'),
+                    text: String(errorText ?? (state.uiLanguage === 'en' ? 'Agent execution failed' : 'Agent 执行失败')),
                     status: 'failed',
                     blocks: failedBlocks,
                 });
@@ -891,7 +1759,7 @@ function createMockImageDataUrl(label, tint = '#7aa2ff') {
     ctx.fillText(label, 48, 88);
     ctx.font = '400 18px Segoe UI';
     ctx.fillStyle = 'rgba(248,250,252,0.88)';
-    ctx.fillText('Agent 生成预览占位', 48, 124);
+    ctx.fillText(state.uiLanguage === 'en' ? 'Agent preview placeholder' : 'Agent 生成预览占位', 48, 124);
 
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = 2;
@@ -1016,11 +1884,11 @@ async function syncAgent3DBlocks() {
 
 function renderAgentProgressBlock(block) {
     const progress = Math.max(0, Math.min(1, Number(block.value) || 0));
-    const percentText = block.indeterminate ? '处理中' : `${Math.round(progress * 100)}%`;
+    const percentText = block.indeterminate ? t('agent.promptProcessing') : `${Math.round(progress * 100)}%`;
     return `
         <section class="agent-block agent-block-progress" data-agent-block-id="${block.id}">
             <div class="agent-block-header">
-                <span class="agent-block-title">${escapeHtml(block.title || '进度')}</span>
+                <span class="agent-block-title">${escapeHtml(block.title || t('agent.blocks.progress'))}</span>
                 <span class="agent-block-meta">${percentText}</span>
             </div>
             <div class="agent-progress-track ${block.indeterminate ? 'is-indeterminate' : ''}">
@@ -1036,13 +1904,13 @@ function renderAgentImageBlock(block) {
     return `
         <section class="agent-block agent-block-image" data-agent-block-id="${block.id}">
             <div class="agent-block-header">
-                <span class="agent-block-title">${escapeHtml(block.title || '图像')}</span>
-                <span class="agent-block-meta">${escapeHtml(block.status || 'placeholder')}</span>
+                <span class="agent-block-title">${escapeHtml(block.title || t('agent.blocks.image'))}</span>
+                <span class="agent-block-meta">${escapeHtml(getAgentBlockStatusLabel(block.status))}</span>
             </div>
             <div class="agent-image-frame ${ready ? 'is-ready' : ''}">
                 ${ready
-                    ? `<img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt || block.title || 'Agent image')}" loading="lazy">`
-                    : '<div class="agent-image-placeholder">图像生成中</div>'}
+                    ? `<img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt || block.title || t('agent.blocks.image'))}" loading="lazy">`
+                    : `<div class="agent-image-placeholder">${escapeHtml(t('agent.imageLoading'))}</div>`}
             </div>
         </section>
     `;
@@ -1054,10 +1922,10 @@ function renderAgentViewer3DBlock(block) {
     return `
         <section class="agent-block agent-block-viewer3d ${isReady ? 'is-ready' : 'is-disabled'}" data-agent-block-id="${block.id}">
             <div class="agent-block-header">
-                <span class="agent-block-title">${escapeHtml(block.title || '3D 预览')}</span>
+                <span class="agent-block-title">${escapeHtml(block.title || t('agent.blocks.viewer3d'))}</span>
                 <div class="agent-block-header-actions">
-                    <span class="agent-block-meta">${escapeHtml(block.status || 'placeholder')}</span>
-                    ${allowReset ? `<button type="button" class="agent-viewer-reset" data-agent-viewer-reset="${block.id}" ${isReady ? '' : 'disabled'}>重置视角</button>` : ''}
+                    <span class="agent-block-meta">${escapeHtml(getAgentBlockStatusLabel(block.status))}</span>
+                    ${allowReset ? `<button type="button" class="agent-viewer-reset" data-agent-viewer-reset="${block.id}" ${isReady ? '' : 'disabled'}>${escapeHtml(t('agent.resetView'))}</button>` : ''}
                 </div>
             </div>
             <div class="agent-viewer-frame ${isReady ? 'is-ready' : 'is-disabled'}">
@@ -1114,7 +1982,7 @@ function renderAgentMessageItem(message) {
     return `
         <div class="agent-message ${message.role === 'user' ? 'is-user' : 'is-assistant'}">
             <div class="agent-message-bubble">
-                ${message.role === 'user' ? '' : '<span class="agent-message-role">Agent</span>'}
+                ${message.role === 'user' ? '' : `<span class="agent-message-role">${escapeHtml(t('common.agent'))}</span>`}
                 ${renderAgentAttachments(message.attachments)}
                 <div class="agent-message-text">${escapeHtml(message.text)}</div>
                 ${renderAgentBlocks(message.blocks)}
@@ -1132,7 +2000,7 @@ function renderAgentSessionPager(session) {
         activeIndex: session.activeAttemptIndex,
     });
     return `
-        <div class="agent-session-pager" aria-label="重试版本">
+        <div class="agent-session-pager" aria-label="${escapeHtml(t('common.retryVersions'))}">
             ${items.map((item) => {
                 if (item.type === 'nav') {
                     return `
@@ -1141,8 +2009,8 @@ function renderAgentSessionPager(session) {
                             class="agent-session-page agent-session-page-nav"
                             data-agent-session-page="${session.id}"
                             data-agent-session-page-index="${item.targetIndex}"
-                            title="${item.direction === 'prev' ? '上一页' : '下一页'}"
-                            aria-label="${item.direction === 'prev' ? '上一页' : '下一页'}"
+                            title="${escapeHtml(item.direction === 'prev' ? t('common.previousPage') : t('common.nextPage'))}"
+                            aria-label="${escapeHtml(item.direction === 'prev' ? t('common.previousPage') : t('common.nextPage'))}"
                             ${item.disabled ? 'disabled' : ''}
                         >${item.direction === 'prev' ? '‹' : '›'}</button>
                     `;
@@ -1153,8 +2021,8 @@ function renderAgentSessionPager(session) {
                         class="agent-session-page ${item.active ? 'is-active' : ''}"
                         data-agent-session-page="${session.id}"
                         data-agent-session-page-index="${item.index}"
-                        title="版本 ${item.page}"
-                        aria-label="切换到版本 ${item.page}"
+                        title="${escapeHtml(t('common.version', { current: item.page, total }))}"
+                        aria-label="${escapeHtml(t('common.switchToVersion', { page: item.page }))}"
                     >${item.page}</button>
                 `;
             }).join('')}
@@ -1176,13 +2044,13 @@ function renderAgentSessionArchiveTag(session) {
             class="agent-session-archive-tag ${archiveStateClass}"
             data-agent-session-toggle="${session.id}"
             aria-expanded="false"
-            title="展开查看"
+            title="${escapeHtml(t('agent.archivePreview'))}"
         >
             <span class="agent-session-archive-thumb ${thumbnail ? 'has-image' : ''}">
-                ${thumbnail ? `<img src="${escapeHtml(thumbnail)}" alt="">` : '<span>归档</span>'}
+                ${thumbnail ? `<img src="${escapeHtml(thumbnail)}" alt="">` : `<span>${escapeHtml(t('common.archived'))}</span>`}
             </span>
             <span class="agent-session-archive-meta">
-                <span class="agent-session-archive-title">${escapeHtml(summary.label || '已归档')}</span>
+                <span class="agent-session-archive-title">${escapeHtml(session.archiveState === 'applied' ? t('common.applied') : session.archiveState === 'canceled' ? t('common.canceled') : (summary.label || t('common.archived')))}</span>
                 <span class="agent-session-archive-subtitle">${escapeHtml(session.prompt || AGENT_WORKFLOW_DEFS[session.workflow]?.label || '')}</span>
             </span>
         </button>
@@ -1202,14 +2070,14 @@ function renderAgentSessionItem(session) {
     const attempt = getAgentSessionActiveAttempt(session);
     const totalAttempts = session.attempts?.length || 0;
     const archiveStateLabel = session.archiveState === 'canceled'
-        ? '已取消'
+        ? t('common.canceled')
         : session.archiveState === 'applied'
-            ? '已应用'
+            ? t('common.applied')
             : attempt?.status === 'failed'
-                ? '失败'
+                ? t('common.failed')
                 : attempt?.status === 'complete'
-                    ? '已完成'
-                    : '生成中';
+                    ? t('common.completed')
+                    : t('common.generating');
     const isArchivedExpanded = session.archiveState !== 'active' && !session.collapsed;
     const actionAvailability = resolveAgentSessionActionAvailability({
         archiveState: session.archiveState,
@@ -1221,32 +2089,31 @@ function renderAgentSessionItem(session) {
             <div class="agent-session-stack">
                 <div class="agent-message-bubble agent-session-bubble">
                     <div class="agent-session-header">
-                        <span class="agent-message-role">Agent</span>
+                        <span class="agent-message-role">${escapeHtml(t('common.agent'))}</span>
                         <div class="agent-session-header-meta">
-                            ${totalAttempts > 1 ? `<span class="agent-session-attempt-label">版本 ${session.activeAttemptIndex + 1}/${totalAttempts}</span>` : ''}
+                            ${totalAttempts > 1 ? `<span class="agent-session-attempt-label">${escapeHtml(t('common.version', { current: session.activeAttemptIndex + 1, total: totalAttempts }))}</span>` : ''}
                             <span class="agent-session-status">${archiveStateLabel}</span>
+                            ${isArchivedExpanded ? `
+                                <button
+                                    type="button"
+                                    class="agent-session-collapse-btn"
+                                    data-agent-session-toggle="${session.id}"
+                                    aria-expanded="true"
+                                    title="${escapeHtml(t('agent.collapseSession'))}"
+                                    aria-label="${escapeHtml(t('agent.collapseSession'))}"
+                                >${escapeHtml(t('agent.collapseSession'))}</button>
+                            ` : ''}
                         </div>
                     </div>
                     <div class="agent-message-text">${escapeHtml(attempt?.text || '')}</div>
                     ${renderAgentBlocks(attempt?.blocks)}
                     ${renderAgentPromptSuggestions(attempt?.promptSuggestions)}
                     <div class="agent-session-footer">
-                        ${isArchivedExpanded ? `
-                            <div class="agent-session-actions agent-session-actions-archived">
-                                <button
-                                    type="button"
-                                    class="agent-session-collapse-btn"
-                                    data-agent-session-toggle="${session.id}"
-                                    aria-expanded="true"
-                                    title="收起"
-                                    aria-label="收起"
-                                >收起</button>
-                            </div>
-                        ` : `
+                        ${isArchivedExpanded ? '' : `
                             <div class="agent-session-actions">
-                                <button type="button" class="agent-inline-btn" data-agent-session-action="cancel" data-agent-session-id="${session.id}">取消</button>
-                                <button type="button" class="agent-inline-btn" data-agent-session-action="retry" data-agent-session-id="${session.id}" ${actionAvailability.canRetry ? '' : 'disabled'}>重试</button>
-                                <button type="button" class="agent-inline-btn" data-agent-session-action="apply" data-agent-session-id="${session.id}" ${actionAvailability.canApply ? '' : 'disabled'}>应用</button>
+                                <button type="button" class="agent-inline-btn" data-agent-session-action="cancel" data-agent-session-id="${session.id}">${escapeHtml(t('agent.actions.cancel'))}</button>
+                                <button type="button" class="agent-inline-btn" data-agent-session-action="retry" data-agent-session-id="${session.id}" ${actionAvailability.canRetry ? '' : 'disabled'}>${escapeHtml(t('agent.actions.retry'))}</button>
+                                <button type="button" class="agent-inline-btn" data-agent-session-action="apply" data-agent-session-id="${session.id}" ${actionAvailability.canApply ? '' : 'disabled'}>${escapeHtml(t('agent.actions.apply'))}</button>
                             </div>
                         `}
                     </div>
@@ -1447,7 +2314,7 @@ function syncAgentWorkbenchCollapsedState() {
     if (dom.btnToggleAgentWorkbench) {
         dom.btnToggleAgentWorkbench.textContent = collapsed ? '›' : '‹';
         dom.btnToggleAgentWorkbench.setAttribute('aria-expanded', String(!collapsed));
-        const label = collapsed ? '展开 Agent 工作台' : '收起 Agent 工作台';
+        const label = collapsed ? t('agent.expandedTooltip') : t('agent.collapsedTooltip');
         dom.btnToggleAgentWorkbench.title = label;
         dom.btnToggleAgentWorkbench.setAttribute('aria-label', label);
     }
@@ -1642,7 +2509,7 @@ function createMockAgentAttemptBlocks(workflowId) {
     const workflow = AGENT_WORKFLOW_DEFS[workflowId] || getActiveAgentWorkflowDef();
     const progressBlock = createAgentProgressBlock({
         title: workflow.progressTitle,
-        statusText: '等待 Agent 启动',
+        statusText: t('agent.blocks.progressQueued'),
         value: 0.08,
     });
     const blocks = [progressBlock];
@@ -1652,24 +2519,24 @@ function createMockAgentAttemptBlocks(workflowId) {
 
     if (workflowId === 'scene-build') {
         imageBlock = createAgentImageBlock({
-            title: '场景草图',
+            title: t('agent.workflows.scene-build.sceneSketch'),
             status: 'placeholder',
         });
         blocks.push(imageBlock);
     } else if (workflowId === 'object-insert') {
         viewerBlock = createAgentViewer3DBlock({
-            title: '物体预览',
+            title: t('agent.workflows.object-insert.objectPreview'),
             status: 'placeholder',
             interaction: { rotate: true, zoom: true, pan: false, reset: true },
         });
         blocks.push(viewerBlock);
     } else if (workflowId === 'character-create') {
         imageBlock = createAgentImageBlock({
-            title: '人物概念图',
+            title: t('agent.workflows.character-create.characterConcept'),
             status: 'placeholder',
         });
         viewerBlock = createAgentViewer3DBlock({
-            title: '角色模型预览',
+            title: t('agent.workflows.character-create.characterPreview'),
             status: 'placeholder',
             interaction: { rotate: true, zoom: true, pan: false, reset: true },
         });
@@ -1698,18 +2565,18 @@ function runMockAgentSessionAttempt({
     const handle = createAgentSessionHandle(sessionId, attemptId);
 
     const progressUpdates = [
-        { delayMs: 380, patch: { value: 0.22, statusText: '解析任务目标' } },
-        { delayMs: 520, patch: { value: 0.46, statusText: '整理生成步骤' } },
-        { delayMs: 620, patch: { value: 0.74, statusText: '组合输出内容' } },
-        { delayMs: 520, patch: { value: 1, statusText: '已完成' } },
+        { delayMs: 380, patch: { value: 0.22, statusText: t('agent.blocks.progressParse') } },
+        { delayMs: 520, patch: { value: 0.46, statusText: t('agent.blocks.progressPlan') } },
+        { delayMs: 620, patch: { value: 0.74, statusText: t('agent.blocks.progressCompose') } },
+        { delayMs: 520, patch: { value: 1, statusText: t('agent.blocks.progressDone') } },
     ];
 
     simulateProgressUpdates(handle, progressBlock.id, progressUpdates, () => {
         if (workflowId === 'scene-build' && imageBlock) {
             handle.patchBlock(imageBlock.id, {
                 status: 'ready',
-                src: createMockImageDataUrl('场景草图', '#6ea8ff'),
-                alt: '场景草图预览',
+                src: createMockImageDataUrl(t('agent.workflows.scene-build.sceneSketch'), '#6ea8ff'),
+                alt: t('agent.workflows.scene-build.sceneSketchAlt'),
             });
         }
         if (workflowId === 'object-insert' && viewerBlock) {
@@ -1723,8 +2590,8 @@ function runMockAgentSessionAttempt({
             if (imageBlock) {
                 handle.patchBlock(imageBlock.id, {
                     status: 'ready',
-                    src: createMockImageDataUrl('人物概念图', '#ff8fb3'),
-                    alt: '人物概念图预览',
+                    src: createMockImageDataUrl(t('agent.workflows.character-create.characterConcept'), '#ff8fb3'),
+                    alt: t('agent.workflows.character-create.characterConceptAlt'),
                 });
             }
             if (viewerBlock) {
@@ -1746,7 +2613,7 @@ function startMockAgentResponse(workflowId, prompt, attachments = []) {
     const { blocks, progressBlock, imageBlock, viewerBlock } = createMockAgentAttemptBlocks(workflowId);
     const attempt = createAgentGenerationAttempt({
         workflow: workflowId,
-        text: `正在处理：${prompt}`,
+        text: `${t('common.generating')}: ${prompt}`,
         blocks,
     });
     const session = createAgentSession({
@@ -1786,7 +2653,7 @@ async function handleAgentSessionAction(sessionId, action) {
     if (action === 'cancel') {
         updateAgentSessionById(sessionId, (current) => setAgentSessionArchiveState(current, {
             archiveState: 'canceled',
-            summaryLabel: '已取消',
+            summaryLabel: t('common.canceled'),
             thumbnailUrl,
         }));
         await invokeAgentSessionActionHandler('onCancel', payload);
@@ -1796,7 +2663,7 @@ async function handleAgentSessionAction(sessionId, action) {
     if (action === 'apply') {
         updateAgentSessionById(sessionId, (current) => setAgentSessionArchiveState(current, {
             archiveState: 'applied',
-            summaryLabel: '已应用',
+            summaryLabel: t('common.applied'),
             thumbnailUrl,
         }));
         await invokeAgentSessionActionHandler('onApply', payload);
@@ -1804,10 +2671,11 @@ async function handleAgentSessionAction(sessionId, action) {
     }
 
     if (action === 'retry') {
+        const retryPrompt = session.prompt || activeAttempt?.text || (state.uiLanguage === 'en' ? 'Retry request' : '重试任务');
         const { blocks, progressBlock, imageBlock, viewerBlock } = createMockAgentAttemptBlocks(session.workflow);
         const nextAttempt = createAgentGenerationAttempt({
             workflow: session.workflow,
-            text: `正在处理：${session.prompt || activeAttempt?.text || '重试任务'}`,
+            text: `${t('common.generating')}: ${retryPrompt}`,
             blocks,
         });
         updateAgentSessionById(sessionId, (current) => appendAgentSessionRetryAttempt(current, nextAttempt), {
@@ -1819,7 +2687,7 @@ async function handleAgentSessionAction(sessionId, action) {
         });
         runMockAgentSessionAttempt({
             workflowId: session.workflow,
-            prompt: session.prompt || activeAttempt?.text || '重试任务',
+            prompt: retryPrompt,
             sessionId,
             attemptId: nextAttempt.id,
             progressBlock,
@@ -1832,13 +2700,14 @@ async function handleAgentSessionAction(sessionId, action) {
 function submitAgentPrompt(promptText, attachments = []) {
     const prompt = String(promptText || '').trim();
     if (!prompt && attachments.length === 0) return;
+    const attachmentFallback = state.uiLanguage === 'en' ? 'Image input' : '图片输入';
 
-    const userMessage = createAgentMessage('user', prompt || '图片输入');
+    const userMessage = createAgentMessage('user', prompt || attachmentFallback);
     userMessage.attachments = attachments;
     state.agentMessages.push(userMessage);
     renderAgentMessages({ autoScroll: 'always' });
     schedulePersistAgentConversations();
-    startMockAgentResponse(state.agentWorkflow, prompt || '图片输入', attachments);
+    startMockAgentResponse(state.agentWorkflow, prompt || attachmentFallback, attachments);
 }
 
 function handleAgentComposerSubmit(event) {
@@ -2171,7 +3040,7 @@ function renderSkyPresetGrid() {
     if (!dom.skyPresetGrid) return;
     const presets = (app?.getSceneSkyPresets?.() || FALLBACK_SKY_PRESETS);
     dom.skyPresetGrid.innerHTML = presets.map((preset) => `
-        <button class="sky-preset-btn ${state.sceneSkyPresetId === preset.id ? 'active' : ''}" data-sky-id="${preset.id}" title="${preset.name}">
+        <button class="sky-preset-btn ${state.sceneSkyPresetId === preset.id ? 'active' : ''}" data-sky-id="${preset.id}" title="${getSkyPresetDisplayName(preset)}">
             <span class="sky-preset-swatch" style="background:${preset.colorHex};"></span>
         </button>
     `).join('');
@@ -2411,9 +3280,9 @@ function syncCameraSequenceDragButton() {
     dom.btnToggleCameraSequenceDrag.classList.toggle('active', state.cameraSequenceDragEnabled);
     const textEl = dom.btnToggleCameraSequenceDrag.querySelector('.btn-text');
     if (textEl) {
-        textEl.textContent = '拖动';
+        textEl.textContent = t('timeline.drag');
     } else {
-        dom.btnToggleCameraSequenceDrag.textContent = '拖动';
+        dom.btnToggleCameraSequenceDrag.textContent = t('timeline.drag');
     }
 }
 
@@ -2663,9 +3532,9 @@ function syncLeftSidebarCollapsedState() {
     const collapsed = Boolean(state.leftSidebarCollapsed);
     dom.leftSidebar?.classList.toggle('sidebar-collapsed', collapsed);
     if (dom.modelCountBadge) {
-        dom.modelCountBadge.textContent = collapsed ? '展开' : '收起';
+        dom.modelCountBadge.textContent = collapsed ? t('common.expand') : t('common.collapse');
         dom.modelCountBadge.setAttribute('aria-expanded', String(!collapsed));
-        dom.modelCountBadge.title = collapsed ? '展开模型面板' : '收起模型面板';
+        dom.modelCountBadge.title = collapsed ? t('sidebar.expandPanel') : t('sidebar.collapsePanel');
     }
 }
 
@@ -2677,9 +3546,10 @@ function setLeftSidebarCollapsed(collapsed) {
 function updateThemeToggleLabel(theme) {
     if (!dom.btnThemeToggle) return;
     const nextTheme = theme === 'light' ? 'dark' : 'light';
-    const tooltip = nextTheme === 'light' ? '切换到白天' : '切换到夜间';
+    const tooltip = nextTheme === 'light' ? t('theme.switchToLight') : t('theme.switchToDark');
     dom.btnThemeToggle.title = tooltip;
     dom.btnThemeToggle.setAttribute('data-tooltip', tooltip);
+    dom.btnThemeToggle.setAttribute('aria-label', t('theme.toggle'));
     dom.btnThemeToggle.innerHTML = nextTheme === 'light'
         ? `
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2779,7 +3649,7 @@ function setClearScreenMode(active, silent = false) {
     }
     syncClearScreenState();
     if (!silent) {
-        showInfo(`清屏模式: ${state.clearScreenMode ? '开启' : '关闭'}`);
+        showInfo(`${t('toolbar.clearScreen')}: ${state.clearScreenMode ? t('common.active') : t('common.inactive')}`);
     }
 }
 
@@ -2970,7 +3840,7 @@ function registerDebugHooks() {
 /**
  * 显示加载状态
  */
-function showLoading(show, text = 'Loading...', progress = 0) {
+function showLoading(show, text = t('loading.default'), progress = 0) {
     if (dom.loadingOverlay) {
         if (show) {
             dom.loadingOverlay.classList.remove('hidden');
@@ -2989,7 +3859,7 @@ function showLoading(show, text = 'Loading...', progress = 0) {
  */
 function showError(message) {
     console.error(`[Editor ${state.VERSION}] Error:`, message);
-    alert(`Error: ${message}`);
+    alert(`${t('common.errorPrefix')}: ${message}`);
 }
 
 /**
@@ -3026,13 +3896,13 @@ function setCameraSequenceVisibility(nextVisible, silent = false) {
     const safe = Boolean(nextVisible);
     const ok = app?.setCameraSequenceVisible?.(safe);
     if (ok === false) {
-        showError('设置相机序列可见性失败');
+        showError(state.uiLanguage === 'en' ? 'Failed to set camera sequence visibility' : '设置相机序列可见性失败');
         return false;
     }
     state.cameraSequenceVisible = safe;
     updateCameraSequenceToggleButton();
     if (!silent) {
-        showInfo(`相机序列: ${safe ? '可见' : '隐藏'}`);
+        showInfo(`${t('timeline.cameraSequence')}: ${safe ? t('common.visible') : t('common.hidden')}`);
     }
     return true;
 }
@@ -3062,7 +3932,7 @@ function setCameraSequenceDisplayScale(value, silent = false) {
     const safe = clampCameraSequenceDisplayScale(value);
     const ok = app?.setCameraSequenceDisplayScale?.(safe);
     if (ok === false) {
-        showError('设置相机显示大小失败');
+        showError(state.uiLanguage === 'en' ? 'Failed to set camera display size' : '设置相机显示大小失败');
         return false;
     }
     state.cameraSequenceDisplayScale = safe;
@@ -3070,7 +3940,7 @@ function setCameraSequenceDisplayScale(value, silent = false) {
     syncCameraSequenceVisualization();
     localStorage.setItem(CAMERA_DISPLAY_SCALE_STORAGE_KEY, String(safe));
     if (!silent) {
-        showInfo(`相机显示大小: ${safe.toFixed(2)}x`);
+        showInfo(`${t('timeline.size')}: ${safe.toFixed(2)}x`);
     }
     return true;
 }
@@ -3081,9 +3951,9 @@ function updateCameraSequenceToggleButton() {
     dom.btnToggleCameraSequence.classList.toggle('active', visible);
     const textEl = dom.btnToggleCameraSequence.querySelector('.btn-text');
     if (textEl) {
-        textEl.textContent = visible ? '可见' : '隐藏';
+        textEl.textContent = visible ? t('common.visible') : t('common.hidden');
     } else {
-        dom.btnToggleCameraSequence.textContent = visible ? '可见' : '隐藏';
+        dom.btnToggleCameraSequence.textContent = visible ? t('common.visible') : t('common.hidden');
     }
 }
 
@@ -3091,24 +3961,24 @@ function updateCameraSequenceToggleButton() {
  * 更新模型列表 UI
  */
 function updateModelList() {
-    if (!app || !dom.modelList) return;
-    const models = app.getModels();
+    if (!dom.modelList) return;
+    const models = app?.getModels?.() || [];
     updateCameraSequenceToggleButton();
 
     if (models.length === 0) {
         dom.modelList.innerHTML = '<div class="empty-list">' +
-            '<p>暂无模型</p>' +
-            '<p class="empty-hint">拖拽文件到此处，或点击加号按钮</p>' +
+            `<p>${escapeHtml(t('sidebar.emptyTitle'))}</p>` +
+            `<p class="empty-hint">${escapeHtml(t('sidebar.emptyHint'))}</p>` +
             '</div>';
     } else {
         dom.modelList.innerHTML = models.map((model) => `
             <div class="model-item ${state.selectedModelId === model.id ? 'selected' : ''}" data-id="${model.id}">
                 <span class="model-name">${model.name}</span>
-                <span class="model-points">${model.pointCount.toLocaleString()} 点</span>
-                <button class="model-visibility-btn ${model.visible ? 'active' : ''}" data-id="${model.id}" title="切换可见性">
-                    ${model.visible ? '可见' : '隐藏'}
+                <span class="model-points">${t('sidebar.pointCount', { count: model.pointCount.toLocaleString() })}</span>
+                <button class="model-visibility-btn ${model.visible ? 'active' : ''}" data-id="${model.id}" title="${t('sidebar.toggleVisibility')}">
+                    ${model.visible ? t('common.visible') : t('common.hidden')}
                 </button>
-                <span class="model-remove" data-id="${model.id}" title="删除">&times;</span>
+                <span class="model-remove" data-id="${model.id}" title="${t('sidebar.deleteModel')}">&times;</span>
             </div>
         `).join('');
 
@@ -3534,22 +4404,30 @@ function parseResolutionValue(value) {
 }
 
 function getExportModeLabel(mode) {
-    const labels = { color: '图片', depth: '深度图', normal: '法向图' };
+    const labels = {
+        color: t('sceneSettings.renderModes.color'),
+        depth: t('sceneSettings.renderModes.depth'),
+        normal: t('sceneSettings.renderModes.normal'),
+    };
     return labels[mode] || mode;
 }
 
 function updateExportTimelineHint(type) {
     if (!dom.exportTimelineHint) return;
     if (type !== 'video') {
-        dom.exportTimelineHint.textContent = '将导出当前视角的单帧图像';
+        dom.exportTimelineHint.textContent = t('modal.exportCurrentFrame');
         return;
     }
     const fps = Math.max(1, Number(state.timelineFps || EXPORT_FALLBACK_FPS));
     const totalFrames = Math.max(1, getTimelineTotalFrames() + 1);
     const duration = frameToTime(getTimelineTotalFrames());
     const keyframes = state.keyframes.length;
-    dom.exportTimelineHint.textContent =
-        `时间轴导出: ${duration.toFixed(3)}s, ${fps} FPS, ${totalFrames} 帧, 关键帧 ${keyframes}`;
+    dom.exportTimelineHint.textContent = t('modal.exportTimeline', {
+        duration: duration.toFixed(3),
+        fps,
+        frames: totalFrames,
+        keyframes,
+    });
 }
 
 function buildExportResolutionOptions() {
@@ -3559,7 +4437,7 @@ function buildExportResolutionOptions() {
     const seen = new Set();
     const current = getViewportResolution();
     const currentValue = resolutionToValue(current.width, current.height);
-    options.push({ value: currentValue, label: `${current.width} x ${current.height} (当前窗口)` });
+    options.push({ value: currentValue, label: `${current.width} x ${current.height} (${t('common.currentWindow')})` });
     seen.add(currentValue);
 
     for (const preset of EXPORT_PRESET_RESOLUTIONS) {
@@ -3581,7 +4459,7 @@ function setExportModalBusy(busy) {
     if (dom.exportFov) dom.exportFov.disabled = busy;
     if (dom.exportCancel) dom.exportCancel.disabled = busy;
     if (dom.exportConfirm) dom.exportConfirm.disabled = busy;
-    if (dom.exportConfirm) dom.exportConfirm.textContent = busy ? '渲染中...' : '渲染';
+    if (dom.exportConfirm) dom.exportConfirm.textContent = busy ? t('common.rendering') : t('common.render');
 }
 
 function closeExportModal() {
@@ -3593,11 +4471,11 @@ function closeExportModal() {
 
 function openExportModal(type) {
     if (!dom.exportModal || !dom.exportModalTitle) {
-        showError('导出弹窗未初始化');
+        showError(state.uiLanguage === 'en' ? 'Export dialog is not initialized' : '导出弹窗未初始化');
         return;
     }
     if (!app) {
-        showError('编辑器尚未初始化，无法导出');
+        showError(state.uiLanguage === 'en' ? 'Editor is not initialized, cannot export' : '编辑器尚未初始化，无法导出');
         return;
     }
 
@@ -3611,7 +4489,7 @@ function openExportModal(type) {
         dom.exportFov.value = Number(state.sceneCameraFov || 45).toFixed(3);
     }
 
-    dom.exportModalTitle.textContent = pendingExportType === 'video' ? '渲染视频' : '渲染图片';
+    dom.exportModalTitle.textContent = pendingExportType === 'video' ? t('modal.exportVideoTitle') : t('modal.exportImageTitle');
     updateExportTimelineHint(pendingExportType);
     setExportModalBusy(false);
     dom.exportModal.classList.remove('hidden');
@@ -3889,7 +4767,7 @@ async function onConfirmExportModal() {
 
     isExporting = true;
     setExportModalBusy(true);
-    showLoading(true, pendingExportType === 'video' ? '渲染视频中...' : '渲染图片中...', 10);
+    showLoading(true, pendingExportType === 'video' ? t('loading.renderingVideo') : t('loading.renderingImage'), 10);
 
     try {
         await withTemporaryCameraSequenceHidden(async () => {
@@ -4053,7 +4931,7 @@ async function saveScene() {
 
         for (let i = 0; i < models.length; i++) {
             const model = models[i];
-            showLoading(true, `保存资源中... (${i + 1}/${models.length})`, (i / Math.max(1, models.length)) * 90);
+            showLoading(true, t('loading.savingAssets', { current: i + 1, total: models.length }), (i / Math.max(1, models.length)) * 90);
 
             const sourceFile = model.sourceFile;
             if (!(sourceFile instanceof Blob)) {
@@ -4165,7 +5043,7 @@ async function saveScene() {
             assets,
         };
 
-        showLoading(true, '写入 scene.json ...', 95);
+        showLoading(true, t('loading.writingSceneJson'), 95);
         const sceneHandle = await folderHandle.getFileHandle('scene.json', { create: true });
         const sceneWritable = await sceneHandle.createWritable();
         await sceneWritable.write(JSON.stringify(manifest, null, 2));
@@ -4264,7 +5142,7 @@ async function loadScene() {
 
         for (let i = 0; i < assets.length; i++) {
             const asset = assets[i];
-            showLoading(true, `加载场景资源中... (${i + 1}/${assets.length})`, ((i + 1) / assets.length) * 100);
+            showLoading(true, t('loading.loadingSceneAssets', { current: i + 1, total: assets.length }), ((i + 1) / assets.length) * 100);
             try {
                 let file = null;
                 const sourcePath = asset.path || '';
@@ -4990,7 +5868,7 @@ function buildModelTrackLoopMarkers(model, startSec, endSec) {
         if (Math.abs(markerSec - clipDuration) <= epsilon) continue;
         const ratio = Math.min(1, Math.max(0, markerSec / clipDuration));
         markers.push(
-            `<span class="model-track-loop-marker" style="left:${(ratio * 100).toFixed(4)}%;" title="循环结束 ${markerSec.toFixed(3)}s"></span>`
+            `<span class="model-track-loop-marker" style="left:${(ratio * 100).toFixed(4)}%;" title="${state.uiLanguage === 'en' ? `Loop ends ${markerSec.toFixed(3)}s` : `循环结束 ${markerSec.toFixed(3)}s`}"></span>`
         );
     }
 
@@ -5011,7 +5889,7 @@ function buildModelTrackOverflowIndicator(model, startSec, endSec) {
         return '';
     }
 
-    return '<span class="model-track-overflow-indicator" title="模型动画播放时长超过当前 clip 时长">&gt;</span>';
+    return `<span class="model-track-overflow-indicator" title="${escapeHtml(state.uiLanguage === 'en' ? 'Model animation duration exceeds the current clip length' : '模型动画播放时长超过当前 clip 时长')}">&gt;</span>`;
 }
 
 function getModelTrackLoopMarkerDebugInfo() {
@@ -5236,7 +6114,7 @@ function renderTimelineTrack() {
     const html = [];
 
     if (!hasKeyframes) {
-        html.push('<div class="timeline-placeholder"><span class="placeholder-text">添加关键帧开始录制相机运动</span></div>');
+        html.push(`<div class="timeline-placeholder"><span class="placeholder-text">${escapeHtml(t('timeline.placeholder'))}</span></div>`);
     }
 
     const cursorRatio = state.selectedFrame / totalFrames;
@@ -5492,13 +6370,14 @@ function updatePlayButtonUI() {
     if (state.isPlaying) {
         dom.btnPlayCamera.classList.add('active');
         dom.btnPlayCamera.classList.add('is-playing');
-        dom.btnPlayCamera.setAttribute('title', '暂停相机动画');
-        dom.btnPlayCamera.setAttribute('aria-label', '暂停相机动画');
+        const pauseLabel = state.uiLanguage === 'en' ? 'Pause camera animation' : '暂停相机动画';
+        dom.btnPlayCamera.setAttribute('title', pauseLabel);
+        dom.btnPlayCamera.setAttribute('aria-label', pauseLabel);
     } else {
         dom.btnPlayCamera.classList.remove('active');
         dom.btnPlayCamera.classList.remove('is-playing');
-        dom.btnPlayCamera.setAttribute('title', '播放相机动画');
-        dom.btnPlayCamera.setAttribute('aria-label', '播放相机动画');
+        dom.btnPlayCamera.setAttribute('title', t('timeline.playCamera'));
+        dom.btnPlayCamera.setAttribute('aria-label', t('timeline.playCamera'));
     }
 }
 
@@ -6058,6 +6937,7 @@ function initEventListeners() {
     dom.btnRenderVideo?.addEventListener('click', () => openExportModal('video'));
     dom.btnRenderImage?.addEventListener('click', () => openExportModal('image'));
     dom.btnThemeToggle?.addEventListener('click', toggleTheme);
+    dom.btnLanguageToggle?.addEventListener('click', toggleLanguage);
     dom.btnClearScreen?.addEventListener('click', (e) => {
         e.preventDefault();
         toggleClearScreenMode();
@@ -6093,7 +6973,7 @@ function initEventListeners() {
                 } else {
                     console.warn(`[Editor ${state.VERSION}] Failed to load model:`, file.name);
                 }
-                showLoading(true, `加载模型中... (${i + 1}/${files.length})`, ((i + 1) / files.length) * 100);
+                showLoading(true, t('loading.loadingModel', { current: i + 1, total: files.length }), ((i + 1) / files.length) * 100);
             }
             showLoading(false);
             // 清空 input 以便重复选择同一文件
@@ -6343,6 +7223,7 @@ async function init() {
     if (dom.versionLabel) {
         dom.versionLabel.textContent = state.VERSION;
     }
+    initLanguage();
     initTheme();
     initializeAgentWorkbench();
     syncClearScreenState();
