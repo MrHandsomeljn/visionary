@@ -81,6 +81,77 @@ After successful startup, visit the following address to view the example:
 
 Feel free to try all our [demos](/demo/).
 
+### 2.1 LAN Access and WebGPU Trust
+
+The dev server now listens on `0.0.0.0` by default, so other devices on the same LAN can open the project with:
+
+```text
+http://<your-lan-ip>:3000/
+```
+
+However, WebGPU features such as the editor are usually only reliable on:
+
+- `http://localhost:3000`
+- or a trusted `https://...` origin
+
+If a remote device opens `http://<your-lan-ip>:3000` and WebGPU is unavailable, use local HTTPS development:
+
+1. After `npm install`, the project will only check whether local HTTPS dev is ready. It will not install or trust certificates automatically.
+2. On Windows, if `mkcert` is missing, install it with:
+
+```powershell
+winget install FiloSottile.mkcert
+```
+
+3. Run the project helper:
+
+```bash
+npm run dev:https:setup
+```
+
+This command will:
+
+- run `mkcert -install`
+- generate `certs/dev-server-cert.pem` and `certs/dev-server-key.pem`
+- include `localhost`, the current hostname, and the current LAN IPv4 addresses
+- create `.env.local` if it does not already exist
+
+4. If you prefer to do it manually, the equivalent first step is:
+
+```bash
+mkcert -install
+```
+
+5. A manual certificate example:
+
+```bash
+mkcert -key-file certs/dev-server-key.pem -cert-file certs/dev-server-cert.pem localhost 127.0.0.1 ::1 192.168.1.10
+```
+
+Replace `192.168.1.10` with the actual LAN IP of the machine running the dev server.
+
+6. Manual `.env.local` example:
+
+```bash
+VISIONARY_DEV_HTTPS=1
+VISIONARY_DEV_CERT_FILE=certs/dev-server-cert.pem
+VISIONARY_DEV_KEY_FILE=certs/dev-server-key.pem
+```
+
+7. Restart `npm run dev`, then open:
+
+```text
+https://<your-lan-ip>:3000/
+```
+
+8. Trust steps for other LAN devices:
+
+- Export the local root CA from the machine that ran `mkcert -install`.
+- Install that root CA into the operating system/browser trust store of every client device that will open the HTTPS LAN URL.
+- Then reopen `https://<your-lan-ip>:3000/`.
+
+Without that trust step, the certificate will still be treated as unsafe on remote devices, and WebGPU may remain unavailable.
+
 ### 3. Model Assets
 
 ![Teaser](assets/examples.PNG)

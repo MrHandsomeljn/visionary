@@ -23,6 +23,8 @@ public/ort/
 .idea/
 .vscode/
 .codex/
+.agents/
+.trellis/
 
 # @kangan npm run build
 dist/
@@ -42,6 +44,10 @@ src/VisionaryCore/
 datasets/
 *.tgz
 package-lock.json
+certs/*.pem
+certs/*.key
+.env.local
+.visionary-projects/
 
 # models/
 模型/

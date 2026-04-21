@@ -181,6 +181,7 @@ export class EditorApp {
   private meshRenderer: THREE.WebGPURenderer | null = null;
   private meshScene: THREE.Scene | null = null;
   private gizmoOverlayScene: THREE.Scene | null = null;
+  private editorHelperOverlayScene: THREE.Scene | null = null;
   private meshCamera: THREE.PerspectiveCamera | null = null;
   private fusedRenderer: GaussianThreeJSRenderer | null = null;
   private cameraPreviewCanvas: HTMLCanvasElement | null = null;
@@ -195,7 +196,9 @@ export class EditorApp {
   private cameraPreviewEnvMap: THREE.Texture | null = null;
   private cameraPreviewBackground: THREE.Texture | null = null;
   private cameraPreviewGaussianSignature = "";
-  private previewEditorHelperVisibilityCache: Array<{ object: THREE.Object3D; visible: boolean }> = [];
+  private cameraPreviewResizeSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  private cameraPreviewResizeSyncDueAt = 0;
+  private cameraPreviewResizePending = false;
   private gizmoManager: GizmoManager | null = null;
   private meshRenderAnimationId = 0;
   private fusionLastTime = performance.now();
@@ -222,6 +225,7 @@ export class EditorApp {
   private cameraSequenceDisplayScale: number = 1.0;
   private cameraSequenceBaseFrustumLength: number | null = null;
   private cameraSequenceEditEnabled: boolean = false;
+  private cameraSequenceInteractionEnabled: boolean = true;
   private cameraSequenceHighlightedFrame: number | null = null;
   private selectedCameraSequenceFrame: number | null = null;
   private cameraSequenceGroup: THREE.Group | null = null;
@@ -472,6 +476,7 @@ export class EditorApp {
 
     this.meshScene = new THREE.Scene();
     this.gizmoOverlayScene = new THREE.Scene();
+    this.editorHelperOverlayScene = new THREE.Scene();
     this.meshCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000);
     this.meshCamera.matrixAutoUpdate = true;
 
@@ -575,9 +580,7 @@ export class EditorApp {
           this.syncGaussianRendererModelTimelineState(this.fusedRenderer);
 
           await this.fusedRenderer.updateDynamicModels(this.meshCamera, (now - this.fusionStartTime) / 500.0);
-          if (this.gizmoOverlayScene) {
-            this.fusedRenderer.renderOverlayScene(this.gizmoOverlayScene, this.meshCamera);
-          }
+          this.renderViewportOverlayWithFusedRenderer();
           this.fusedRenderer.onBeforeRender(this.meshRenderer, this.meshScene, this.meshCamera);
           this.fusedRenderer.renderThreeScene(this.meshCamera);
           const drew = this.fusedRenderer.drawSplats(this.meshRenderer, this.meshScene, this.meshCamera);
@@ -605,8 +608,28 @@ export class EditorApp {
     }
   }
 
+  private getViewportOverlayScenes(): THREE.Scene[] {
+    const scenes: THREE.Scene[] = [];
+    if (this.gizmoOverlayScene) {
+      scenes.push(this.gizmoOverlayScene);
+    }
+    if (this.editorHelperOverlayScene) {
+      scenes.push(this.editorHelperOverlayScene);
+    }
+    return scenes;
+  }
+
+  private renderViewportOverlayWithFusedRenderer(): void {
+    if (!this.fusedRenderer || !this.meshCamera) return;
+    for (const scene of this.getViewportOverlayScenes()) {
+      this.fusedRenderer.renderOverlayScene(scene, this.meshCamera);
+    }
+  }
+
   private renderViewportOverlayDirect(): void {
-    if (!this.meshRenderer || !this.gizmoOverlayScene || !this.meshCamera) return;
+    if (!this.meshRenderer || !this.meshCamera) return;
+    const scenes = this.getViewportOverlayScenes();
+    if (scenes.length === 0) return;
     const renderer = this.meshRenderer as THREE.WebGPURenderer & {
       autoClear?: boolean;
       clearDepth?: () => void;
@@ -615,8 +638,10 @@ export class EditorApp {
     if (typeof previousAutoClear === "boolean") {
       renderer.autoClear = false;
     }
-    renderer.clearDepth?.();
-    renderer.render(this.gizmoOverlayScene, this.meshCamera);
+    for (const scene of scenes) {
+      renderer.clearDepth?.();
+      renderer.render(scene, this.meshCamera);
+    }
     if (typeof previousAutoClear === "boolean") {
       renderer.autoClear = previousAutoClear;
     }
@@ -755,6 +780,34 @@ export class EditorApp {
     this.cameraPreviewFusedRenderer?.onResize(width, height, false);
   }
 
+  private scheduleCameraPreviewResizeSync(delayMs = 80): void {
+    this.cameraPreviewResizePending = true;
+    const normalizedDelay = Math.max(0, delayMs);
+    const nextDueAt = performance.now() + normalizedDelay;
+    if (
+      this.cameraPreviewResizeSyncTimer !== null &&
+      this.cameraPreviewResizeSyncDueAt > 0 &&
+      this.cameraPreviewResizeSyncDueAt <= nextDueAt
+    ) {
+      return;
+    }
+    if (this.cameraPreviewResizeSyncTimer !== null) {
+      clearTimeout(this.cameraPreviewResizeSyncTimer);
+    }
+    this.cameraPreviewResizeSyncDueAt = nextDueAt;
+    this.cameraPreviewResizeSyncTimer = setTimeout(() => {
+      this.cameraPreviewResizeSyncTimer = null;
+      this.cameraPreviewResizeSyncDueAt = 0;
+      this.cameraPreviewResizePending = false;
+      this.syncCameraPreviewCanvasSize();
+    }, normalizedDelay);
+  }
+
+  requestCameraPreviewResizeSync(delayMs = 80): boolean {
+    this.scheduleCameraPreviewResizeSync(delayMs);
+    return true;
+  }
+
   private updateCameraPreviewCameraFromPose(): void {
     if (!this.cameraPreviewCamera || !this.cameraPreviewPose) return;
     const pose = this.cameraPreviewPose;
@@ -784,23 +837,6 @@ export class EditorApp {
     this.cameraPreviewCamera.updateMatrixWorld(true);
   }
 
-  private hideEditorHelpersForPreview(scene: THREE.Scene): void {
-    this.previewEditorHelperVisibilityCache.length = 0;
-    scene.traverse((object) => {
-      if (object.userData && object.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY]) {
-        this.previewEditorHelperVisibilityCache.push({ object, visible: object.visible });
-        object.visible = false;
-      }
-    });
-  }
-
-  private restoreEditorHelpersForPreview(): void {
-    for (const entry of this.previewEditorHelperVisibilityCache) {
-      entry.object.visible = entry.visible;
-    }
-    this.previewEditorHelperVisibilityCache.length = 0;
-  }
-
   private async renderCameraPreview(timeValue: number): Promise<void> {
     if (!this.cameraPreviewVisible || !this.meshScene || !this.cameraPreviewCanvas || !this.cameraPreviewPose) return;
     const ready = await this.ensureCameraPreviewRenderer();
@@ -808,9 +844,12 @@ export class EditorApp {
     const rect = this.cameraPreviewCanvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
 
-    this.syncCameraPreviewCanvasSize();
+    if (this.cameraPreviewResizePending) {
+      this.scheduleCameraPreviewResizeSync();
+    } else {
+      this.syncCameraPreviewCanvasSize();
+    }
     this.updateCameraPreviewCameraFromPose();
-    this.hideEditorHelpersForPreview(this.meshScene);
 
     try {
       if (this.cameraPreviewOriginalEnvMap === null) {
@@ -841,7 +880,6 @@ export class EditorApp {
         this.meshScene.environment = this.cameraPreviewOriginalEnvMap;
         this.meshScene.background = this.cameraPreviewOriginalBackground;
       }
-      this.restoreEditorHelpersForPreview();
     }
   }
 
@@ -1089,6 +1127,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const selectionKind = this.getViewportGizmoSelectionKind();
     if (selectionKind === "camera") {
       const cameraTarget = this.getSelectedCameraSequenceTarget();
+      this.gizmoManager.setSpace("local");
       this.gizmoManager.setPivotMode("custom");
       if (cameraTarget) {
         const cameraOrigin = new THREE.Vector3();
@@ -1097,7 +1136,12 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       }
       this.gizmoManager.setTarget(cameraTarget);
       const cameraModeAllowed = this.viewportGizmoMode === "translate" || this.viewportGizmoMode === "rotate";
-      this.gizmoManager.setEnabled(Boolean(cameraTarget) && this.viewportGizmoEnabled && cameraModeAllowed);
+      this.gizmoManager.setEnabled(
+        Boolean(cameraTarget) &&
+        this.viewportGizmoEnabled &&
+        cameraModeAllowed &&
+        this.cameraSequenceInteractionEnabled
+      );
       if (cameraTarget && this.viewportGizmoEnabled && cameraModeAllowed) {
         this.gizmoManager.setMode(this.viewportGizmoMode);
       }
@@ -1236,7 +1280,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   /**
    * Load a model file
    */
-  async loadModel(file: File, options: { sourcePath?: string } = {}): Promise<EditorModel | null> {
+  async loadModel(file: File, options: { sourcePath?: string; suppressLoadingOverlay?: boolean } = {}): Promise<EditorModel | null> {
     console.log(`[EditorApp ${this.VERSION}] ===== loadModel START =====`);
     console.log(`[EditorApp ${this.VERSION}] File:`, file.name, file.size, 'bytes', file.type);
 
@@ -1245,7 +1289,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       return null;
     }
 
-    this.showLoading(true, `Loading ${file.name}...`, 0);
+    const shouldManageLoadingOverlay = options.suppressLoadingOverlay !== true;
+    if (shouldManageLoadingOverlay) {
+      this.showLoading(true, `Loading ${file.name}...`, 0);
+    }
 
     try {
       const lowerName = file.name.toLowerCase();
@@ -1290,7 +1337,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         const loaded = await defaultLoader.loadFile(file, {
           isGaussian: false,
           onProgress: (progress) => {
-            this.showLoading(true, progress.stage, Math.round(progress.progress * 100));
+            if (shouldManageLoadingOverlay) {
+              this.showLoading(true, progress.stage, Math.round(progress.progress * 100));
+            }
           }
         });
         if (!isThreeJSDataSource(loaded)) {
@@ -1403,7 +1452,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         }
       }
 
-      this.showLoading(false);
+      if (shouldManageLoadingOverlay) {
+        this.showLoading(false);
+      }
       this.notifyModelsChanged();
 
       console.log(`[EditorApp ${this.VERSION}] ===== loadModel END =====`);
@@ -1412,7 +1463,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       return editorModel;
 
     } catch (error) {
-      this.showLoading(false);
+      if (shouldManageLoadingOverlay) {
+        this.showLoading(false);
+      }
       console.error(`[EditorApp ${this.VERSION}] ===== loadModel FAILED =====`);
       console.error(`[EditorApp ${this.VERSION}] Error:`, error);
       alert(`Failed to load model: ${error instanceof Error ? error.message : String(error)}`);
@@ -1672,6 +1725,14 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     return this.editorModels.get(id) || null;
   }
 
+  /**
+   * Expose the shared model manager so SceneFS restore paths can
+   * apply transforms after batch scene loading.
+   */
+  getModelManager(): ModelManager {
+    return this.modelManager;
+  }
+
   setSelectedModel(id: string | null): boolean {
     if (id && !this.editorModels.has(id)) {
       return false;
@@ -1719,6 +1780,20 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
   setCameraSequenceEditEnabled(enabled: boolean): boolean {
     this.cameraSequenceEditEnabled = !!enabled;
+    if (!this.cameraSequenceEditEnabled) {
+      this.gizmoManager?.cancelInteraction?.();
+      this.setViewportCameraInputEnabled(true);
+    }
+    this.syncViewportGizmoTarget();
+    return true;
+  }
+
+  setCameraSequenceInteractionEnabled(enabled: boolean): boolean {
+    this.cameraSequenceInteractionEnabled = !!enabled;
+    if (!this.cameraSequenceInteractionEnabled) {
+      this.gizmoManager?.cancelInteraction?.();
+      this.setViewportCameraInputEnabled(true);
+    }
     this.syncViewportGizmoTarget();
     return true;
   }
@@ -2482,6 +2557,12 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   async attachCameraPreviewCanvas(canvas: HTMLCanvasElement | null): Promise<boolean> {
     this.cameraPreviewCanvas = canvas;
     if (!canvas) {
+      if (this.cameraPreviewResizeSyncTimer !== null) {
+        clearTimeout(this.cameraPreviewResizeSyncTimer);
+        this.cameraPreviewResizeSyncTimer = null;
+      }
+      this.cameraPreviewResizeSyncDueAt = 0;
+      this.cameraPreviewResizePending = false;
       this.disposeCameraPreviewRenderer();
       return true;
     }
@@ -2506,6 +2587,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       this.cameraPreviewCamera.aspect = safe;
       this.cameraPreviewCamera.updateProjectionMatrix();
     }
+    this.scheduleCameraPreviewResizeSync(0);
     return true;
   }
 
@@ -2560,7 +2642,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     selectedFrame?: number | null,
     sampledTrajectory?: EditorCameraTrajectoryPoint[]
   ): boolean {
-    if (!this.meshScene) return false;
+    if (!this.editorHelperOverlayScene) return false;
     const group = this.ensureCameraSequenceGroup();
     if (!group) return false;
     group.visible = this.cameraSequenceVisible;
@@ -2689,16 +2771,20 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   }
 
   private ensureCameraSequenceGroup(): THREE.Group | null {
-    if (!this.meshScene) return null;
-    if (this.cameraSequenceGroup && this.cameraSequenceGroup.parent === this.meshScene) {
+    if (!this.editorHelperOverlayScene) return null;
+    if (this.cameraSequenceGroup && this.cameraSequenceGroup.parent === this.editorHelperOverlayScene) {
       return this.cameraSequenceGroup;
+    }
+
+    if (this.cameraSequenceGroup?.parent) {
+      this.cameraSequenceGroup.parent.remove(this.cameraSequenceGroup);
     }
 
     const group = new THREE.Group();
     group.name = "EditorCameraSequence";
     group.visible = this.cameraSequenceVisible;
     group.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
-    this.meshScene.add(group);
+    this.editorHelperOverlayScene.add(group);
     this.cameraSequenceGroup = group;
     return group;
   }
@@ -2954,7 +3040,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
   private updateCameraSequenceCurrentMarkerFromPreviewPose(): void {
     if (!this.cameraSequenceCurrentMarker) return;
-    if (!this.cameraPreviewPose || !this.cameraSequenceEditEnabled) {
+    if (!this.cameraPreviewPose || this.cameraSequenceHelperTargets.size === 0) {
       this.cameraSequenceCurrentMarker.visible = false;
       return;
     }
@@ -2969,7 +3055,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       Number(this.cameraPreviewPose.rotation.y) || 0,
       Number(this.cameraPreviewPose.rotation.z) || 0,
       Number(this.cameraPreviewPose.rotation.w) || 1
-    );
+    ).invert();
     this.cameraSequenceCurrentMarker.userData.cameraFovDegrees = Number(this.cameraPreviewPose.fovDegrees) || 45;
     this.cameraSequenceCurrentMarker.updateMatrixWorld(true);
   }
@@ -3131,7 +3217,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     }
     this.gizmoManager?.onResize();
     this.updateCameraSequenceLineMaterialResolution();
-    this.syncCameraPreviewCanvasSize();
+    this.scheduleCameraPreviewResizeSync(0);
   }
 
   /**
@@ -3188,8 +3274,8 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     this.stopMeshRenderLoop();
     this.clearAllModels();
     this.clearCameraSequenceGroupContents();
-    if (this.cameraSequenceGroup && this.meshScene) {
-      this.meshScene.remove(this.cameraSequenceGroup);
+    if (this.cameraSequenceGroup?.parent) {
+      this.cameraSequenceGroup.parent.remove(this.cameraSequenceGroup);
     }
     this.cameraSequenceGroup = null;
     this.cameraSequenceCurrentMarker = null;
@@ -3202,6 +3288,12 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       this.meshRenderer.dispose();
     }
     this.disposeCameraPreviewRenderer();
+    if (this.cameraPreviewResizeSyncTimer !== null) {
+      clearTimeout(this.cameraPreviewResizeSyncTimer);
+      this.cameraPreviewResizeSyncTimer = null;
+    }
+    this.cameraPreviewResizeSyncDueAt = 0;
+    this.cameraPreviewResizePending = false;
     this.gizmoManager?.dispose();
     if (this.meshCanvas && this.meshCanvas !== this.canvas && this.meshCanvas.parentElement) {
       this.meshCanvas.parentElement.removeChild(this.meshCanvas);
@@ -3212,6 +3304,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     this.meshRenderer = null;
     this.meshScene = null;
     this.gizmoOverlayScene = null;
+    this.editorHelperOverlayScene = null;
     this.meshCamera = null;
     this.meshCanvas = null;
     this.gizmoManager = null;
@@ -3222,6 +3315,3 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
 
 // Create global editor instance
 export const editorApp = new EditorApp();
-
-
-

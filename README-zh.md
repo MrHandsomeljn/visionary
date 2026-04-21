@@ -77,6 +77,77 @@ npm run dev
 
 其他示例详见[demo](/demo/).
 
+### 2.1 局域网访问与 WebGPU 授信
+
+现在开发服务器默认监听 `0.0.0.0`，同一局域网内的其他设备可以直接访问：
+
+```text
+http://<你的局域网IP>:3000/
+```
+
+但像 editor 这样的 WebGPU 功能，通常只会在以下来源上稳定可用：
+
+- `http://localhost:3000`
+- 或受信任的 `https://...` 地址
+
+如果局域网设备通过 `http://<你的局域网IP>:3000` 打开后 WebGPU 不可用，请改用本地 HTTPS 开发模式：
+
+1. 执行 `npm install` 之后，项目只会检查本地 HTTPS 开发环境是否就绪，不会自动安装 `mkcert` 或自动授信证书。
+2. Windows 下如果缺少 `mkcert`，建议先执行：
+
+```powershell
+winget install FiloSottile.mkcert
+```
+
+3. 然后运行项目提供的辅助命令：
+
+```bash
+npm run dev:https:setup
+```
+
+这个命令会自动：
+
+- 执行 `mkcert -install`
+- 生成 `certs/dev-server-cert.pem` 和 `certs/dev-server-key.pem`
+- 自动包含 `localhost`、当前主机名和当前局域网 IPv4 地址
+- 如果仓库根目录还没有 `.env.local`，则自动创建
+
+4. 如果你想手动执行，第一步等价于：
+
+```bash
+mkcert -install
+```
+
+5. 手动生成证书的示例：
+
+```bash
+mkcert -key-file certs/dev-server-key.pem -cert-file certs/dev-server-cert.pem localhost 127.0.0.1 ::1 192.168.1.10
+```
+
+请把 `192.168.1.10` 替换成实际运行开发服务器的那台机器的局域网 IP。
+
+6. 手动创建 `.env.local` 的示例：
+
+```bash
+VISIONARY_DEV_HTTPS=1
+VISIONARY_DEV_CERT_FILE=certs/dev-server-cert.pem
+VISIONARY_DEV_KEY_FILE=certs/dev-server-key.pem
+```
+
+7. 重启 `npm run dev`，然后让局域网设备访问：
+
+```text
+https://<你的局域网IP>:3000/
+```
+
+8. 访问端设备的授信步骤：
+
+- 从运行 `mkcert -install` 的那台机器导出本地根证书 CA。
+- 在每一台需要通过局域网 HTTPS 打开页面的客户端机器上，把这个根证书导入并安装到系统或浏览器的受信任证书列表中。
+- 完成后重新打开 `https://<你的局域网IP>:3000/`。
+
+如果不做这一步，远端设备仍会把这个证书视为不安全，WebGPU 也可能依然不可用。
+
 ### 3. 模型资产
 ![Teaser](assets/examples.PNG)
 ![Teaser](assets/examples2.PNG)

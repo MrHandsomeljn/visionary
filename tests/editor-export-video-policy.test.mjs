@@ -1,0 +1,100 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+test('export modal exposes video aspect, RGB/depth/normal modes, and lightweight progress', () => {
+    const html = readFileSync(new URL('../public/editor.html', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+
+    assert.match(html, /id="exportAspectRatioRow"[\s\S]*id="exportAspectRatio"/);
+    assert.match(html, /data-i18n="modal\.aspectRatio"/);
+    assert.match(html, /id="exportVideoSpeedRow"[\s\S]*id="exportVideoSpeed"/);
+    assert.match(html, /data-i18n="modal\.playbackSpeed"/);
+    assert.match(html, /id="exportVideoFpsRow"[\s\S]*id="exportVideoFps"/);
+    assert.match(html, /data-i18n="modal\.exportFps"/);
+    assert.match(html, /value="color" data-i18n="modal\.exportRenderModes\.rgb">彩色图/);
+    assert.match(html, /value="depth" data-i18n="modal\.exportRenderModes\.depth">深度图/);
+    assert.match(html, /value="normal" data-i18n="modal\.exportRenderModes\.normal">法向图/);
+    assert.match(html, /id="exportProgress" class="export-progress hidden"/);
+    assert.match(html, /id="exportProgressFill" class="export-progress-fill"/);
+    assert.match(html, /id="exportProgressText" class="export-progress-text" data-i18n="modal\.exportProgressIdle"/);
+
+    assert.match(css, /\.export-progress\s*\{/);
+    assert.match(css, /\.export-progress-fill\s*\{[\s\S]*transition:\s*width 120ms ease;/);
+    assert.match(css, /\.export-form-row\.hidden\s*\{\s*display:\s*none;\s*\}/);
+    assert.match(css, /\.export-form-row select option\s*\{[\s\S]*background:\s*var\(--panel-bg\);[\s\S]*color:\s*var\(--text-primary\);[\s\S]*\}/);
+    assert.match(css, /body\.theme-light \.export-form-row select option\s*\{[\s\S]*background:\s*#ffffff;[\s\S]*color:\s*#1f2937;[\s\S]*\}/);
+});
+
+test('video export hides FOV, uses selected camera aspect, and does not pass modal FOV override', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(source, /exportAspectRatio:\s*document\.getElementById\('exportAspectRatio'\)/);
+    assert.match(source, /exportVideoSpeed:\s*document\.getElementById\('exportVideoSpeed'\)/);
+    assert.match(source, /exportVideoFps:\s*document\.getElementById\('exportVideoFps'\)/);
+    assert.match(source, /dom\.exportAspectRatioRow\?\.classList\.toggle\('hidden', !isVideo\)/);
+    assert.match(source, /if \(dom\.exportAspectRatioRow\) dom\.exportAspectRatioRow\.hidden = !isVideo/);
+    assert.match(source, /dom\.exportVideoSpeedRow\?\.classList\.toggle\('hidden', !isVideo\)/);
+    assert.match(source, /dom\.exportVideoFpsRow\?\.classList\.toggle\('hidden', !isVideo\)/);
+    assert.match(source, /dom\.exportFovRow\?\.classList\.toggle\('hidden', isVideo\)/);
+    assert.match(source, /if \(dom\.exportFovRow\) dom\.exportFovRow\.hidden = isVideo/);
+    assert.match(source, /const fov = isVideo \? null : clampSceneFov\(dom\.exportFov\?\.value\)/);
+    assert.match(source, /buildExportResolutionOptions\(getSelectedExportAspectOption\(\)\)/);
+    assert.match(source, /deriveResolutionForAspect\(preset, aspectOption\.aspect\)/);
+    assert.match(source, /applySnapshotToRecordingCamera\(recordingCamera, cameraSnapshot, null, options\.aspect\)/);
+    assert.doesNotMatch(source, /buildExportTimelineController\(recordingCamera,\s*options\.fov\)/);
+});
+
+test('video export can override timeline FPS and playback speed', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(source, /function syncExportVideoTimingControls\(\)/);
+    assert.match(source, /dom\.exportVideoSpeed\.value = String\(Number\(state\.timelinePlaybackSpeed \|\| 1\)\)/);
+    assert.match(source, /dom\.exportVideoFps\.value = String\(Math\.max\(1, Number\(state\.timelineFps \|\| EXPORT_FALLBACK_FPS\)\)\)/);
+    assert.match(source, /const fps = isVideo \? clampExportFps\(dom\.exportVideoFps\?\.value\) : null/);
+    assert.match(source, /const playbackSpeed = isVideo \? clampExportPlaybackSpeed\(dom\.exportVideoSpeed\?\.value\) : null/);
+    assert.match(source, /fps,\s*playbackSpeed,/);
+    assert.match(source, /const exportFps = Math\.max\(1, Number\(options\.fps \|\| state\.timelineFps \|\| EXPORT_FALLBACK_FPS\)\)/);
+    assert.match(source, /const playbackSpeed = Math\.max\(0\.01, Number\(options\.playbackSpeed \|\| 1\)\)/);
+    assert.match(source, /const totalFrames = Math\.max\(1, Math\.round\(exportDurationSec \* exportFps\) \+ 1\)/);
+    assert.match(source, /const sourceTimeSec = Math\.min\(sourceDurationSec, \(safeFrame \/ exportFps\) \* playbackSpeed\)/);
+    assert.match(source, /fps: options\.fps,\s*playbackSpeed: options\.playbackSpeed,/);
+    assert.match(source, /Math\.max\(0\.1, getExportVideoDurationSec\(options\.playbackSpeed\)\)/);
+    assert.match(source, /Math\.max\(1, Number\(options\.fps \|\| state\.timelineFps \|\| EXPORT_FALLBACK_FPS\)\)/);
+});
+
+test('video timeline export drives recording camera from timeline pose and updates progress', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(source, /function applyTimelinePoseToRecordingCamera\(recordingCamera, pose, options = \{\}\)/);
+    assert.match(source, /const c2w = invertUnitQuaternion\(pose\.rotation\);/);
+    assert.match(source, /const forward = rotateVectorByQuaternion\(\{ x: 0, y: 0, z: 1 \}, c2w\);/);
+    assert.match(source, /recordingCamera\.camera\.lookAt\(/);
+    assert.match(source, /recordingCamera\.camera\.fov = clampSceneFov\(pose\.fovDegrees\)/);
+    assert.match(source, /function buildExportTimelineController\(recordingCamera, options = \{\}\)/);
+    assert.match(source, /const sourceTimeSec = Math\.min\(sourceDurationSec, \(safeFrame \/ exportFps\) \* playbackSpeed\)/);
+    assert.match(source, /const pose = interpolateCameraPoseAt\(sourceTimeSec\)/);
+    assert.match(source, /options\.onProgress\?\.\(\(\(safeFrame \+ 1\) \/ totalFrames\) \* 100\)/);
+    assert.match(source, /function setExportProgress\(percent, visible = pendingExportType === 'video'\)/);
+    assert.match(source, /showLoading\(true, t\('loading\.renderingVideo'\), percent, \{ passive: true \}\)/);
+});
+
+test('export render mode labels are modal-specific RGB depth normal translations', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(source, /exportRenderModes:\s*\{[\s\S]*rgb: '彩色图'[\s\S]*depth: '深度图'[\s\S]*normal: '法向图'/);
+    assert.match(source, /exportRenderModes:\s*\{[\s\S]*rgb: 'RGB'[\s\S]*depth: 'Depth'[\s\S]*normal: 'Normal'/);
+    assert.match(source, /color: t\('modal\.exportRenderModes\.rgb'\)/);
+    assert.match(source, /if \(exportModeOptions\[0\]\) exportModeOptions\[0\]\.textContent = t\('modal\.exportRenderModes\.rgb'\)/);
+});
+
+test('video frame capture waits for WebGPU before copying and does not resize the main editor renderer', () => {
+    const recordingCamera = readFileSync(new URL('../src/exportMedia/RecordingCamera.ts', import.meta.url), 'utf8');
+    const recordingManager = readFileSync(new URL('../src/exportMedia/RecordingManager.ts', import.meta.url), 'utf8');
+
+    assert.match(recordingCamera, /if \(device && device\.queue\) \{\s*await device\.queue\.onSubmittedWorkDone\(\);\s*\}[\s\S]*const exportCanvas = document\.createElement\('canvas'\)/);
+    assert.doesNotMatch(recordingCamera, /exportCtx\.drawImage\(sourceCanvas, 0, 0, width, height\);[\s\S]*await device\.queue\.onSubmittedWorkDone\(\);/);
+    assert.doesNotMatch(recordingManager, /options\.mainRenderer\.setSize\(renderWidth, renderHeight, false\)/);
+    assert.doesNotMatch(recordingManager, /const renderer = options\.mainRenderer;[\s\S]*renderer\.setSize\(renderWidth, renderHeight, false\)/);
+    assert.match(recordingManager, /options\.recordingCamera\.renderer\.setSize\(renderWidth, renderHeight, false\)/);
+});

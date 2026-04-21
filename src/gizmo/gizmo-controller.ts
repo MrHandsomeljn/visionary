@@ -300,6 +300,9 @@ export class GizmoController {
    * 启用/禁用
    */
   setEnabled(enabled: boolean): void {
+    if (!enabled) {
+      this.cancelInteraction();
+    }
     this.transformControls.enabled = enabled;
     this.transformControls.getHelper().visible = enabled && Boolean(this.currentObject);
   }
@@ -309,6 +312,18 @@ export class GizmoController {
    */
   getEnabled(): boolean {
     return this.transformControls.enabled;
+  }
+
+  cancelInteraction(): void {
+    if (!this.isDragging) return;
+    this.isDragging = false;
+    if (this.options.mode !== 'translate') {
+      this.updatePivotProxyTransform();
+    }
+    this.changeStartSnapshot = null;
+    if (this.callbacks.onChangeEnd && this.currentObject) {
+      this.callbacks.onChangeEnd(this.createEvent('changeEnd'));
+    }
   }
 
   /**

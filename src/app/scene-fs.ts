@@ -56,13 +56,25 @@ const MODEL_TYPE_VALUES = [
   'fbx'
 ] as const satisfies readonly ModelType[];
 
-const isModelType = (value: string): value is ModelType => {
-  return (MODEL_TYPE_VALUES as readonly string[]).includes(value);
+const EXTENDED_MODEL_TYPE_VALUES = [
+  ...MODEL_TYPE_VALUES,
+  'glb',
+  'gltf',
+  'obj',
+  'stl'
+] as const;
+
+type ExtendedAssetModelType = typeof EXTENDED_MODEL_TYPE_VALUES[number];
+
+export type SceneAssetType = ExtendedAssetModelType | 'url';
+
+const isSceneAssetModelType = (value: string): value is ExtendedAssetModelType => {
+  return (EXTENDED_MODEL_TYPE_VALUES as readonly string[]).includes(value);
 };
 
 export interface AssetEntry {
   name: string;
-  type: AssetType;
+  type: SceneAssetType;
   path: string;                  // Root-relative path like "models/a/bunny.ply"
   dynamic?: boolean;             // ONNX: true = per-frame updates
   transform?: {
@@ -75,6 +87,31 @@ export interface AssetEntry {
   };
 }
 
+export interface WorkspaceAssetInput {
+  sourcePath: string;
+  content: string | Uint8Array | ArrayBuffer;
+  fileName?: string;
+}
+
+export interface WorkspaceAssetWriteResult {
+  sourcePath: string;
+  hash: string;
+  targetPath: string;
+  skipped: boolean;
+}
+
+export interface WorkspaceSnapshotSaveResult {
+  commitToken: string;
+  assetWrites: WorkspaceAssetWriteResult[];
+}
+
+export interface SceneLoadResult {
+  manifest: SceneManifest | null;
+  loadedAssetCount: number;
+  failedAssetCount: number;
+  totalAssetCount: number;
+}
+
 /**
  * Scene File System Manager
  * 
@@ -84,8 +121,22 @@ export interface AssetEntry {
 export class SceneFS {
   private rootHandle: FileSystemDirectoryHandle | null = null;
   private permissions: 'read' | 'readwrite' | null = null;
+  private pendingCommitToken: string | null = null;
   
   constructor() {}
+
+  private debugLog(message: string, details?: unknown): void {
+    if (details !== undefined) {
+      console.debug(`[SceneFS] ${message}`, details);
+      return;
+    }
+    console.debug(`[SceneFS] ${message}`);
+  }
+
+  attachWorkspace(handle: FileSystemDirectoryHandle, permission: 'read' | 'readwrite' = 'readwrite'): void {
+    this.rootHandle = handle;
+    this.permissions = permission;
+  }
 
   /**
    * Select root directory for read-only access
@@ -132,17 +183,58 @@ export class SceneFS {
   }
 
   /**
+   * Open current workspace with read-write permission
+   */
+  async openWorkspaceReadWrite(): Promise<void> {
+    await this.pickFolderWrite();
+  }
+
+  /**
+   * Get current workspace summary
+   */
+  getWorkspaceInfo(): { name: string | null; permission: 'read' | 'readwrite' | null; writable: boolean } {
+    return {
+      name: this.rootHandle?.name ?? null,
+      permission: this.permissions,
+      writable: this.permissions === 'readwrite' && this.rootHandle !== null
+    };
+  }
+
+  /**
+   * Get the currently attached workspace handle
+   */
+  getWorkspaceHandle(): FileSystemDirectoryHandle | null {
+    return this.rootHandle;
+  }
+
+  /**
+   * Check whether current workspace is writable
+   */
+  isWorkspaceWritable(): boolean {
+    return this.permissions === 'readwrite' && this.rootHandle !== null;
+  }
+
+  /**
    * Load scene from root directory or provided JSON data
    */
-  async loadScene(app: App, options?: { sceneData?: any }): Promise<any> {
+  async loadScene(app: App, options?: { sceneData?: any }): Promise<SceneLoadResult> {
     const sceneData = options?.sceneData;
 
     try {
       if (sceneData !== undefined) {
         console.log('SceneFS: Loading scene from provided data...');
-        await this.loadSceneDataIntoApp(app, sceneData);
+        const manifest = this.normalizeSceneManifest(sceneData);
+        if (!manifest) {
+          throw new Error('SceneFS: Unsupported scene data format. Expect scenes[] or assets[].');
+        }
+        const loadSummary = await this.loadSceneDataIntoApp(app, sceneData);
         console.log('SceneFS: Scene (provided data) loaded successfully');
-        return sceneData;
+        return {
+          manifest,
+          loadedAssetCount: loadSummary.loadedAssetCount,
+          failedAssetCount: loadSummary.failedAssetCount,
+          totalAssetCount: loadSummary.totalAssetCount,
+        };
       }
 
       if (!this.rootHandle) {
@@ -157,15 +249,26 @@ export class SceneFS {
         console.log('SceneFS: Detected unified scenes schema; loading per view');
         await this.loadScenesArrayIntoApp(app, raw as any);
         console.log('SceneFS: Scene (scenes[]) loaded successfully');
-        return raw;
+        const manifest = this.normalizeSceneManifest(raw);
+        return {
+          manifest,
+          loadedAssetCount: Array.isArray(manifest?.assets) ? manifest.assets.length : 0,
+          failedAssetCount: 0,
+          totalAssetCount: Array.isArray(manifest?.assets) ? manifest.assets.length : 0,
+        };
       }
 
       if (raw) {
         const normalizedManifest = this.normalizeSceneManifest(raw);
         if (normalizedManifest) {
-          await this.loadManifestIntoApp(app, normalizedManifest);
+          const loadSummary = await this.loadManifestIntoApp(app, normalizedManifest);
           console.log('SceneFS: Scene loaded successfully');
-          return raw;
+          return {
+            manifest: normalizedManifest,
+            loadedAssetCount: loadSummary.loadedAssetCount,
+            failedAssetCount: loadSummary.failedAssetCount,
+            totalAssetCount: loadSummary.totalAssetCount,
+          };
         }
       }
 
@@ -178,10 +281,15 @@ export class SceneFS {
       console.log(`SceneFS: Found scene manifest with ${manifest.assets.length} assets`);
 
       // Load manifest into app
-      await this.loadManifestIntoApp(app, manifest);
+      const loadSummary = await this.loadManifestIntoApp(app, manifest);
 
       console.log('SceneFS: Scene loaded successfully');
-      return manifest;
+      return {
+        manifest,
+        loadedAssetCount: loadSummary.loadedAssetCount,
+        failedAssetCount: loadSummary.failedAssetCount,
+        totalAssetCount: loadSummary.totalAssetCount,
+      };
     } catch (error) {
       console.error('SceneFS: Failed to load scene:', error);
       throw error;
@@ -327,14 +435,24 @@ export class SceneFS {
     }
   }
 
-  private async loadSceneDataIntoApp(app: App, data: any): Promise<void> {
+  private async loadSceneDataIntoApp(app: App, data: any): Promise<{
+    loadedAssetCount: number;
+    failedAssetCount: number;
+    totalAssetCount: number;
+  }> {
     if (!data || typeof data !== 'object') {
       throw new Error('SceneFS: Provided scene data is empty or invalid');
     }
 
     if (Array.isArray((data as any).scenes)) {
       await this.loadScenesArrayIntoApp(app, data as any);
-      return;
+      const manifest = this.normalizeSceneManifest(data);
+      const count = Array.isArray(manifest?.assets) ? manifest.assets.length : 0;
+      return {
+        loadedAssetCount: count,
+        failedAssetCount: 0,
+        totalAssetCount: count,
+      };
     }
 
     const manifest = this.normalizeSceneManifest(data);
@@ -342,7 +460,7 @@ export class SceneFS {
       throw new Error('SceneFS: Unsupported scene data format. Expect scenes[] or assets[].');
     }
 
-    await this.loadManifestIntoApp(app, manifest);
+    return this.loadManifestIntoApp(app, manifest);
   }
 
   private async loadModelFromUrl(app: App, sceneView: any, viewId: 'left' | 'right', source: string, meta: any): Promise<void> {
@@ -362,15 +480,6 @@ export class SceneFS {
     if (lower.endsWith('.onnx')) {
       if (typeof app.loadONNXModel === 'function') {
         await app.loadONNXModel(url, displayName ?? undefined, !(meta?.dynamic));
-        return;
-      }
-    } else if (lower.endsWith('.ply') || lower.endsWith('.glb') || lower.endsWith('.gltf')) {
-      if (typeof app.loadPLY === 'function') {
-        await app.loadPLY(url);
-        return;
-      }
-      if (typeof (app as any).loadSample === 'function') {
-        await (app as any).loadSample(url);
         return;
       }
     } else if (typeof (app as any).loadSample === 'function') {
@@ -421,7 +530,7 @@ export class SceneFS {
           }
 
           const typeValue = typeof m?.type === 'string' ? m.type.toLowerCase() : '';
-          const type: AssetType = isModelType(typeValue)
+          const type: SceneAssetType = isSceneAssetModelType(typeValue)
             ? typeValue
             : typeValue === 'url'
               ? 'url'
@@ -494,7 +603,7 @@ export class SceneFS {
         }
 
         const typeValue = typeof asset.type === 'string' ? asset.type.toLowerCase() : '';
-        const type: AssetType = isModelType(typeValue)
+        const type: SceneAssetType = isSceneAssetModelType(typeValue)
           ? typeValue
           : typeValue === 'url'
             ? 'url'
@@ -542,7 +651,10 @@ export class SceneFS {
   }
 
   private isHttpUrl(value: string): boolean {
-    return typeof value === 'string' && /^https?:\/\//i.test(value);
+    return typeof value === 'string' && (
+      /^https?:\/\//i.test(value)
+      || value.startsWith('/')
+    );
   }
 
   private async fetchFileFromUrl(url: string): Promise<File> {
@@ -602,21 +714,63 @@ export class SceneFS {
         await app.loadONNXModel(url, asset.name, !asset.dynamic);
         return;
       }
-    } else if (lower.endsWith('.ply') || lower.endsWith('.glb') || lower.endsWith('.gltf')) {
-      if (typeof app.loadPLY === 'function') {
-        await app.loadPLY(url);
-        return;
-      }
-      if (typeof (app as any).loadSample === 'function') {
-        await (app as any).loadSample(url);
-        return;
-      }
     } else if (typeof (app as any).loadSample === 'function') {
       await (app as any).loadSample(url);
       return;
     }
 
     throw new Error(`SceneFS: 无法通过 URL 加载资产 ${asset.name} (${url})`);
+  }
+
+  private async loadAssetIntoApp(app: App, asset: AssetEntry, file: File | null, source: string): Promise<void> {
+    let resolvedFile = file;
+    const loadSource = resolvedFile ?? source;
+
+    if (!resolvedFile && typeof source === 'string' && this.isHttpUrl(source) && asset.type !== 'onnx') {
+      resolvedFile = await this.fetchFileFromUrl(source);
+    }
+
+    if (asset.type === 'onnx') {
+      if (typeof app.loadONNXModel !== 'function') {
+        throw new Error(`SceneFS: 缺少 ONNX 加载接口 (${asset.name})`);
+      }
+      await app.loadONNXModel(loadSource as any, asset.name, !asset.dynamic);
+      return;
+    }
+
+    if (resolvedFile && typeof (app as any).loadModel === 'function') {
+      const normalizedFile = resolvedFile.name === asset.name
+        ? resolvedFile
+        : new File([resolvedFile], asset.name, {
+            type: resolvedFile.type || this.guessMimeType(asset.name),
+            lastModified: Date.now(),
+          });
+      const loaded = await (app as any).loadModel(normalizedFile, {
+        sourcePath: asset.path || asset.name,
+        suppressLoadingOverlay: true,
+      });
+      if (!loaded) {
+        throw new Error(`SceneFS: 编辑器未能加载资产 ${asset.name}`);
+      }
+      return;
+    }
+
+    if (typeof source === 'string' && source.length > 0 && typeof (app as any).loadSample === 'function') {
+      await (app as any).loadSample(source);
+      return;
+    }
+
+    if ((asset.type === 'ply' || asset.type === 'spz' || asset.type === 'ksplat' || asset.type === 'splat' || asset.type === 'sog' || asset.type === 'compressed.ply') && typeof (app as any).loadPLY === 'function') {
+      await (app as any).loadPLY(loadSource as any);
+      return;
+    }
+
+    if (asset.type === 'fbx' && typeof (app as any).loadFBX === 'function') {
+      await (app as any).loadFBX(loadSource as any);
+      return;
+    }
+
+    throw new Error(`SceneFS: 无法加载资产 ${asset.name} (${asset.type})`);
   }
 
   /**
@@ -736,7 +890,11 @@ export class SceneFS {
   /**
    * Load manifest into app instance
    */
-  private async loadManifestIntoApp(app: App, manifest: SceneManifest): Promise<void> {
+  private async loadManifestIntoApp(app: App, manifest: SceneManifest): Promise<{
+    loadedAssetCount: number;
+    failedAssetCount: number;
+    totalAssetCount: number;
+  }> {
     console.log('SceneFS: Loading manifest into app...');
     
     // Store model IDs before loading to track new additions
@@ -744,18 +902,21 @@ export class SceneFS {
     
     // First, restore environment settings
     if (manifest.env) {
-      if (manifest.env.gaussianScale !== undefined) {
+      if (manifest.env.gaussianScale !== undefined && typeof (app as any).setGaussianScale === 'function') {
         app.setGaussianScale(manifest.env.gaussianScale);
         console.log(`SceneFS: Set gaussian scale to ${manifest.env.gaussianScale}`);
       }
       
-      if (manifest.env.bgColor) {
+      if (manifest.env.bgColor && typeof (app as any).setBackgroundColor === 'function') {
         app.setBackgroundColor(manifest.env.bgColor);
         console.log(`SceneFS: Set background color to ${manifest.env.bgColor}`);
       }
     }
 
     // Load each asset
+    let loadedAssetCount = 0;
+    let failedAssetCount = 0;
+
     const loadPromises = manifest.assets.map(async (asset, index) => {
       try {
         console.log(`SceneFS: Loading asset ${index + 1}/${manifest.assets.length}: ${asset.name} (${asset.type})`);
@@ -765,7 +926,7 @@ export class SceneFS {
           if (!url) {
             throw new Error(`Invalid URL asset path for ${asset.name}`);
           }
-          await this.loadUrlAsset(app, url, asset);
+          await this.loadAssetIntoApp(app, asset, null, url);
         } else {
           let file: File | null = null;
           let loadFromUrlDirect = false;
@@ -782,40 +943,18 @@ export class SceneFS {
             }
           }
 
-          if (asset.type === 'onnx') {
-            if (loadFromUrlDirect && asset.extras?.urlFallback) {
-              console.log(`SceneFS: Loading ONNX asset from URL: ${asset.extras.urlFallback}`);
-              await app.loadONNXModel(asset.extras.urlFallback, asset.name, !asset.dynamic);
-            } else {
-              console.log(`SceneFS: Loading ONNX asset from File: ${asset.name}`);
-              await app.loadONNXModel(file as unknown as any, asset.name, !asset.dynamic);
-            }
-          } else if (asset.type === 'ply' || asset.type === 'fbx') {
-            if (loadFromUrlDirect && asset.extras?.urlFallback) {
-              console.log(`SceneFS: Loading ${asset.type.toUpperCase()} asset from URL: ${asset.extras.urlFallback}`);
-              if (asset.type === 'fbx' && typeof (app as any).loadFBX === 'function') {
-                await (app as any).loadFBX(asset.extras.urlFallback);
-              } else {
-                await app.loadPLY(asset.extras.urlFallback);
-              }
-            } else {
-              console.log(`SceneFS: Loading ${asset.type.toUpperCase()} asset from File: ${asset.name}`);
-              if (asset.type === 'fbx' && typeof (app as any).loadFBX === 'function') {
-                await (app as any).loadFBX(file);
-              } else {
-                await app.loadPLY(file as unknown as any, { debugLogging: true });
-              }
-            }
-          } else {
-            console.warn(`SceneFS: Unknown asset type: ${asset.type}`);
-            return;
-          }
+          const source = loadFromUrlDirect && asset.extras?.urlFallback
+            ? asset.extras.urlFallback
+            : asset.path;
+          await this.loadAssetIntoApp(app, asset, file, source);
         }
 
         console.log(`SceneFS: Successfully loaded ${asset.name}`);
+        loadedAssetCount += 1;
 
       } catch (error) {
         console.error(`SceneFS: Failed to load asset ${asset.name}:`, error);
+        failedAssetCount += 1;
         // Continue with other assets rather than failing completely
       }
     });
@@ -825,6 +964,12 @@ export class SceneFS {
     
     // Find newly loaded models and apply transforms
     await this.applyTransforms(app, manifest.assets, modelsBefore);
+
+    return {
+      loadedAssetCount,
+      failedAssetCount,
+      totalAssetCount: manifest.assets.length,
+    };
   }
 
   /**
@@ -1147,16 +1292,253 @@ export class SceneFS {
    * Write manifest to scene.json
    */
   private async writeManifest(manifest: SceneManifest): Promise<void> {
-    if (!this.rootHandle) throw new Error('No root handle available');
-    
-    const manifestJson = JSON.stringify(manifest, null, 2);
-    const fileHandle = await this.rootHandle.getFileHandle('scene.json', { create: true });
-    const writable = await fileHandle.createWritable();
-    
-    await writable.write(manifestJson);
-    await writable.close();
-    
+    await this.saveWorkspaceSnapshot(manifest);
     console.log('SceneFS: Wrote scene.json with', manifest.assets.length, 'assets');
+  }
+
+  /**
+   * Persist workspace snapshot with temp-then-commit semantics
+   */
+  async saveWorkspaceSnapshot(
+    snapshot: SceneManifest,
+    options?: { assets?: WorkspaceAssetInput[] }
+  ): Promise<WorkspaceSnapshotSaveResult> {
+    const manifestCopy = this.cloneManifest(snapshot);
+    this.debugLog('saveWorkspaceSnapshot:start', {
+      assetCount: manifestCopy.assets.length,
+      payloadAssetCount: Array.isArray(options?.assets) ? options.assets.length : 0,
+    });
+    const assetWrites = await this.applyAssetWritePlan(manifestCopy, options?.assets ?? []);
+    const commitToken = await this.writeTempSceneManifest(manifestCopy);
+    await this.commitSceneManifest(commitToken);
+    this.debugLog('saveWorkspaceSnapshot:complete', {
+      commitToken,
+      assetWriteCount: assetWrites.length,
+    });
+    return {
+      commitToken,
+      assetWrites
+    };
+  }
+
+  /**
+   * Write snapshot into scene.json.tmp
+   */
+  async writeTempSceneManifest(manifest: SceneManifest): Promise<string> {
+    if (!this.isWorkspaceWritable()) {
+      throw new Error('No writable workspace selected. Use openWorkspaceReadWrite() first.');
+    }
+    this.debugLog('writeTempSceneManifest:start', {
+      file: 'scene.json.tmp',
+      assetCount: manifest.assets.length,
+    });
+    await this.writeJSONToRoot('scene.json.tmp', manifest);
+    const token = this.createCommitToken(manifest);
+    this.pendingCommitToken = token;
+    this.debugLog('writeTempSceneManifest:complete', {
+      file: 'scene.json.tmp',
+      commitToken: token,
+    });
+    return token;
+  }
+
+  /**
+   * Commit scene.json.tmp into scene.json
+   */
+  async commitSceneManifest(commitToken: string): Promise<void> {
+    if (!this.isWorkspaceWritable()) {
+      throw new Error('No writable workspace selected. Use openWorkspaceReadWrite() first.');
+    }
+    if (!this.pendingCommitToken || commitToken !== this.pendingCommitToken) {
+      throw new Error('SceneFS: Refusing stale temp commit due to token mismatch');
+    }
+    this.debugLog('commitSceneManifest:start', {
+      from: 'scene.json.tmp',
+      to: 'scene.json',
+      commitToken,
+    });
+    const tmpManifest = await this.readJSON('scene.json.tmp');
+    await this.writeJSONToRoot('scene.json', tmpManifest);
+    this.pendingCommitToken = null;
+    this.debugLog('commitSceneManifest:complete', {
+      file: 'scene.json',
+      commitToken,
+    });
+  }
+
+  async writeJsonToRoot(fileName: string, data: any): Promise<void> {
+    if (!this.isWorkspaceWritable()) {
+      throw new Error('No writable workspace selected. Use openWorkspaceReadWrite() first.');
+    }
+    this.debugLog('writeJsonToRoot:start', { file: fileName });
+    await this.writeJSONToRoot(fileName, data);
+    this.debugLog('writeJsonToRoot:complete', { file: fileName });
+  }
+
+  async writeBinaryToRoot(relativePath: string, bytes: Uint8Array | ArrayBuffer): Promise<void> {
+    if (!this.isWorkspaceWritable()) {
+      throw new Error('No writable workspace selected. Use openWorkspaceReadWrite() first.');
+    }
+    const payload = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    this.debugLog('writeBinaryToRoot:start', {
+      file: relativePath,
+      bytes: payload.byteLength,
+    });
+    await this.writeBinary(relativePath, payload);
+    this.debugLog('writeBinaryToRoot:complete', {
+      file: relativePath,
+      bytes: payload.byteLength,
+    });
+  }
+
+  private createCommitToken(manifest: SceneManifest): string {
+    const basis = `${Date.now()}::${JSON.stringify(manifest)}`;
+    return this.computeAssetContentHash(basis);
+  }
+
+  private cloneManifest(manifest: SceneManifest): SceneManifest {
+    return JSON.parse(JSON.stringify(manifest)) as SceneManifest;
+  }
+
+  private async applyAssetWritePlan(
+    manifest: SceneManifest,
+    assets: WorkspaceAssetInput[]
+  ): Promise<WorkspaceAssetWriteResult[]> {
+    const results: WorkspaceAssetWriteResult[] = [];
+
+    for (const asset of assets) {
+      const bytes = this.toBytes(asset.content);
+      const hash = this.computeAssetContentHash(bytes);
+      const extension = this.extractExtension(asset.fileName ?? asset.sourcePath);
+      const targetPath = `assets/${hash}${extension ? `.${extension}` : ''}`;
+      this.debugLog('applyAssetWritePlan:materialize:start', {
+        sourcePath: asset.sourcePath,
+        targetPath,
+        bytes: bytes.byteLength,
+      });
+      const skipped = await this.writeBinaryIfMissing(targetPath, bytes);
+      this.debugLog('applyAssetWritePlan:materialize:complete', {
+        sourcePath: asset.sourcePath,
+        targetPath,
+        bytes: bytes.byteLength,
+        skipped,
+      });
+
+      for (const manifestAsset of manifest.assets) {
+        if (manifestAsset.path === asset.sourcePath) {
+          manifestAsset.path = targetPath;
+        }
+      }
+
+      results.push({
+        sourcePath: asset.sourcePath,
+        hash,
+        targetPath,
+        skipped
+      });
+    }
+
+    return results;
+  }
+
+  private toBytes(content: string | Uint8Array | ArrayBuffer): Uint8Array {
+    if (typeof content === 'string') {
+      return new TextEncoder().encode(content);
+    }
+    if (content instanceof Uint8Array) {
+      return content;
+    }
+    return new Uint8Array(content);
+  }
+
+  private extractExtension(path: string): string {
+    const fileName = path.split('/').filter(Boolean).pop() ?? '';
+    const dot = fileName.lastIndexOf('.');
+    if (dot < 0 || dot === fileName.length - 1) {
+      return 'bin';
+    }
+    return fileName.slice(dot + 1).toLowerCase();
+  }
+
+  private async writeBinaryIfMissing(relativePath: string, bytes: Uint8Array): Promise<boolean> {
+    const exists = await this.fileExists(relativePath);
+    if (exists) {
+      this.debugLog('writeBinaryIfMissing:skip-existing', {
+        file: relativePath,
+        bytes: bytes.byteLength,
+      });
+      return true;
+    }
+    await this.writeBinary(relativePath, bytes);
+    return false;
+  }
+
+  private async fileExists(relativePath: string): Promise<boolean> {
+    try {
+      const fileHandle = await this.getFileHandleByPath(relativePath, false);
+      await fileHandle.getFile();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async writeBinary(relativePath: string, bytes: Uint8Array): Promise<void> {
+    this.debugLog('writeBinary:start', {
+      file: relativePath,
+      bytes: bytes.byteLength,
+    });
+    const fileHandle = await this.getFileHandleByPath(relativePath, true);
+    const writable = await fileHandle.createWritable();
+    const payload = new Uint8Array(bytes.byteLength);
+    payload.set(bytes);
+    await writable.write(payload.buffer);
+    await writable.close();
+    this.debugLog('writeBinary:complete', {
+      file: relativePath,
+      bytes: bytes.byteLength,
+    });
+  }
+
+  private async getFileHandleByPath(
+    relativePath: string,
+    create: boolean
+  ): Promise<FileSystemFileHandle> {
+    if (!this.rootHandle) {
+      throw new Error('No root directory handle');
+    }
+    const parts = relativePath.split('/').filter((part) => part.length > 0);
+    if (parts.length === 0) {
+      throw new Error('Invalid relative file path');
+    }
+
+    let currentHandle: FileSystemDirectoryHandle = this.rootHandle;
+    for (let i = 0; i < parts.length - 1; i++) {
+      currentHandle = await currentHandle.getDirectoryHandle(parts[i], { create });
+    }
+
+    return currentHandle.getFileHandle(parts[parts.length - 1], { create });
+  }
+
+  /**
+   * Plan an asset content hash identifier (placeholder for incremental asset dedupe)
+   */
+  planAssetContentHash(seed: string): string {
+    return this.computeAssetContentHash(seed);
+  }
+
+  computeAssetContentHash(content: string | Uint8Array | ArrayBuffer): string {
+    const bytes = this.toBytes(content);
+    let hash = 0xcbf29ce484222325n;
+    const fnvPrime = 0x100000001b3n;
+    const mask = 0xffffffffffffffffn;
+
+    for (const byte of bytes) {
+      hash ^= BigInt(byte);
+      hash = (hash * fnvPrime) & mask;
+    }
+
+    return hash.toString(16).padStart(16, '0');
   }
   
   /**

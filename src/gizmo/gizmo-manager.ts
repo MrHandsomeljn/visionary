@@ -100,6 +100,10 @@ export class GizmoManager {
     return this.gizmoEnabled && this.gizmoController.getEnabled();
   }
 
+  cancelInteraction(): void {
+    this.gizmoController.cancelInteraction();
+  }
+
   /**
    * 设置空间模式
    */

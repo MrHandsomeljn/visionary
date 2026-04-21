@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visionary Editor 0.1.8</title>
+    <title data-i18n="editor.title">Visionary Editor 0.1.8</title>
     <link rel="stylesheet" href="./editor.css">
 </head>
 <body class="theme-light">
@@ -16,7 +16,7 @@
             <!-- Loading Overlay -->
             <div id="loadingOverlay" class="loading-overlay hidden">
                 <div class="spinner"></div>
-                <div class="loading-text">Loading...</div>
+                <div class="loading-text" data-i18n="canvas.loading">Loading...</div>
                 <div class="loading-progress">
                     <div class="progress-bar">
                         <div class="progress-fill" style="width: 0%"></div>
@@ -27,14 +27,14 @@
             <!-- WebGPU Not Supported -->
             <div id="noWebGPU" class="no-webgpu hidden">
                 <div class="no-webgpu-content">
-                    <h2>WebGPU Not Supported</h2>
-                    <p>This application requires WebGPU support.</p>
-                    <p>Please use one of the following browsers:</p>
+                    <h2 data-i18n="canvas.noWebgpuTitle">WebGPU Not Supported</h2>
+                    <p data-i18n="canvas.noWebgpuIntro">This application requires WebGPU support.</p>
+                    <p data-i18n="canvas.noWebgpuBrowserHint">Please use one of the following browsers:</p>
                     <ul>
-                        <li>Chrome/Edge 113 or later</li>
-                        <li>Firefox Nightly</li>
+                        <li data-i18n="canvas.noWebgpuBrowserChrome">Chrome/Edge 113 or later</li>
+                        <li data-i18n="canvas.noWebgpuBrowserFirefox">Firefox Nightly</li>
                     </ul>
-                    <a href="https://caniuse.com/webgpu" target="_blank" class="button button-primary">Check Browser Support</a>
+                    <a href="https://caniuse.com/webgpu" target="_blank" class="button button-primary" data-i18n="canvas.noWebgpuCheck">Check Browser Support</a>
                 </div>
             </div>
         </div>
@@ -44,10 +44,10 @@
             <!-- Middle Section: Three-Column Layout -->
             <div id="middle-section">
                 <div id="agent-workbench-shell">
-                    <aside id="agent-workbench" aria-label="Agent 工作台">
+                    <aside id="agent-workbench" aria-label="Agent 工作台" data-i18n-attrs="aria-label:agent.workbench">
                         <div class="agent-workbench-topbar">
-                            <div id="agentWorkflowTabs" class="agent-workflow-tabs" aria-label="Agent 流程">
-                                <button type="button" class="agent-workflow-tab active" data-workflow="scene-build" title="场景构建" aria-label="场景构建">
+                            <div id="agentWorkflowTabs" class="agent-workflow-tabs" aria-label="Agent 流程" data-i18n-attrs="aria-label:agent.workflowTabs">
+                                <button type="button" class="agent-workflow-tab active" data-workflow="scene-build" title="场景构建" aria-label="场景构建" data-i18n-attrs="title:agent.workflows.scene-build.title;aria-label:agent.workflows.scene-build.title">
                                     <span class="agent-workflow-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24">
                                             <path d="M4 18h16" />
@@ -55,9 +55,9 @@
                                             <path d="M12 6V4" />
                                         </svg>
                                     </span>
-                                    <span class="agent-workflow-label">场景</span>
+                                    <span class="agent-workflow-label" data-i18n="agent.workflows.scene-build.short">场景</span>
                                 </button>
-                                <button type="button" class="agent-workflow-tab" data-workflow="object-insert" title="物体插入" aria-label="物体插入">
+                                <button type="button" class="agent-workflow-tab" data-workflow="object-insert" title="物体插入" aria-label="物体插入" data-i18n-attrs="title:agent.workflows.object-insert.title;aria-label:agent.workflows.object-insert.title">
                                     <span class="agent-workflow-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24">
                                             <path d="M12 3 5 7v10l7 4 7-4V7l-7-4Z" />
@@ -65,9 +65,9 @@
                                             <path d="M12 11v10" />
                                         </svg>
                                     </span>
-                                    <span class="agent-workflow-label">物体</span>
+                                    <span class="agent-workflow-label" data-i18n="agent.workflows.object-insert.short">物体</span>
                                 </button>
-                                <button type="button" class="agent-workflow-tab" data-workflow="character-create" title="人物创造" aria-label="人物创造">
+                                <button type="button" class="agent-workflow-tab" data-workflow="character-create" title="人物创造" aria-label="人物创造" data-i18n-attrs="title:agent.workflows.character-create.title;aria-label:agent.workflows.character-create.title">
                                     <span class="agent-workflow-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24">
                                             <circle cx="12" cy="7" r="3" />
@@ -76,9 +76,9 @@
                                             <path d="M9 21l3-4 3 4" />
                                         </svg>
                                     </span>
-                                    <span class="agent-workflow-label">人物</span>
+                                    <span class="agent-workflow-label" data-i18n="agent.workflows.character-create.short">人物</span>
                                 </button>
-                                <button type="button" class="agent-workflow-tab" data-workflow="camera-direct" title="运镜生成" aria-label="运镜生成">
+                                <button type="button" class="agent-workflow-tab" data-workflow="camera-direct" title="运镜生成" aria-label="运镜生成" data-i18n-attrs="title:agent.workflows.camera-direct.title;aria-label:agent.workflows.camera-direct.title">
                                     <span class="agent-workflow-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24">
                                             <rect x="4" y="7" width="11" height="10" rx="2" />
@@ -86,7 +86,7 @@
                                             <path d="M7 5h5" />
                                         </svg>
                                     </span>
-                                    <span class="agent-workflow-label">运镜</span>
+                                    <span class="agent-workflow-label" data-i18n="agent.workflows.camera-direct.short">运镜</span>
                                 </button>
                             </div>
                             <button
@@ -96,14 +96,14 @@
                                 aria-expanded="true"
                                 title="收起 Agent 工作台"
                                 aria-label="收起 Agent 工作台"
+                                data-i18n-attrs="title:agent.collapsedTooltip;aria-label:agent.collapsedTooltip"
                             >
                                 ‹
                             </button>
                         </div>
-
                         <div class="agent-workbench-body">
                             <div class="agent-message-pane">
-                                <div class="agent-message-scroll" aria-label="对话记录">
+                                <div class="agent-message-scroll" aria-label="对话记录" data-i18n-attrs="aria-label:agent.messageHistory">
                                     <div id="agentMessageList" class="agent-message-list"></div>
                                 </div>
                                 <div id="agentMessageScrollbar" class="agent-message-scrollbar" aria-hidden="true">
@@ -112,22 +112,32 @@
                             </div>
                             <div id="agentComposerDock" class="agent-composer-dock">
                                 <form id="agentComposer" class="agent-composer">
-                                    <div id="agentComposerAttachments" class="agent-composer-attachments hidden" aria-label="待发送图片"></div>
+                                    <div id="agentComposerAttachments" class="agent-composer-attachments hidden" aria-label="待发送图片" data-i18n-attrs="aria-label:agent.pendingImages"></div>
                                     <input type="file" id="agentImageInput" accept="image/*" multiple hidden>
                                     <textarea
                                         id="agentComposerInput"
                                         rows="3"
                                         placeholder="输入一句自然语言，触发当前流程的占位 Agent 响应"
+                                        data-i18n-placeholder="agent.inputPlaceholder"
                                     ></textarea>
                                     <div class="agent-composer-actions">
-                                        <button type="button" id="btnAgentAddImage" class="agent-icon-btn" title="添加图片" aria-label="添加图片">
+                                        <button type="button" id="btnUserSession" class="agent-user-avatar-btn" data-role="user-session" title="用户" aria-label="用户" data-i18n-attrs="title:common.user;aria-label:common.user">
+                                            <span class="agent-user-avatar-icon" aria-hidden="true">
+                                                <svg viewBox="0 0 24 24">
+                                                    <circle cx="12" cy="8" r="3.5"></circle>
+                                                    <path d="M5 20c0-3.3 3.1-6 7-6s7 2.7 7 6"></path>
+                                                </svg>
+                                            </span>
+                                            <span class="agent-user-avatar-text" aria-hidden="true"></span>
+                                        </button>
+                                        <button type="button" id="btnAgentAddImage" class="agent-icon-btn" title="添加图片" aria-label="添加图片" data-i18n-attrs="title:common.addImage;aria-label:common.addImage">
                                             <svg viewBox="0 0 24 24" aria-hidden="true">
                                                 <rect x="4" y="5" width="16" height="14" rx="2"></rect>
                                                 <circle cx="9" cy="10" r="1.5"></circle>
                                                 <path d="m20 16-4.5-4.5L9 18"></path>
                                             </svg>
                                         </button>
-                                        <button type="submit" id="btnAgentSend" class="agent-send-btn">发送</button>
+                                        <button type="submit" id="btnAgentSend" class="agent-send-btn" data-i18n="common.send">发送</button>
                                     </div>
                                 </form>
                             </div>
@@ -140,6 +150,7 @@
                         role="separator"
                         aria-orientation="vertical"
                         aria-label="调整 Agent 工作台宽度"
+                        data-i18n-attrs="aria-label:agent.resizeAria"
                     ></div>
                 </div>
 
@@ -147,24 +158,24 @@
                 <!-- Left: Model List -->
                 <div id="left-sidebar">
                     <div class="sidebar-header">
-                        <h2>场景管理</h2>
+                        <h2 data-i18n="sidebar.title">场景管理</h2>
                         <div class="sidebar-header-actions">
-                            <button type="button" id="btnAddModel" class="sidebar-add-btn" title="加载模型" aria-label="加载模型">
+                            <button type="button" id="btnAddModel" class="sidebar-add-btn" title="加载模型" aria-label="加载模型" data-i18n-attrs="title:sidebar.loadModel;aria-label:sidebar.loadModel">
                                 <svg viewBox="0 0 24 24" aria-hidden="true">
                                     <path d="M12 5v14M5 12h14" />
                                 </svg>
                             </button>
-                            <button type="button" id="btnLoadScene" class="sidebar-icon-btn" title="加载场景" aria-label="加载场景">
+                            <button type="button" id="btnLoadScene" class="sidebar-icon-btn" title="加载场景" aria-label="加载场景" data-i18n-attrs="title:sidebar.loadScene;aria-label:sidebar.loadScene">
                                 <svg class="filled-icon" viewBox="0 0 12 12" aria-hidden="true">
                                     <path fill-rule="evenodd" clip-rule="evenodd" d="M1.5 3.5C1.5 2.67157 2.17157 2 3 2H9C9.82843 2 10.5 2.67157 10.5 3.5V8.5C10.5 9.32843 9.82843 10 9 10H8C7.72386 10 7.5 9.77614 7.5 9.5C7.5 9.22386 7.72386 9 8 9H9C9.27614 9 9.5 8.77614 9.5 8.5V3.5C9.5 3.22386 9.27614 3 9 3H3C2.72386 3 2.5 3.22386 2.5 3.5V8.5C2.5 8.77614 2.72386 9 3 9H4C4.27614 9 4.5 9.22386 4.5 9.5C4.5 9.77614 4.27614 10 4 10H3C2.17157 10 1.5 9.32843 1.5 8.5V3.5ZM6.5 7L7.1 7.8C7.26568 8.02091 7.57908 8.06568 7.8 7.9C8.02091 7.73431 8.06568 7.42091 7.9 7.2L6.72 5.62666C6.36 5.14666 5.64 5.14666 5.28 5.62666L4.1 7.2C3.93431 7.42091 3.97908 7.73431 4.2 7.9C4.42091 8.06568 4.73431 8.02091 4.9 7.8L5.5 6.99999V10.5C5.5 10.7761 5.72386 11 6 11C6.27614 11 6.5 10.7761 6.5 10.5V7Z" />
                                 </svg>
                             </button>
-                            <button type="button" id="btnSaveScene" class="sidebar-icon-btn" title="保存场景" aria-label="保存场景">
+                            <button type="button" id="btnSaveScene" class="sidebar-icon-btn" title="导出项目" aria-label="导出项目" data-i18n-attrs="title:projectSession.exportProject;aria-label:projectSession.exportProject">
                                 <svg class="filled-icon" viewBox="0 0 12 12" aria-hidden="true">
                                     <path fill-rule="evenodd" clip-rule="evenodd" d="M1.5 3.5C1.5 2.67157 2.17157 2 3 2H9C9.82843 2 10.5 2.67157 10.5 3.5V8.5C10.5 9.32843 9.82843 10 9 10H8C7.72386 10 7.5 9.77614 7.5 9.5C7.5 9.22386 7.72386 9 8 9H9C9.27614 9 9.5 8.77614 9.5 8.5V3.5C9.5 3.22386 9.27614 3 9 3H3C2.72386 3 2.5 3.22386 2.5 3.5V8.5C2.5 8.77614 2.72386 9 3 9H4C4.27614 9 4.5 9.22386 4.5 9.5C4.5 9.77614 4.27614 10 4 10H3C2.17157 10 1.5 9.32843 1.5 8.5V3.5ZM5.5 7L4.9 6.2C4.73431 5.97909 4.42091 5.93432 4.2 6.1C3.97908 6.26569 3.93431 6.57909 4.1 6.8L5.28 8.37334C5.64 8.85334 6.36 8.85334 6.72 8.37334L7.9 6.8C8.06568 6.57909 8.02091 6.26569 7.8 6.1C7.57908 5.93432 7.26568 5.97909 7.1 6.2L6.5 7V3.5C6.5 3.22386 6.27614 3 6 3C5.72386 3 5.5 3.22386 5.5 3.5V7ZM4 9C3.72386 9 3.5 9.22386 3.5 9.5C3.5 9.77614 3.72386 10 4 10H8C8.27614 10 8.5 9.77614 8.5 9.5C8.5 9.22386 8.27614 9 8 9H4Z" />
                                 </svg>
                             </button>
-                            <button type="button" id="btnClearScene" class="sidebar-icon-btn" title="清空场景" aria-label="清空场景">
+                            <button type="button" id="btnClearScene" class="sidebar-icon-btn" title="清空场景" aria-label="清空场景" data-i18n-attrs="title:sidebar.clearScene;aria-label:sidebar.clearScene">
                                 <svg viewBox="0 0 24 24" aria-hidden="true">
                                     <path d="M8 8v9" />
                                     <path d="M12 8v9" />
@@ -180,6 +191,8 @@
                                 id="modelCountBadge"
                                 aria-expanded="true"
                                 title="收起模型面板"
+                                data-i18n="common.collapse"
+                                data-i18n-attrs="title:sidebar.collapsePanel;aria-label:sidebar.collapsePanel"
                             >
                                 收起
                             </button>
@@ -189,8 +202,8 @@
                         <div class="model-management-top">
                             <div id="modelList" class="model-list">
                                 <div class="empty-list">
-                                    <p>暂无模型</p>
-                                    <p class="empty-hint">拖拽文件到此处，或点击加号按钮</p>
+                                    <p data-i18n="sidebar.emptyTitle">暂无模型</p>
+                                    <p class="empty-hint" data-i18n="sidebar.emptyHint">拖拽文件到此处，或点击加号按钮</p>
                                 </div>
                             </div>
                         </div>
@@ -198,15 +211,15 @@
                         <div id="modelSettingsCard" class="model-settings-panel inactive">
                             <div id="modelTransformSection" class="editor-section">
                                 <div class="section-header">
-                                    <h4 class="subsection-title">变换</h4>
+                                    <h4 class="subsection-title" data-i18n="sidebar.transform">变换</h4>
                                     <div class="section-actions">
-                                        <button class="icon-btn" id="btnResetTransform" title="重置">↺</button>
+                                        <button class="icon-btn" id="btnResetTransform" title="重置" data-i18n-attrs="title:common.reset">↺</button>
                                     </div>
                                 </div>
 
                                 <div class="property-row transform-property-row">
                                     <label class="property-label">
-                                        <span>位置</span>
+                                        <span data-i18n="sidebar.position">位置</span>
                                     </label>
                                     <div class="property-inputs transform-grid">
                                         <div class="input-group">
@@ -226,7 +239,7 @@
 
                                 <div class="property-row transform-property-row">
                                     <label class="property-label">
-                                        <span>旋转</span>
+                                        <span data-i18n="sidebar.rotation">旋转</span>
                                     </label>
                                     <div class="property-inputs transform-grid">
                                         <div class="input-group">
@@ -246,7 +259,7 @@
 
                                 <div class="property-row transform-property-row">
                                     <label class="property-label">
-                                        <span>缩放</span>
+                                        <span data-i18n="sidebar.scale">缩放</span>
                                     </label>
                                     <div class="property-inputs transform-grid">
                                         <div class="input-group scale-span">
@@ -259,15 +272,15 @@
 
                             <div id="onnxAnimSection" class="editor-section inactive">
                                 <div class="section-header">
-                                    <h4 class="subsection-title">动画</h4>
+                                    <h4 class="subsection-title" data-i18n="sidebar.animation">动画</h4>
                                 </div>
                                 <div class="property-row">
                                     <label class="property-label" for="modelAnimSpeedValue">
-                                        <span>速率</span>
+                                        <span data-i18n="sidebar.speed">速率</span>
                                     </label>
                                     <div class="property-inputs model-anim-speed-row">
                                         <input type="range" id="modelAnimSpeed" min="0" max="1" step="0.001" value="0.500">
-                                        <input type="text" id="modelAnimSpeedValue" value="1.000" inputmode="decimal" aria-label="动画速率">
+                                        <input type="text" id="modelAnimSpeedValue" value="1.000" inputmode="decimal" aria-label="动画速率" data-i18n-attrs="aria-label:sidebar.speed">
                                     </div>
                                 </div>
                             </div>
@@ -275,26 +288,26 @@
                     </div>
                 </div>
 
-                <div id="left-sidebar-resizer" class="sidebar-resizer hidden" role="separator" aria-orientation="vertical" aria-label="调整模型列表宽度"></div>
+                <div id="left-sidebar-resizer" class="sidebar-resizer hidden" role="separator" aria-orientation="vertical" aria-label="调整模型列表宽度" data-i18n-attrs="aria-label:sidebar.resizeModelList"></div>
 
                 <!-- Center: Scene Viewport (canvas is behind) -->
                 <div id="center-viewport">
                     <!-- Canvas is in canvas-container, this is just a layer reference -->
                 </div>
 
-                <div id="right-sidebar-resizer" class="sidebar-resizer hidden" role="separator" aria-orientation="vertical" aria-label="调整设置面板宽度"></div>
+                <div id="right-sidebar-resizer" class="sidebar-resizer hidden" role="separator" aria-orientation="vertical" aria-label="调整设置面板宽度" data-i18n-attrs="aria-label:sceneSettings.resizePanel"></div>
 
                 <div id="sceneSettingsPanel" class="settings-card floating-scene-settings hidden">
                     <div class="settings-card-header">
-                        <h3>场景设置</h3>
-                        <button id="btnSceneSettingsClose" class="close-editor-btn floating-panel-close" title="收起设置">
+                        <h3 data-i18n="sceneSettings.title">场景设置</h3>
+                        <button id="btnSceneSettingsClose" class="close-editor-btn floating-panel-close" title="收起设置" data-i18n-attrs="title:sceneSettings.close;aria-label:sceneSettings.close">
                             <span>×</span>
                         </button>
                     </div>
                     <div class="settings-card-body">
                                 <div class="property-row">
                                     <label class="property-label">
-                                        <span>背景色</span>
+                                        <span data-i18n="sceneSettings.background">背景色</span>
                                     </label>
                                     <div class="property-inputs scene-bg-color-row">
                                         <input type="color" id="sceneBgColorPicker" value="#707070">
@@ -304,7 +317,7 @@
 
                                 <div class="property-row">
                                     <label class="property-label">
-                                        <span>预设</span>
+                                        <span data-i18n="sceneSettings.preset">预设</span>
                                     </label>
                                     <div class="property-inputs">
                                         <div id="skyPresetGrid" class="sky-preset-grid"></div>
@@ -313,34 +326,34 @@
 
                                 <div class="property-row">
                                     <label class="property-label">
-                                        <span>模式</span>
+                                        <span data-i18n="sceneSettings.mode">模式</span>
                                     </label>
                                     <div class="property-inputs render-mode-row">
                                         <button class="menu-btn menu-btn-active" data-mode="color" id="modeColor">
-                                            <span class="menu-btn-text">图片</span>
+                                            <span class="menu-btn-text" data-i18n="sceneSettings.renderModes.color">图片</span>
                                         </button>
                                         <button class="menu-btn" data-mode="depth" id="modeDepth">
-                                            <span class="menu-btn-text">深度图</span>
+                                            <span class="menu-btn-text" data-i18n="sceneSettings.renderModes.depth">深度图</span>
                                         </button>
                                         <button class="menu-btn" data-mode="normal" id="modeNormal">
-                                            <span class="menu-btn-text">法向图</span>
+                                            <span class="menu-btn-text" data-i18n="sceneSettings.renderModes.normal">法向图</span>
                                         </button>
                                     </div>
                                 </div>
 
                                 <div class="property-row">
                                     <label class="property-label">
-                                        <span>深度倍率</span>
+                                        <span data-i18n="sceneSettings.depthScale">深度倍率</span>
                                     </label>
                                     <div class="property-inputs depth-scale-row">
                                         <input type="range" id="sceneDepthScale" min="0" max="1" step="0.001" value="0.500">
-                                        <input type="text" id="sceneDepthScaleNumber" value="1.000" inputmode="decimal" aria-label="场景深度倍率">
+                                        <input type="text" id="sceneDepthScaleNumber" value="1.000" inputmode="decimal" aria-label="场景深度倍率" data-i18n-attrs="aria-label:sceneSettings.depthScale">
                                     </div>
                                 </div>
 
                                 <div class="property-row">
                                     <label class="property-label">
-                                        <span>FOV</span>
+                                        <span data-i18n="sceneSettings.fov">FOV</span>
                                     </label>
                                     <div class="property-inputs scene-fov-row">
                                         <input type="range" id="sceneFovRange" min="1.000" max="179.000" step="0.001" value="45.000">
@@ -351,13 +364,18 @@
                 </div>
 
                 <div id="right-sidebar" class="floating-toolbar-host">
-                    <div class="floating-tool-group" aria-label="变换工具">
-                        <button id="btnGizmoTranslate" class="floating-tool-btn" data-tooltip="移动" aria-label="移动">T</button>
-                        <button id="btnGizmoRotate" class="floating-tool-btn" data-tooltip="旋转" aria-label="旋转">R</button>
-                        <button id="btnGizmoScale" class="floating-tool-btn" data-tooltip="缩放" aria-label="缩放">S</button>
+                    <div class="floating-tool-group floating-tool-group-status" aria-label="工作区状态" data-i18n-attrs="aria-label:workspaceStatus.ariaLabel">
+                        <button id="workspaceStatusIndicator" class="floating-tool-btn workspace-status-indicator" data-status="dirty" data-tooltip="未打开工作区 / No workspace open" aria-label="工作区状态 / Workspace status" type="button" data-i18n-attrs="aria-label:workspaceStatus.ariaLabel">
+                            <span class="workspace-status-dot" aria-hidden="true"></span>
+                        </button>
                     </div>
-                    <div class="floating-tool-group floating-tool-group-clear" aria-label="清屏工具">
-                        <button id="btnClearScreen" class="floating-tool-btn" data-tooltip="清屏" aria-label="清屏">
+                    <div class="floating-tool-group" aria-label="变换工具" data-i18n-attrs="aria-label:toolbar.transformTools">
+                        <button id="btnGizmoTranslate" class="floating-tool-btn" data-tooltip="移动" aria-label="移动" data-i18n-attrs="data-tooltip:toolbar.translate;aria-label:toolbar.translate">T</button>
+                        <button id="btnGizmoRotate" class="floating-tool-btn" data-tooltip="旋转" aria-label="旋转" data-i18n-attrs="data-tooltip:toolbar.rotate;aria-label:toolbar.rotate">R</button>
+                        <button id="btnGizmoScale" class="floating-tool-btn" data-tooltip="缩放" aria-label="缩放" data-i18n-attrs="data-tooltip:toolbar.scale;aria-label:toolbar.scale">S</button>
+                    </div>
+                    <div class="floating-tool-group floating-tool-group-clear" aria-label="清屏工具" data-i18n-attrs="aria-label:toolbar.clearTools">
+                        <button id="btnClearScreen" class="floating-tool-btn" data-tooltip="清屏" aria-label="清屏" data-i18n-attrs="data-tooltip:toolbar.clearScreen;aria-label:toolbar.clearScreen">
                             <svg viewBox="0 0 24 24" aria-hidden="true">
                                 <path d="M8 4H4v4" />
                                 <path d="M16 4h4v4" />
@@ -366,24 +384,24 @@
                             </svg>
                         </button>
                     </div>
-                    <div class="floating-tool-group" aria-label="导出工具">
-                        <div id="exportToolFlyout" class="floating-tool-flyout" aria-label="导出">
+                    <div class="floating-tool-group" aria-label="导出工具" data-i18n-attrs="aria-label:toolbar.exportTools">
+                        <div id="exportToolFlyout" class="floating-tool-flyout" aria-label="导出" data-i18n-attrs="aria-label:toolbar.export">
                             <div class="floating-tool-flyout-panel" aria-hidden="true">
-                                <button class="floating-tool-btn" data-render="image" id="renderImage" data-tooltip="图片" aria-label="导出图片">
+                                <button class="floating-tool-btn" data-render="image" id="renderImage" data-tooltip="图片" aria-label="导出图片" data-i18n-attrs="data-tooltip:toolbar.exportImage;aria-label:toolbar.exportImage">
                                     <svg viewBox="0 0 24 24" aria-hidden="true">
                                         <rect x="4" y="5" width="16" height="14" rx="2" />
                                         <circle cx="9" cy="10" r="1.5" />
                                         <path d="m20 16-4.5-4.5L9 18" />
                                     </svg>
                                 </button>
-                                <button class="floating-tool-btn" data-render="video" id="renderVideo" data-tooltip="视频" aria-label="导出视频">
+                                <button class="floating-tool-btn" data-render="video" id="renderVideo" data-tooltip="视频" aria-label="导出视频" data-i18n-attrs="data-tooltip:toolbar.exportVideo;aria-label:toolbar.exportVideo">
                                     <svg viewBox="0 0 24 24" aria-hidden="true">
                                         <rect x="4" y="6" width="12" height="12" rx="2" />
                                         <path d="m16 10 4-2v8l-4-2z" />
                                     </svg>
                                 </button>
                             </div>
-                            <button id="btnExportFlyout" class="floating-tool-btn" data-tooltip="导出" aria-label="导出">
+                            <button id="btnExportFlyout" class="floating-tool-btn" data-tooltip="导出" aria-label="导出" data-i18n-attrs="data-tooltip:toolbar.export;aria-label:toolbar.export">
                                 <svg viewBox="0 0 24 24" aria-hidden="true">
                                     <path d="M4 8.5h3l1.3-2h7.4l1.3 2H20a1 1 0 0 1 1 1V17a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1Z" />
                                     <circle cx="12" cy="13" r="3.2" />
@@ -391,8 +409,8 @@
                             </button>
                         </div>
                     </div>
-                    <div class="floating-tool-group" aria-label="面板工具">
-                        <button id="btnThemeToggle" class="floating-tool-btn" data-tooltip="切换到白天" aria-label="切换主题">
+                    <div class="floating-tool-group" aria-label="面板工具" data-i18n-attrs="aria-label:toolbar.panelTools">
+                        <button id="btnThemeToggle" class="floating-tool-btn" data-tooltip="切换到白天" aria-label="切换主题" data-i18n-attrs="data-tooltip:theme.switchToLight;aria-label:theme.toggle">
                             <svg viewBox="0 0 24 24" aria-hidden="true">
                                 <path d="M12 3v2" />
                                 <path d="M12 19v2" />
@@ -405,9 +423,9 @@
                                 <circle cx="12" cy="12" r="4" />
                             </svg>
                         </button>
-                        <button id="btnLanguageToggle" class="floating-tool-btn" data-tooltip="切换到英文" aria-label="切换语言">En</button>
-                        <button id="btnToggleSceneSettings" class="floating-tool-btn" data-tooltip="场景设置" aria-label="场景设置">⚙</button>
-                        <button id="btnHelpTips" class="floating-tool-btn" data-tooltip="操作提示" aria-label="操作提示">
+                        <button id="btnLanguageToggle" class="floating-tool-btn" data-tooltip="切换到英文" aria-label="切换语言" data-i18n="language.buttonWhenZh" data-i18n-attrs="data-tooltip:language.switchToEnglish;aria-label:language.toggle">En</button>
+                        <button id="btnToggleSceneSettings" class="floating-tool-btn" data-tooltip="场景设置" aria-label="场景设置" data-i18n-attrs="data-tooltip:toolbar.sceneSettings;aria-label:toolbar.sceneSettings">⚙</button>
+                        <button id="btnHelpTips" class="floating-tool-btn" data-tooltip="操作提示" aria-label="操作提示" data-i18n-attrs="data-tooltip:toolbar.help;aria-label:toolbar.help">
                             <svg viewBox="0 0 24 24" aria-hidden="true">
                                 <circle cx="12" cy="12" r="9" />
                                 <path d="M9.5 9a2.5 2.5 0 1 1 4.2 1.8c-.9.8-1.7 1.3-1.7 2.7" />
@@ -423,109 +441,117 @@
             <div id="bottom-timeline">
                 <div class="timeline-header">
                     <div class="timeline-header-left">
-                        <h2>相机关键帧</h2>
+                        <h2 data-i18n="timeline.title">相机关键帧</h2>
                         <div class="timeline-settings-anchor">
-                            <button id="btnToggleCameraPreview" class="timeline-action-btn timeline-inline-btn" title="打开相机预览">
-                                <span class="btn-text">相机预览</span>
+                            <button id="btnToggleCameraPreview" class="timeline-action-btn timeline-inline-btn" title="打开相机预览" data-i18n-attrs="title:timeline.openCameraPreview;aria-label:timeline.openCameraPreview">
+                                <span class="btn-text" data-i18n="timeline.cameraPreview">预览</span>
                             </button>
-                            <button id="btnToggleCameraSettings" class="timeline-action-btn timeline-inline-btn" title="打开相机设置">
-                                <span class="btn-text">相机设置</span>
+                            <button id="btnToggleCameraSettings" class="timeline-action-btn timeline-inline-btn" title="打开相机设置" data-i18n-attrs="title:timeline.openCameraSettings;aria-label:timeline.openCameraSettings">
+                                <span class="btn-text" data-i18n="timeline.cameraSettings">控制</span>
                             </button>
                             <div id="cameraPreviewPanel" class="settings-card floating-camera-preview hidden">
                                 <div class="settings-card-header camera-preview-header">
-                                    <h3>相机预览</h3>
-                                    <button id="btnCameraPreviewClose" class="close-editor-btn floating-panel-close" title="关闭相机预览">
+                                    <h3 data-i18n="timeline.cameraPreviewTitle">相机预览</h3>
+                                    <button id="btnCameraPreviewClose" class="close-editor-btn floating-panel-close" title="关闭相机预览" data-i18n-attrs="title:timeline.closeCameraPreview;aria-label:timeline.closeCameraPreview">
                                         <span>×</span>
                                     </button>
                                 </div>
                                 <div class="settings-card-body camera-preview-body">
                                     <div class="property-row">
-                                        <span class="property-label">比例</span>
+                                        <span class="property-label" data-i18n="timeline.previewRatio">比例</span>
                                         <div class="property-inputs">
-                                            <select id="cameraPreviewAspectRatio" aria-label="相机预览比例"></select>
+                                            <select id="cameraPreviewAspectRatio" aria-label="相机预览比例" data-i18n-attrs="aria-label:timeline.previewRatio"></select>
                                         </div>
                                     </div>
                                     <div id="cameraPreviewViewport" class="camera-preview-viewport">
                                         <canvas id="cameraPreviewCanvas"></canvas>
                                     </div>
                                 </div>
+                                <div id="cameraPreviewResizeHandle" class="camera-preview-resize-handle" aria-hidden="true"></div>
                             </div>
                             <div id="cameraSettingsPanel" class="settings-card floating-camera-settings hidden">
                                 <div class="settings-card-header">
-                                    <h3>相机设置</h3>
-                                    <button id="btnCameraSettingsClose" class="close-editor-btn floating-panel-close" title="收起设置">
+                                    <h3 data-i18n="timeline.cameraSettingsTitle">相机控制</h3>
+                                    <button id="btnCameraSettingsClose" class="close-editor-btn floating-panel-close" title="收起设置" data-i18n-attrs="title:sceneSettings.close;aria-label:sceneSettings.close">
                                         <span>×</span>
                                     </button>
                                 </div>
                                 <div class="settings-card-body">
                                     <div class="property-row">
-                                        <span class="property-label">轨迹</span>
+                                        <span class="property-label" data-i18n="timeline.track">轨迹</span>
                                         <div class="property-inputs">
-                                            <button id="btnToggleCameraSequence" class="timeline-action-btn timeline-inline-btn" title="切换相机序列可见性">
-                                                <span class="btn-text">可见</span>
+                                            <button id="btnToggleCameraSequence" class="timeline-action-btn timeline-inline-btn" title="切换相机序列可见性" data-i18n-attrs="title:timeline.toggleSequenceVisibility;aria-label:timeline.toggleSequenceVisibility">
+                                                <span class="btn-text" data-i18n="common.visible">可见</span>
                                             </button>
-                                            <button id="btnToggleCameraSequenceDrag" class="timeline-action-btn timeline-inline-btn" title="在自由视角下拖动相机关键帧">
-                                                <span class="btn-text">拖动</span>
+                                            <button id="btnToggleCameraSequenceDrag" class="timeline-action-btn timeline-inline-btn" title="在自由视角下拖动相机关键帧" data-i18n-attrs="title:timeline.dragHint;aria-label:timeline.dragHint">
+                                                <span class="btn-text" data-i18n="timeline.drag">拖动</span>
                                             </button>
                                         </div>
                                     </div>
                                     <div class="property-row timeline-camera-param-row">
-                                        <span class="property-label" for="cameraDisplayScale">大小</span>
-                                        <div class="property-inputs timeline-camera-param-inputs">
+                                        <span class="property-label" for="cameraDisplayScale" data-i18n="timeline.size">大小</span>
+                                        <div class="property-inputs timeline-camera-param-inputs timeline-camera-number-inputs">
                                             <input type="range" id="cameraDisplayScale" min="0.25" max="3" step="0.01" value="1.00">
-                                            <span id="cameraDisplayScaleValue" class="timeline-interpolation-param-value">1.00</span>
+                                            <input type="number" id="cameraDisplayScaleValue" min="0.25" max="3" step="0.01" value="1.00">
                                         </div>
                                     </div>
-                                    <div class="property-row">
-                                        <span class="property-label">插值</span>
-                                        <div class="property-inputs">
-                                            <select id="timelineCameraInterpolation">
-                                                <option value="linear" selected>线性</option>
-                                                <option value="squad">Squad</option>
-                                                <option value="catmull">Catmull</option>
-                                                <option value="ease">Ease</option>
-                                            </select>
+                                    <div class="property-row timeline-camera-param-row">
+                                        <span class="property-label" for="timelineCameraFovRange" data-i18n="timeline.fov">FOV</span>
+                                        <div class="property-inputs timeline-camera-param-inputs timeline-camera-number-inputs">
+                                            <input type="range" id="timelineCameraFovRange" min="1.000" max="179.000" step="0.001" value="45.000">
+                                            <input type="number" id="timelineCameraFovNumber" min="1.000" max="179.000" step="0.001" value="45.000">
                                         </div>
                                     </div>
-                                    <div id="timelineInterpolationParamControl" class="property-row timeline-camera-param-row hidden">
-                                        <span id="timelineInterpolationParamLabel" class="property-label" for="timelineInterpolationParam">参数</span>
+                                    <div class="property-row timeline-camera-param-row">
+                                        <span id="timelinePositionInterpolationLabel" class="property-label" for="timelineCatmullParam" data-i18n="timeline.positionInterpolation">位置插值</span>
                                         <div class="property-inputs timeline-camera-param-inputs">
-                                            <input type="range" id="timelineInterpolationParam" min="0" max="1" step="0.01" value="0.50">
-                                            <span id="timelineInterpolationParamValue" class="timeline-interpolation-param-value">0.50</span>
+                                            <input type="range" id="timelineCatmullParam" min="0" max="1" step="0.01" value="1">
+                                        </div>
+                                    </div>
+                                    <div class="property-row timeline-camera-param-row">
+                                        <span id="timelineRotationInterpolationLabel" class="property-label" for="timelineRotationParam" data-i18n="timeline.rotationInterpolation">旋转插值</span>
+                                        <div class="property-inputs timeline-camera-param-inputs">
+                                            <input type="range" id="timelineRotationParam" min="0" max="1" step="0.01" value="0">
+                                        </div>
+                                    </div>
+                                    <div class="property-row timeline-camera-param-row">
+                                        <span id="timelineTimingInterpolationLabel" class="property-label" for="timelineEaseParam" data-i18n="timeline.timingInterpolation">时间节奏</span>
+                                        <div class="property-inputs timeline-camera-param-inputs">
+                                            <input type="range" id="timelineEaseParam" min="-1" max="1" step="0.01" value="0">
                                         </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
                         <div class="timeline-header-tools timeline-control-group-separated">
-                            <div class="timeline-control-group" aria-label="关键帧">
-                                <button id="btnAddKeyframe" class="timeline-icon-btn" title="新增关键帧" aria-label="新增关键帧">
+                            <div class="timeline-control-group" aria-label="关键帧" data-i18n-attrs="aria-label:timeline.keyframes">
+                                <button id="btnAddKeyframe" class="timeline-icon-btn" title="新增关键帧" aria-label="新增关键帧" data-i18n-attrs="title:timeline.addKeyframe;aria-label:timeline.addKeyframe">
                                     <svg viewBox="0 0 24 24" aria-hidden="true">
                                         <path d="M12 5v14M5 12h14" />
                                     </svg>
                                 </button>
-                                <button id="btnRemoveKeyframe" class="timeline-icon-btn" title="删除关键帧" aria-label="删除关键帧">
+                                <button id="btnRemoveKeyframe" class="timeline-icon-btn" title="删除关键帧" aria-label="删除关键帧" data-i18n-attrs="title:timeline.removeKeyframe;aria-label:timeline.removeKeyframe">
                                     <svg viewBox="0 0 24 24" aria-hidden="true">
                                         <path d="M6 12h12" />
                                     </svg>
                                 </button>
                             </div>
-                            <div class="timeline-control-group" aria-label="相机序列">
-                                <button id="btnImportCameraSequence" class="timeline-icon-btn" title="导入相机序列" aria-label="导入相机序列">
+                            <div class="timeline-control-group" aria-label="相机序列" data-i18n-attrs="aria-label:timeline.cameraSequence">
+                                <button id="btnImportCameraSequence" class="timeline-icon-btn" title="导入相机序列" aria-label="导入相机序列" data-i18n-attrs="title:timeline.importSequence;aria-label:timeline.importSequence">
                                     <svg viewBox="0 0 24 24" aria-hidden="true">
                                         <path d="M12 20V10" />
                                         <path d="M8.5 13.5 12 10l3.5 3.5" />
                                         <path d="M5 6h14" />
                                     </svg>
                                 </button>
-                                <button id="btnExportCameraSequence" class="timeline-icon-btn" title="导出相机序列" aria-label="导出相机序列">
+                                <button id="btnExportCameraSequence" class="timeline-icon-btn" title="导出相机序列" aria-label="导出相机序列" data-i18n-attrs="title:timeline.exportSequence;aria-label:timeline.exportSequence">
                                     <svg viewBox="0 0 24 24" aria-hidden="true">
                                         <path d="M12 4v10" />
                                         <path d="M8.5 10.5 12 14l3.5-3.5" />
                                         <path d="M5 18h14" />
                                     </svg>
                                 </button>
-                                <button id="btnClearCameraSequence" class="timeline-icon-btn" title="清空相机序列" aria-label="清空相机序列">
+                                <button id="btnClearCameraSequence" class="timeline-icon-btn" title="清空相机序列" aria-label="清空相机序列" data-i18n-attrs="title:timeline.clearSequence;aria-label:timeline.clearSequence">
                                     <svg viewBox="0 0 24 24" aria-hidden="true">
                                         <path d="M8 8v9" />
                                         <path d="M12 8v9" />
@@ -539,8 +565,8 @@
                         </div>
                     </div>
                     <div class="timeline-header-center">
-                        <div class="timeline-control-group" aria-label="播放控制">
-                            <button id="btnPlayCamera" class="timeline-icon-btn timeline-play-btn" title="播放相机动画" aria-label="播放相机动画">
+                        <div class="timeline-control-group" aria-label="播放控制" data-i18n-attrs="aria-label:timeline.playbackControls">
+                            <button id="btnPlayCamera" class="timeline-icon-btn timeline-play-btn" title="播放相机动画" aria-label="播放相机动画" data-i18n-attrs="title:timeline.playCamera;aria-label:timeline.playCamera">
                                 <svg class="timeline-play-icon timeline-play-icon-play" viewBox="0 0 24 24" aria-hidden="true">
                                     <path d="m9 7 8 5-8 5z" />
                                 </svg>
@@ -549,7 +575,7 @@
                                     <path d="M15 7v10" />
                                 </svg>
                             </button>
-                            <button id="btnLoopCamera" class="timeline-icon-btn" title="循环播放" aria-label="循环播放">
+                            <button id="btnLoopCamera" class="timeline-icon-btn" title="循环播放" aria-label="循环播放" data-i18n-attrs="title:timeline.loopPlayback;aria-label:timeline.loopPlayback">
                                 <svg viewBox="0 0 24 24" aria-hidden="true">
                                     <path d="M17 7h3v3" />
                                     <path d="M20 10a8 8 0 0 0-14.4-2.8" />
@@ -561,7 +587,7 @@
                     </div>
                     <div class="timeline-header-right">
                         <div class="timeline-fps-control">
-                            <label for="timelineSpeed">倍速</label>
+                            <label for="timelineSpeed" data-i18n="timeline.speed">倍速</label>
                             <select id="timelineSpeed">
                                 <option value="0.25">0.25x</option>
                                 <option value="0.5">0.5x</option>
@@ -588,7 +614,7 @@
                     <div id="timelineTrack" class="timeline-track">
                         <!-- Keyframe markers will be added here -->
                         <div class="timeline-placeholder">
-                            <span class="placeholder-text">添加关键帧开始录制相机运动</span>
+                            <span class="placeholder-text" data-i18n="timeline.placeholder">添加关键帧开始录制相机运动</span>
                         </div>
                     </div>
                     <div id="modelTracksContainer" class="model-tracks-container"></div>
@@ -607,43 +633,192 @@
         <!-- Modal for Model Loading -->
         <div id="modelModal" class="modal hidden">
             <div class="modal-content">
-                <h3>选择模型文件</h3>
+                <h3 data-i18n="modal.modelTitle">选择模型文件</h3>
                 <div class="modal-body">
-                    <p>选择要添加的模型文件（支持 .ply, .onnx, .glb, .gltf, .obj, .fbx, .stl, .splat, .ksplat, .spz, .sog）</p>
+                    <p data-i18n="modal.modelHint">选择要添加的模型文件（支持 .ply, .onnx, .glb, .gltf, .obj, .fbx, .stl, .splat, .ksplat, .spz, .sog）</p>
                     <input type="file" id="modalFileInput" accept=".ply,.onnx,.glb,.gltf,.obj,.fbx,.stl,.splat,.ksplat,.spz,.sog" multiple>
                 </div>
                 <div class="modal-footer">
-                    <button id="modalCancel" class="button button-secondary">取消</button>
-                    <button id="modalConfirm" class="button button-primary">确定</button>
+                    <button id="modalCancel" class="button button-secondary" data-i18n="common.cancel">取消</button>
+                    <button id="modalConfirm" class="button button-primary" data-i18n="common.confirm">确定</button>
                 </div>
             </div>
         </div>
 
         <div id="exportModal" class="modal hidden">
             <div class="modal-content export-modal-content">
-                <h3 id="exportModalTitle">导出</h3>
+                <h3 id="exportModalTitle" data-i18n="modal.exportTitle">导出</h3>
                 <div class="modal-body export-modal-body">
                     <div class="export-form-row">
-                        <label for="exportResolution">分辨率</label>
+                        <label for="exportResolution" data-i18n="modal.resolution">分辨率</label>
                         <select id="exportResolution"></select>
                     </div>
-                    <div class="export-form-row">
-                        <label for="exportMode">渲染模式</label>
-                        <select id="exportMode">
-                            <option value="color">图片</option>
-                            <option value="depth">深度图</option>
-                            <option value="normal">法向图</option>
+                    <div id="exportAspectRatioRow" class="export-form-row hidden">
+                        <label for="exportAspectRatio" data-i18n="modal.aspectRatio">相机比例</label>
+                        <select id="exportAspectRatio"></select>
+                    </div>
+                    <div id="exportVideoSpeedRow" class="export-form-row hidden">
+                        <label for="exportVideoSpeed" data-i18n="modal.playbackSpeed">导出倍速</label>
+                        <select id="exportVideoSpeed">
+                            <option value="0.25">0.25x</option>
+                            <option value="0.5">0.5x</option>
+                            <option value="1.0">1.0x</option>
+                            <option value="1.5">1.5x</option>
+                            <option value="2.0">2.0x</option>
+                            <option value="4.0">4.0x</option>
+                        </select>
+                    </div>
+                    <div id="exportVideoFpsRow" class="export-form-row hidden">
+                        <label for="exportVideoFps" data-i18n="modal.exportFps">导出 FPS</label>
+                        <select id="exportVideoFps">
+                            <option value="12">12</option>
+                            <option value="24">24</option>
+                            <option value="30">30</option>
+                            <option value="60">60</option>
                         </select>
                     </div>
                     <div class="export-form-row">
+                        <label for="exportMode" data-i18n="modal.renderMode">渲染模式</label>
+                        <select id="exportMode">
+                            <option value="color" data-i18n="modal.exportRenderModes.rgb">彩色图</option>
+                            <option value="depth" data-i18n="modal.exportRenderModes.depth">深度图</option>
+                            <option value="normal" data-i18n="modal.exportRenderModes.normal">法向图</option>
+                        </select>
+                    </div>
+                    <div id="exportFovRow" class="export-form-row">
                         <label for="exportFov">FOV</label>
                         <input type="number" id="exportFov" min="1.000" max="179.000" step="0.001" value="45.000">
                     </div>
                     <div id="exportTimelineHint" class="export-timeline-hint"></div>
+                    <div id="exportProgress" class="export-progress hidden" aria-hidden="true">
+                        <div class="export-progress-track">
+                            <div id="exportProgressFill" class="export-progress-fill" style="width: 0%"></div>
+                        </div>
+                        <div id="exportProgressText" class="export-progress-text" data-i18n="modal.exportProgressIdle">准备渲染</div>
+                    </div>
                 </div>
                 <div class="modal-footer">
-                    <button id="exportCancel" class="button button-secondary">取消</button>
-                    <button id="exportConfirm" class="button button-primary">渲染</button>
+                    <button id="exportCancel" class="button button-secondary" data-i18n="common.cancel">取消</button>
+                    <button id="exportConfirm" class="button button-primary" data-i18n="common.render">渲染</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="loginModal" class="modal hidden">
+            <div class="modal-content project-session-modal-content">
+                <div class="modal-panel-header">
+                    <h3 id="loginModalTitle" data-i18n="projectSession.loginTitle">登录</h3>
+                    <button id="btnLoginModalClose" class="close-editor-btn floating-panel-close" title="关闭" aria-label="关闭" data-i18n-attrs="title:common.close;aria-label:common.close">
+                        <span>×</span>
+                    </button>
+                </div>
+                <div class="modal-body project-session-modal-body">
+                    <label class="project-session-label" for="projectSessionUsernameInput" data-i18n="projectSession.usernameLabel">用户名</label>
+                    <input id="projectSessionUsernameInput" class="project-session-input" type="text" maxlength="64" placeholder="输入用户名" data-i18n-placeholder="projectSession.usernamePlaceholder">
+                </div>
+                <div class="modal-footer">
+                    <button id="btnProjectSessionLoginCancel" class="button button-secondary" data-i18n="common.cancel">取消</button>
+                    <button id="btnProjectSessionLogin" class="button button-primary" data-i18n="projectSession.loginAction">登录</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="postLoginProjectModal" class="modal hidden">
+            <div class="modal-content project-session-modal-content">
+                <div class="modal-panel-header">
+                    <h3 id="projectSessionTitle" data-i18n="projectSession.loginSuccessTitle">登录成功</h3>
+                    <button id="btnProjectSessionClose" class="close-editor-btn floating-panel-close" title="关闭" aria-label="关闭" data-i18n-attrs="title:common.close;aria-label:common.close">
+                        <span>×</span>
+                    </button>
+                </div>
+                <div class="modal-body project-session-modal-body">
+                    <div id="projectSessionUserSummary" class="project-session-summary"></div>
+                    <p id="projectSessionPrompt" class="project-session-prompt" data-i18n="projectSession.savePrompt">是否将当前场景改动保存到新项目中？</p>
+                    <label class="project-session-label" for="projectSessionNewProjectName" data-i18n="projectSession.newProjectLabel">新项目名</label>
+                    <div id="projectSessionNewProjectNameError" class="project-session-inline-error hidden" role="alert"></div>
+                    <input id="projectSessionNewProjectName" class="project-session-input" type="text" maxlength="96" placeholder="Untitled Project">
+                </div>
+                <div class="modal-footer project-session-modal-footer">
+                    <button id="btnProjectSessionDiscard" class="button button-secondary" data-i18n="projectSession.discardAction">丢弃</button>
+                    <button id="btnProjectSessionCreateProject" class="button button-primary" data-i18n="projectSession.saveAsNewAction">保存为新项目</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="projectBrowserModal" class="modal hidden">
+            <div class="modal-content project-session-browser-modal-content">
+                <div class="modal-panel-header">
+                    <h3 id="projectBrowserTitle" data-i18n="projectSession.browserTitle">我的项目</h3>
+                    <button id="btnProjectBrowserClose" class="close-editor-btn floating-panel-close" title="关闭" aria-label="关闭" data-i18n-attrs="title:common.close;aria-label:common.close">
+                        <span>×</span>
+                    </button>
+                </div>
+                <div class="modal-body project-session-modal-body">
+                    <div id="projectBrowserUserSummary" class="project-session-summary"></div>
+                    <div id="projectBrowserProjectGrid" class="project-browser-project-grid"></div>
+                    <div id="projectBrowserSaveAsPanel" class="project-browser-saveas-panel hidden">
+                        <label class="project-session-label" for="projectBrowserSaveAsName" data-i18n="projectSession.saveAsLabel">另存为项目名</label>
+                        <div id="projectBrowserSaveAsNameError" class="project-session-inline-error hidden" role="alert"></div>
+                        <input id="projectBrowserSaveAsName" class="project-session-input" type="text" maxlength="96" placeholder="Untitled Project">
+                        <div class="project-browser-saveas-actions">
+                            <button id="btnProjectBrowserSaveAsCancel" class="button button-secondary" data-i18n="common.cancel">取消</button>
+                            <button id="btnProjectBrowserSaveAsConfirm" class="button button-primary" data-i18n="projectSession.saveAction">保存</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer project-session-modal-footer">
+                    <button id="btnProjectBrowserSaveAs" class="button button-primary" data-i18n="projectSession.saveCurrentAsAction">当前项目另存为</button>
+                    <button id="btnProjectBrowserLogout" class="button button-secondary" data-i18n="projectSession.logoutAction">退出登录</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="workspaceTargetModal" class="modal hidden">
+            <div class="modal-content workspace-target-modal-content">
+                <div class="modal-panel-header">
+                    <h3 id="workspaceTargetTitle" data-i18n="workspaceStatus.chooserTitle">设置工作区</h3>
+                    <button id="btnWorkspaceTargetClose" class="close-editor-btn floating-panel-close" title="关闭" aria-label="关闭" data-i18n-attrs="title:common.close;aria-label:common.close">
+                        <span>×</span>
+                    </button>
+                </div>
+                <div class="modal-body workspace-target-modal-body">
+                    <p id="workspaceTargetPrompt" class="workspace-target-prompt" data-i18n="workspaceStatus.chooserPrompt">选择工作区目标</p>
+                    <div class="workspace-target-actions">
+                        <button id="btnWorkspaceTargetServer" class="button button-secondary workspace-target-action" type="button" data-i18n="workspaceStatus.setServer">设置工作区到服务器</button>
+                        <button id="btnWorkspaceTargetLocal" class="button button-primary workspace-target-action" type="button" data-i18n="workspaceStatus.setLocal">设置工作区到本地</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="btnWorkspaceTargetCancel" class="button button-secondary" type="button" data-i18n="common.cancel">取消</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="adminProjectModal" class="modal hidden">
+            <div class="modal-content admin-project-modal-content">
+                <div class="admin-project-modal-header">
+                    <div>
+                        <h3 id="adminProjectTitle" data-i18n="projectSession.adminTitle">管理员面板</h3>
+                        <div id="adminProjectSummary" class="project-session-summary"></div>
+                    </div>
+                    <button id="btnAdminProjectClose" class="close-editor-btn floating-panel-close" title="关闭" aria-label="关闭" data-i18n-attrs="title:common.close;aria-label:common.close">
+                        <span>×</span>
+                    </button>
+                </div>
+                <div class="modal-body admin-project-modal-body">
+                    <div class="admin-user-pane">
+                        <div class="project-session-label" data-i18n="projectSession.userListLabel">用户列表</div>
+                        <div id="adminUserList" class="admin-user-list"></div>
+                    </div>
+                    <div class="admin-scene-pane">
+                        <div class="admin-scene-pane-header">
+                            <div id="adminSceneOwnerLabel" class="project-session-label" data-i18n="projectSession.sceneListLabel">场景列表</div>
+                        </div>
+                        <div id="adminProjectGrid" class="project-browser-project-grid admin-project-grid"></div>
+                    </div>
+                </div>
+                <div class="modal-footer project-session-modal-footer">
+                    <button id="btnAdminProjectLogout" class="button button-secondary" data-i18n="projectSession.logoutAction">退出登录</button>
                 </div>
             </div>
         </div>
@@ -652,47 +827,47 @@
             <div class="modal-content help-modal-content">
                 <div class="help-modal-header">
                     <div class="help-modal-header-main">
-                        <h3>操作提示</h3>
+                        <h3 data-i18n="modal.helpTitle">操作提示</h3>
                         <span class="version-label help-version-label" id="versionLabel">0.1.8</span>
                     </div>
-                    <button id="helpTipsClose" class="icon-btn help-modal-close-btn" title="关闭操作提示">×</button>
+                    <button id="helpTipsClose" class="icon-btn help-modal-close-btn" title="关闭操作提示" data-i18n-attrs="title:modal.closeHelp;aria-label:modal.closeHelp">×</button>
                 </div>
                 <div class="modal-body help-modal-body">
                     <div class="help-section">
-                        <h4>鼠标操作</h4>
+                        <h4 data-i18n="modal.helpSections.mouse">鼠标操作</h4>
                         <ul class="help-list">
-                            <li><kbd>左键拖拽</kbd><span>旋转视角</span></li>
-                            <li><kbd>右键拖拽</kbd><span>平移视角</span></li>
-                            <li><kbd>滚轮</kbd><span>缩放视角</span></li>
-                            <li><kbd>双击场景</kbd><span>聚焦到双击位置的场景点</span></li>
-                            <li><kbd>拖拽文件</kbd><span>导入模型到场景</span></li>
+                            <li><kbd>左键拖拽</kbd><span data-i18n="modal.helpItems.mouseRotate">旋转视角</span></li>
+                            <li><kbd>右键拖拽</kbd><span data-i18n="modal.helpItems.mousePan">平移视角</span></li>
+                            <li><kbd>滚轮</kbd><span data-i18n="modal.helpItems.mouseZoom">缩放视角</span></li>
+                            <li><kbd>双击场景</kbd><span data-i18n="modal.helpItems.mouseLookAt">聚焦到双击位置的场景点</span></li>
+                            <li><kbd>拖拽文件</kbd><span data-i18n="modal.helpItems.dropFiles">导入模型到场景</span></li>
                         </ul>
                     </div>
                     <div class="help-section">
-                        <h4>键盘快捷键</h4>
+                        <h4 data-i18n="modal.helpSections.keyboard">键盘快捷键</h4>
                         <ul class="help-list">
-                            <li><kbd>Space</kbd><span>播放 / 暂停相机动画</span></li>
-                            <li><kbd>F</kbd><span>聚焦当前选中模型</span></li>
-                            <li><kbd>Ctrl + F</kbd><span>在当前视角和时间新增相机关键帧；若后方无关键帧则时间轴前进 1 秒</span></li>
-                            <li><kbd>` / ~</kbd><span>切换清屏模式</span></li>
-                            <li><kbd>1 / 2 / 3</kbd><span>切换位移 / 旋转 / 缩放 gizmo；重复按同键可关闭</span></li>
-                            <li><kbd>X</kbd><span>相机回正</span></li>
-                            <li><kbd>?</kbd><span>打开操作提示</span></li>
-                            <li><kbd>Esc</kbd><span>关闭操作提示或导出窗口</span></li>
+                            <li><kbd>Space</kbd><span data-i18n="modal.helpItems.playPause">播放 / 暂停相机动画</span></li>
+                            <li><kbd>F</kbd><span data-i18n="modal.helpItems.focusModel">聚焦当前选中模型</span></li>
+                            <li><kbd>Ctrl + F</kbd><span data-i18n="modal.helpItems.addKeyframe">在当前视角和时间新增相机关键帧；若后方无关键帧则时间轴前进 1 秒</span></li>
+                            <li><kbd>` / ~</kbd><span data-i18n="modal.helpItems.toggleClean">切换清屏模式</span></li>
+                            <li><kbd>1 / 2 / 3</kbd><span data-i18n="modal.helpItems.toggleGizmo">切换位移 / 旋转 / 缩放 gizmo；重复按同键可关闭</span></li>
+                            <li><kbd>X</kbd><span data-i18n="modal.helpItems.uprightCamera">相机回正</span></li>
+                            <li><kbd>?</kbd><span data-i18n="modal.helpItems.openHelp">打开操作提示</span></li>
+                            <li><kbd>Esc</kbd><span data-i18n="modal.helpItems.closeOverlay">关闭操作提示或导出窗口</span></li>
                         </ul>
                     </div>
                     <div class="help-section">
-                        <h4>相机移动</h4>
+                        <h4 data-i18n="modal.helpSections.camera">相机移动</h4>
                         <ul class="help-list">
-                            <li><kbd>W / A / S / D</kbd><span>前后左右移动</span></li>
-                            <li><kbd>方向键</kbd><span>前后左右移动</span></li>
-                            <li><kbd>PageUp / PageDown</kbd><span>上升 / 下降</span></li>
-                            <li><kbd>Shift</kbd><span>加速移动</span></li>
+                            <li><kbd>W / A / S / D</kbd><span data-i18n="modal.helpItems.movePlane">前后左右移动</span></li>
+                            <li><kbd>方向键</kbd><span data-i18n="modal.helpItems.movePlane">前后左右移动</span></li>
+                            <li><kbd>PageUp / PageDown</kbd><span data-i18n="modal.helpItems.moveVertical">上升 / 下降</span></li>
+                            <li><kbd>Shift</kbd><span data-i18n="modal.helpItems.speedUp">加速移动</span></li>
                         </ul>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button id="helpTipsConfirm" class="button button-primary">知道了</button>
+                    <button id="helpTipsConfirm" class="button button-primary" data-i18n="modal.gotIt">知道了</button>
                 </div>
             </div>
         </div>

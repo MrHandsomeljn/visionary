@@ -82,10 +82,6 @@ export class RecordingManager {
         camera.aspect = targetOutputWidth / targetOutputHeight;
         camera.updateProjectionMatrix();
 
-        // 通知渲染器同步尺寸，重建深度缓冲区
-        const renderer = options.mainRenderer;
-        renderer.setSize(renderWidth, renderHeight, false); 
-
         // 初始化渲染器
         const initialized = await options.recordingCamera.initializeRenderer(
             options.mainRenderer,

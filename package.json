@@ -1,6 +1,6 @@
 {
   "name": "visionary-core",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "description": "Web-based 3D Gaussian Splatting renderer using WebGPU",
   "type": "module",
   "main": "dist/visionary-core.umd.js",
@@ -17,17 +17,24 @@
     "dist",
     "public",
     "models/onnx_dummy.onnx",
+    "scripts/check-dev-https.mjs",
+    "scripts/get-router-ip.py",
+    "scripts/dev-https-utils.mjs",
     "scripts/fix_onnx.mjs",
-    "scripts/postinstall.mjs"
+    "scripts/postinstall.mjs",
+    "scripts/setup-dev-https.mjs"
   ],
   "scripts": {
     "dev": "vite",
+    "router:ip": "python scripts/get-router-ip.py",
+    "dev:https:check": "node scripts/check-dev-https.mjs",
+    "dev:https:setup": "node scripts/setup-dev-https.mjs",
     "build": "vite build && npm run build:types",
     "build:types": "tsc --declaration --emitDeclarationOnly --outDir dist",
     "preview": "vite preview",
     "fix_onnx": "node scripts/fix_onnx.mjs",
     "fix_onnx_src": "node scripts/fix_onnx.mjs src/ort",
-    "postinstall": "npm run fix_onnx",
+    "postinstall": "node scripts/postinstall.mjs",
     "pack:release": "node scripts/make-release-tarball.mjs",
     "docs:clean": "node scripts/clean-docs-site.js",
     "docs:dev": "npm run docs:clean && node scripts/fix-docs-encoding.js && node scripts/copy-docs-files.js && mkdocs serve",
@@ -40,6 +47,7 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/three": "^0.179.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@webgpu/types": "^0.1.40",
     "tsx": "^4.20.6",
     "typescript": "^5.3.3",
@@ -53,6 +61,3 @@
     "three": "^0.171.0"
   }
 }
-
-
-

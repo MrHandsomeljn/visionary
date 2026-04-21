@@ -40,12 +40,15 @@ import {
 } from './editor-camera-preview.js';
 import {
     normalizeViewportGizmoModeForSelection,
+    resolveTimelineGizmoTarget,
     resolveViewportSelectionKind,
 } from './editor-gizmo-selection.js';
 import {
     resolveFloatingPanelPosition,
     resolveFloatingPanelLayerZIndices,
 } from './editor-floating-panels.js';
+import { SceneFS } from '../src/app/scene-fs.ts';
+import { ProjectApiClient } from '../src/editor/project-api-client.js';
 
 // DOM 元素引用
 const dom = {
@@ -57,6 +60,7 @@ const dom = {
     btnToggleAgentWorkbench: document.getElementById('btnToggleAgentWorkbench'),
     agentWorkflowStatus: document.getElementById('agentWorkflowStatus'),
     agentWorkflowTabs: document.getElementById('agentWorkflowTabs'),
+    btnUserSession: document.getElementById('btnUserSession'),
     agentContextSummary: document.getElementById('agentContextSummary'),
     btnAgentClearConversation: document.getElementById('btnAgentClearConversation'),
     agentMessageScroll: document.querySelector('.agent-message-scroll'),
@@ -88,6 +92,7 @@ const dom = {
     btnHelpTips: document.getElementById('btnHelpTips'),
     btnThemeToggle: document.getElementById('btnThemeToggle'),
     btnLanguageToggle: document.getElementById('btnLanguageToggle'),
+    workspaceStatusIndicator: document.getElementById('workspaceStatusIndicator'),
     btnClearScreen: document.getElementById('btnClearScreen'),
     exportToolFlyout: document.getElementById('exportToolFlyout'),
     btnExportFlyout: document.getElementById('btnExportFlyout'),
@@ -170,17 +175,21 @@ const dom = {
     cameraPreviewCanvas: document.getElementById('cameraPreviewCanvas'),
     cameraPreviewViewport: document.getElementById('cameraPreviewViewport'),
     cameraPreviewAspectRatio: document.getElementById('cameraPreviewAspectRatio'),
+    cameraPreviewResizeHandle: document.getElementById('cameraPreviewResizeHandle'),
     btnCameraSettingsClose: document.getElementById('btnCameraSettingsClose'),
     cameraSettingsPanel: document.getElementById('cameraSettingsPanel'),
     btnToggleCameraSequence: document.getElementById('btnToggleCameraSequence'),
     btnToggleCameraSequenceDrag: document.getElementById('btnToggleCameraSequenceDrag'),
-    timelineCameraInterpolation: document.getElementById('timelineCameraInterpolation'),
-    timelineInterpolationParamControl: document.getElementById('timelineInterpolationParamControl'),
-    timelineInterpolationParamLabel: document.getElementById('timelineInterpolationParamLabel'),
-    timelineInterpolationParam: document.getElementById('timelineInterpolationParam'),
-    timelineInterpolationParamValue: document.getElementById('timelineInterpolationParamValue'),
+    timelinePositionInterpolationLabel: document.getElementById('timelinePositionInterpolationLabel'),
+    timelineRotationInterpolationLabel: document.getElementById('timelineRotationInterpolationLabel'),
+    timelineTimingInterpolationLabel: document.getElementById('timelineTimingInterpolationLabel'),
+    timelineCatmullParam: document.getElementById('timelineCatmullParam'),
+    timelineRotationParam: document.getElementById('timelineRotationParam'),
+    timelineEaseParam: document.getElementById('timelineEaseParam'),
     cameraDisplayScale: document.getElementById('cameraDisplayScale'),
     cameraDisplayScaleValue: document.getElementById('cameraDisplayScaleValue'),
+    timelineCameraFovRange: document.getElementById('timelineCameraFovRange'),
+    timelineCameraFovNumber: document.getElementById('timelineCameraFovNumber'),
     timelineSpeed: document.getElementById('timelineSpeed'),
     timelineFps: document.getElementById('timelineFps'),
     timelineRuler: document.getElementById('timelineRuler'),
@@ -200,18 +209,104 @@ const dom = {
     exportModal: document.getElementById('exportModal'),
     exportModalTitle: document.getElementById('exportModalTitle'),
     exportResolution: document.getElementById('exportResolution'),
+    exportAspectRatioRow: document.getElementById('exportAspectRatioRow'),
+    exportAspectRatio: document.getElementById('exportAspectRatio'),
+    exportVideoSpeedRow: document.getElementById('exportVideoSpeedRow'),
+    exportVideoSpeed: document.getElementById('exportVideoSpeed'),
+    exportVideoFpsRow: document.getElementById('exportVideoFpsRow'),
+    exportVideoFps: document.getElementById('exportVideoFps'),
     exportMode: document.getElementById('exportMode'),
+    exportFovRow: document.getElementById('exportFovRow'),
     exportFov: document.getElementById('exportFov'),
     exportTimelineHint: document.getElementById('exportTimelineHint'),
+    exportProgress: document.getElementById('exportProgress'),
+    exportProgressFill: document.getElementById('exportProgressFill'),
+    exportProgressText: document.getElementById('exportProgressText'),
     exportCancel: document.getElementById('exportCancel'),
     exportConfirm: document.getElementById('exportConfirm'),
     helpTipsModal: document.getElementById('helpTipsModal'),
     helpTipsClose: document.getElementById('helpTipsClose'),
     helpTipsConfirm: document.getElementById('helpTipsConfirm'),
+    btnLoginModalClose: document.getElementById('btnLoginModalClose'),
+    btnProjectSessionClose: document.getElementById('btnProjectSessionClose'),
+    projectSessionTitle: document.getElementById('projectSessionTitle'),
+    projectSessionPrompt: document.getElementById('projectSessionPrompt'),
+    projectSessionUsernameInput: document.getElementById('projectSessionUsernameInput'),
+    btnProjectSessionLogin: document.getElementById('btnProjectSessionLogin'),
+    btnProjectSessionLoginCancel: document.getElementById('btnProjectSessionLoginCancel'),
+    projectSessionUserSummary: document.getElementById('projectSessionUserSummary'),
+    projectSessionNewProjectName: document.getElementById('projectSessionNewProjectName'),
+    projectSessionNewProjectNameError: document.getElementById('projectSessionNewProjectNameError'),
+    btnProjectSessionCreateProject: document.getElementById('btnProjectSessionCreateProject'),
+    btnProjectSessionDiscard: document.getElementById('btnProjectSessionDiscard'),
+    loginModal: document.getElementById('loginModal'),
+    postLoginProjectModal: document.getElementById('postLoginProjectModal'),
+    projectBrowserModal: document.getElementById('projectBrowserModal'),
+    projectBrowserTitle: document.getElementById('projectBrowserTitle'),
+    projectBrowserUserSummary: document.getElementById('projectBrowserUserSummary'),
+    projectBrowserProjectGrid: document.getElementById('projectBrowserProjectGrid'),
+    projectBrowserSaveAsPanel: document.getElementById('projectBrowserSaveAsPanel'),
+    projectBrowserSaveAsName: document.getElementById('projectBrowserSaveAsName'),
+    projectBrowserSaveAsNameError: document.getElementById('projectBrowserSaveAsNameError'),
+    btnProjectBrowserClose: document.getElementById('btnProjectBrowserClose'),
+    btnProjectBrowserSaveAs: document.getElementById('btnProjectBrowserSaveAs'),
+    btnProjectBrowserSaveAsCancel: document.getElementById('btnProjectBrowserSaveAsCancel'),
+    btnProjectBrowserSaveAsConfirm: document.getElementById('btnProjectBrowserSaveAsConfirm'),
+    btnProjectBrowserLogout: document.getElementById('btnProjectBrowserLogout'),
+    workspaceTargetModal: document.getElementById('workspaceTargetModal'),
+    workspaceTargetTitle: document.getElementById('workspaceTargetTitle'),
+    workspaceTargetPrompt: document.getElementById('workspaceTargetPrompt'),
+    btnWorkspaceTargetClose: document.getElementById('btnWorkspaceTargetClose'),
+    btnWorkspaceTargetServer: document.getElementById('btnWorkspaceTargetServer'),
+    btnWorkspaceTargetLocal: document.getElementById('btnWorkspaceTargetLocal'),
+    btnWorkspaceTargetCancel: document.getElementById('btnWorkspaceTargetCancel'),
+    adminProjectModal: document.getElementById('adminProjectModal'),
+    adminProjectTitle: document.getElementById('adminProjectTitle'),
+    adminProjectSummary: document.getElementById('adminProjectSummary'),
+    adminUserList: document.getElementById('adminUserList'),
+    adminSceneOwnerLabel: document.getElementById('adminSceneOwnerLabel'),
+    adminProjectGrid: document.getElementById('adminProjectGrid'),
+    btnAdminProjectClose: document.getElementById('btnAdminProjectClose'),
+    btnAdminProjectLogout: document.getElementById('btnAdminProjectLogout'),
 
     // 版本标签
     versionLabel: document.getElementById('versionLabel'),
 };
+
+function createWorkspaceState() {
+    return {
+        name: null,
+        writable: false,
+        mode: 'local',
+        dirty: false,
+        saving: false,
+        lastSavedAt: null,
+        error: null,
+        agentDirty: false,
+        agentSaving: false,
+        agentLastSavedAt: null,
+        agentError: null,
+        syncStatus: 'no-workspace',
+    };
+}
+
+function createProjectSessionState() {
+    return {
+        user: '',
+        authenticated: false,
+        isAdmin: false,
+        activeProjectId: '',
+        activeProjectName: '',
+        activeProjectSceneAssetPaths: new Set(),
+        activeProjectAgentAssetPaths: new Set(),
+        projects: [],
+        loadingProjects: false,
+        lastError: null,
+        adminUsers: [],
+        loadingAdminUsers: false,
+        adminSelectedUser: '',
+    };
+}
 
 // 应用状态
 const state = {
@@ -220,18 +315,24 @@ const state = {
     selectedModelId: null,
     cameraSequenceVisible: true,
     cameraSequenceDragEnabled: false,
+    cameraSequenceDragEnabledBeforeHidden: null,
     selectedCameraSequenceFrame: null,
     cameraMode: 'orbit',
     currentTime: 0,
     isPlaying: false,
     isLooping: false,
     keyframes: [],
+    cameraFovKeyframes: [],
     currentKeyframeIndex: -1,
     selectedFrame: 0,
     timelineFps: 24,
     timelinePlaybackSpeed: 1.0,
-    cameraInterpolationMode: 'linear',
-    cameraInterpolationParam: 0.5,
+    cameraPositionInterpolation: 'linear',
+    cameraRotationInterpolation: 'slerp',
+    cameraTimingInterpolation: 'linear',
+    cameraCatmullTension: 1,
+    cameraRotationStrength: 0,
+    cameraEaseStrength: 0,
     cameraSequenceDisplayScale: 1.0,
     timelineDurationSec: 10,
     sceneBackgroundHex: '#707070',
@@ -242,6 +343,7 @@ const state = {
     sceneSettingsOpen: false,
     cameraPreviewOpen: false,
     cameraPreviewAspectId: '16:9',
+    cameraPreviewMaxSize: 320 / 3,
     cameraSettingsOpen: false,
     exportFlyoutOpen: false,
     clearScreenMode: false,
@@ -254,10 +356,16 @@ const state = {
     agentMessages: [],
     agentPendingImages: [],
     demoScene: createInactiveDemoSceneState(),
+    workspace: createWorkspaceState(),
+    projectSession: createProjectSessionState(),
+    pendingWorkspaceTargetAction: null,
+    forceFullWorkspaceAssetMigration: false,
+    forceFullServerAssetMigration: false,
 };
 
 // EditorApp 实例 (会在 init 后设置)
 let app = null;
+const sceneFs = new SceneFS();
 let animationUiSyncTimer = null;
 let labelDragState = null;
 let isInputLabelDragging = false;
@@ -270,6 +378,7 @@ let isExporting = false;
 let syncingCameraSequenceSelection = false;
 let syncingSelectedModelSelection = false;
 let cameraPreviewDragState = null;
+let cameraPreviewResizeState = null;
 let activeFloatingPanelKey = 'cameraPreview';
 let keyframeMarkerDrag = null;
 let suppressMarkerClickOnce = false;
@@ -279,6 +388,8 @@ let agentMessageScrollbarDragState = null;
 let agentPreviewManagerPromise = null;
 let agentMessageBottomPinRaf = 0;
 let agentMessageBottomPinFramesRemaining = 0;
+let agentMessageScrollbarSyncRaf = 0;
+let agentWorkbenchResizeRaf = 0;
 let agentSessionStore = null;
 let agentSessionPersistTimer = 0;
 let preferredLeftSidebarWidth = null;
@@ -288,6 +399,13 @@ let sidebarWidthDebugHistory = [];
 let cameraControlDebugSamples = [];
 let cameraControlDebugLastDragLogAt = 0;
 let demoSceneModelRevealTimer = 0;
+let workspaceAutosaveTimer = 0;
+let workspaceSaveInFlight = null;
+let workspaceSaveQueued = false;
+let serverProjectAutosaveInFlight = null;
+let serverProjectAutosaveQueued = false;
+let lastCanvasViewportSync = null;
+const projectApi = new ProjectApiClient();
 const agentSessionActionHandlers = {
     onCancel: null,
     onRetry: null,
@@ -295,11 +413,12 @@ const agentSessionActionHandlers = {
 };
 const THEME_STORAGE_KEY = 'visionary_editor_theme';
 const UI_LANGUAGE_STORAGE_KEY = 'visionary_editor_ui_language_v1';
+const PROJECT_SESSION_USER_STORAGE_KEY = 'visionary_editor_project_session_user_v1';
 const AGENT_WORKBENCH_WIDTH_STORAGE_KEY = 'visionary_editor_agent_workbench_width_v1';
 const AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY = 'visionary_editor_agent_workbench_collapsed_v1';
 const AGENT_WORKBENCH_WORKFLOW_STORAGE_KEY = 'visionary_editor_agent_workbench_workflow_v1';
 const AGENT_WORKBENCH_DEFAULT_WIDTH = 360;
-const AGENT_WORKBENCH_MIN_WIDTH = 300;
+const AGENT_WORKBENCH_MIN_WIDTH = 314;
 const AGENT_WORKBENCH_MAX_WIDTH = 520;
 const AGENT_WORKBENCH_COLLAPSED_WIDTH = 64;
 const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_left_sidebar_width_v4';
@@ -308,46 +427,77 @@ const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
 const TIMELINE_MIN_DURATION_SEC = 10;
 const TIMELINE_SLIDER_THUMB_PX = 16;
 const EXPORT_FALLBACK_FPS = 24;
-const CAMERA_INTERPOLATION_MODE_LINEAR = 'linear';
-const CAMERA_INTERPOLATION_MODE_SQUAD = 'squad';
-const CAMERA_INTERPOLATION_MODE_CATMULL = 'catmull';
-const CAMERA_INTERPOLATION_MODE_EASE = 'ease';
-const CAMERA_INTERPOLATION_PARAM_STORAGE_KEY = 'visionary_editor_camera_interpolation_param';
-const CAMERA_INTERPOLATION_MODE_STORAGE_KEY = 'visionary_editor_camera_interpolation_mode';
+const LEGACY_CAMERA_INTERPOLATION_MODE_LINEAR = 'linear';
+const LEGACY_CAMERA_INTERPOLATION_MODE_SQUAD = 'squad';
+const LEGACY_CAMERA_INTERPOLATION_MODE_CATMULL = 'catmull';
+const LEGACY_CAMERA_INTERPOLATION_MODE_EASE = 'ease';
+const LEGACY_CAMERA_INTERPOLATION_PARAM_STORAGE_KEY = 'visionary_editor_camera_interpolation_param';
+const LEGACY_CAMERA_INTERPOLATION_MODE_STORAGE_KEY = 'visionary_editor_camera_interpolation_mode';
+const CAMERA_POSITION_INTERPOLATION_LINEAR = 'linear';
+const CAMERA_POSITION_INTERPOLATION_CATMULL = 'catmull';
+const CAMERA_ROTATION_INTERPOLATION_SLERP = 'slerp';
+const CAMERA_ROTATION_INTERPOLATION_SQUAD = 'squad';
+const CAMERA_TIMING_INTERPOLATION_LINEAR = 'linear';
+const CAMERA_TIMING_INTERPOLATION_EASE = 'ease';
+const CAMERA_POSITION_INTERPOLATION_STORAGE_KEY = 'visionary_editor_camera_position_interpolation_mode';
+const CAMERA_ROTATION_INTERPOLATION_STORAGE_KEY = 'visionary_editor_camera_rotation_interpolation_mode';
+const CAMERA_TIMING_INTERPOLATION_STORAGE_KEY = 'visionary_editor_camera_timing_interpolation_mode';
+const CAMERA_POSITION_INTERPOLATION_STRENGTH_STORAGE_KEY = 'visionary_editor_camera_position_interpolation_strength';
+const CAMERA_CATMULL_TENSION_STORAGE_KEY = 'visionary_editor_camera_catmull_tension';
+const CAMERA_ROTATION_STRENGTH_STORAGE_KEY = 'visionary_editor_camera_rotation_strength';
+const CAMERA_EASE_STRENGTH_STORAGE_KEY = 'visionary_editor_camera_ease_strength';
 const CAMERA_DISPLAY_SCALE_STORAGE_KEY = 'visionary_editor_camera_display_scale';
 const CAMERA_PREVIEW_ASPECT_STORAGE_KEY = 'visionary_editor_camera_preview_aspect_ratio_v1';
 const CAMERA_DISPLAY_SCALE_MIN = 0.25;
 const CAMERA_DISPLAY_SCALE_MAX = 3.0;
 const CAMERA_DISPLAY_SCALE_DEFAULT = 1.0;
-const CAMERA_INTERPOLATION_CONFIGS = {
-    [CAMERA_INTERPOLATION_MODE_LINEAR]: {
+const CAMERA_PREVIEW_MAX_SIZE_DEFAULT = 320 / 3;
+const CAMERA_PREVIEW_MAX_SIZE_MIN = 72;
+const CAMERA_PREVIEW_MAX_SIZE_MAX = 220;
+const CAMERA_PREVIEW_PANEL_HORIZONTAL_PADDING = 24;
+const CAMERA_PREVIEW_PANEL_DEFAULT_GAP = 12;
+const CAMERA_POSITION_INTERPOLATION_CONFIGS = {
+    [CAMERA_POSITION_INTERPOLATION_LINEAR]: {
         get label() { return t('timeline.interpolationModes.linear'); },
-        tunable: false,
-        defaultParam: 0.5,
     },
-    [CAMERA_INTERPOLATION_MODE_SQUAD]: {
-        get label() { return t('timeline.interpolationModes.squad'); },
-        tunable: false,
-        defaultParam: 0.5,
-    },
-    [CAMERA_INTERPOLATION_MODE_CATMULL]: {
+    [CAMERA_POSITION_INTERPOLATION_CATMULL]: {
         get label() { return t('timeline.interpolationModes.catmull'); },
         tunable: true,
         get paramLabel() { return t('timeline.interpolationParams.catmull'); },
         min: 0,
         max: 1,
         step: 0.01,
-        defaultParam: 0.35,
+        defaultParam: 1,
         format: (value) => value.toFixed(2),
     },
-    [CAMERA_INTERPOLATION_MODE_EASE]: {
+};
+const CAMERA_ROTATION_INTERPOLATION_CONFIGS = {
+    [CAMERA_ROTATION_INTERPOLATION_SLERP]: {
+        get label() { return t('timeline.rotationModes.slerp'); },
+    },
+    [CAMERA_ROTATION_INTERPOLATION_SQUAD]: {
+        get label() { return t('timeline.interpolationModes.squad'); },
+    },
+};
+const CAMERA_ROTATION_INTERPOLATION_STRENGTH_CONFIG = {
+    min: 0,
+    max: 1,
+    step: 0.01,
+    defaultParam: 0,
+    format: (value) => value.toFixed(2),
+};
+const CAMERA_TIMING_INTERPOLATION_CONFIGS = {
+    [CAMERA_TIMING_INTERPOLATION_LINEAR]: {
+        get label() { return t('timeline.interpolationModes.linear'); },
+    },
+    [CAMERA_TIMING_INTERPOLATION_EASE]: {
         get label() { return t('timeline.interpolationModes.ease'); },
         tunable: true,
         get paramLabel() { return t('timeline.interpolationParams.ease'); },
-        min: 0,
+        min: -1,
         max: 1,
         step: 0.01,
-        defaultParam: 0.65,
+        defaultParam: 0,
         format: (value) => value.toFixed(2),
     },
 };
@@ -380,6 +530,9 @@ const EXPORT_PRESET_RESOLUTIONS = [
 
 const UI_TEXT = {
     zh: {
+        editor: {
+            title: 'Visionary Editor 0.1.8',
+        },
         loading: {
             default: '加载中...',
             loadingModel: '加载模型中... ({current}/{total})',
@@ -421,6 +574,88 @@ const UI_TEXT = {
             completed: '已完成',
             generating: '生成中',
             failed: '失败',
+            user: '用户',
+            none: '无',
+        },
+        workspaceStatus: {
+            localOnly: '仅本地同步',
+            localChanges: '本地有未导出更改',
+            localFolder: '本地目录：{name}',
+            localFolderSet: '工作区已设置到本地目录“{name}”',
+            loginToSync: '登录后可同步到服务器项目',
+            noLocalWorkspace: '未选择同步工作区',
+            offline: '离线',
+            cannotSync: '无法同步到服务器项目',
+            syncFailed: '同步失败',
+            syncing: '正在同步',
+            projectLabel: '项目：{name}',
+            projectSyncInProgress: '项目同步中',
+            unsyncedChanges: '有未同步更改',
+            noActiveProjectSelected: '尚未选择项目',
+            noActiveProject: '未打开项目',
+            chooseProjectBeforeSync: '同步前需要先选择服务器项目',
+            synced: '已同步',
+            lastStaged: '上次暂存',
+            ariaLabel: '工作区状态',
+            chooserTitle: '设置工作区',
+            chooserPrompt: '选择工作区目标',
+            chooserPromptLoadScene: '当前未设置工作区。请先选择工作区目标，再继续加载场景。',
+            setServer: '设置工作区到服务器',
+            resetServer: '重设工作区到服务器',
+            setLocal: '设置工作区到本地',
+            resetLocal: '重设工作区到本地',
+        },
+        projectSession: {
+            userButtonLogin: '登录',
+            userButtonTooltipLoggedIn: '项目与退出',
+            loginTitle: '登录',
+            usernameLabel: '用户名',
+            usernamePlaceholder: '输入用户名',
+            loginAction: '登录',
+            loginSuccessTitle: '登录成功',
+            savePrompt: '是否将当前场景改动保存到新项目中？',
+            currentUser: '当前用户：{user}',
+            newProjectLabel: '新项目名',
+            discardAction: '丢弃',
+            saveAsNewAction: '保存为新项目',
+            browserTitle: '我的项目',
+            saveAsLabel: '另存为项目名',
+            saveAction: '保存',
+            saveCurrentAsAction: '当前项目另存为',
+            logoutAction: '退出登录',
+            adminTitle: '管理员面板',
+            adminSummary: '管理所有用户及其服务器项目',
+            userListLabel: '用户列表',
+            sceneListLabel: '场景列表',
+            loadingProjects: '正在加载项目...',
+            noProjectsYet: '暂无历史项目',
+            currentBadge: '当前项目',
+            openAction: '打开',
+            loadingUsers: '正在加载用户...',
+            noUsersFound: '暂无用户',
+            projectCount: '{count} 个项目',
+            deleteUserAria: '删除用户',
+            deleteProjectAria: '删除项目',
+            projectsOfUser: '{user} 的场景',
+            selectUser: '请选择一个用户',
+            selectUserToViewProjects: '选择用户后查看项目',
+            noAdminProjectsYet: '暂无项目',
+            loginRequired: '请先登录',
+            enterUsername: '请输入用户名',
+            loggedInAs: '已登录为 {user}',
+            keptWithoutCreating: '已保留当前场景，未创建新项目',
+            projectSynced: '项目已同步：{name}',
+            loadingProject: '正在加载项目...',
+            openedProject: '已打开项目“{name}”',
+            openProjectFailedEmpty: '打开项目失败：未能恢复历史场景内容，已阻止空场景覆盖服务器项目',
+            savingProject: '正在保存项目...',
+            duplicateProjectName: '项目名称与现有名称重复',
+            exportingProject: '正在导出项目...',
+            exportProject: '导出项目',
+            projectExported: '项目已导出到“{name}”',
+            exportCancelled: '已取消导出项目',
+            exportFailed: '导出项目失败',
+            folderFallback: '文件夹',
         },
         theme: {
             switchToLight: '切换到白天',
@@ -439,6 +674,8 @@ const UI_TEXT = {
             noWebgpuTitle: '不支持 WebGPU',
             noWebgpuIntro: '此应用需要浏览器支持 WebGPU。',
             noWebgpuBrowserHint: '请使用以下浏览器之一：',
+            noWebgpuBrowserChrome: 'Chrome/Edge 113 或更高版本',
+            noWebgpuBrowserFirefox: 'Firefox Nightly',
             noWebgpuCheck: '检查浏览器支持',
         },
         agent: {
@@ -552,10 +789,12 @@ const UI_TEXT = {
             pointCount: '{count} 点',
             toggleVisibility: '切换可见性',
             deleteModel: '删除',
+            resizeModelList: '调整模型列表宽度',
         },
         sceneSettings: {
             title: '场景设置',
             close: '收起设置',
+            resizePanel: '调整设置面板宽度',
             background: '背景色',
             preset: '预设',
             mode: '模式',
@@ -594,8 +833,10 @@ const UI_TEXT = {
         },
         timeline: {
             title: '相机关键帧',
-            cameraPreview: '相机预览',
-            cameraSettings: '相机设置',
+            cameraPreview: '预览',
+            cameraPreviewTitle: '相机预览',
+            cameraSettings: '控制',
+            cameraSettingsTitle: '相机控制',
             openCameraPreview: '打开相机预览',
             closeCameraPreview: '关闭相机预览',
             openCameraSettings: '打开相机设置',
@@ -605,12 +846,17 @@ const UI_TEXT = {
             dragHint: '在自由视角下拖动相机关键帧',
             toggleSequenceVisibility: '切换相机序列可见性',
             size: '大小',
+            fov: 'FOV',
             interpolation: '插值',
+            positionInterpolation: '位置插值',
+            rotationInterpolation: '旋转插值',
+            timingInterpolation: '时间节奏',
             parameter: '参数',
             keyframes: '关键帧',
             cameraSequence: '相机序列',
             addKeyframe: '新增关键帧',
             removeKeyframe: '删除关键帧',
+            pauseCamera: '暂停相机动画',
             importSequence: '导入相机序列',
             exportSequence: '导出相机序列',
             clearSequence: '清空相机序列',
@@ -625,6 +871,9 @@ const UI_TEXT = {
                 catmull: 'Catmull',
                 ease: 'Ease',
             },
+            rotationModes: {
+                slerp: 'Slerp',
+            },
             interpolationParams: {
                 catmull: '张力',
                 ease: '强度',
@@ -637,7 +886,17 @@ const UI_TEXT = {
             exportVideoTitle: '渲染视频',
             exportImageTitle: '渲染图片',
             resolution: '分辨率',
+            aspectRatio: '相机比例',
+            playbackSpeed: '导出倍速',
+            exportFps: '导出 FPS',
             renderMode: '渲染模式',
+            exportRenderModes: {
+                rgb: '彩色图',
+                depth: '深度图',
+                normal: '法向图',
+            },
+            exportProgressIdle: '准备渲染',
+            exportProgressValue: '渲染进度 {percent}%',
             helpTitle: '操作提示',
             closeHelp: '关闭操作提示',
             gotIt: '知道了',
@@ -667,8 +926,124 @@ const UI_TEXT = {
             exportCurrentFrame: '将导出当前视角的单帧图像',
             exportTimeline: '时间轴导出: {duration}s, {fps} FPS, {frames} 帧, 关键帧 {keyframes}',
         },
+        messages: {
+            agentOperationFailed: 'Agent 操作失败: {message}',
+            imagesAddedToComposer: '已添加 {count} 张图片到输入区',
+            imageAddedToComposer: '图片已加入输入区',
+            retryRequest: '重试任务',
+            imageInput: '图片输入',
+            demoSceneAlreadyFilled: 'Demo 场景已完成填充',
+            demoSceneRevealStarted: 'Demo 场景开始填充',
+            demoCameraPreviewMissing: '当前没有待应用的 Demo 相机预览',
+            demoCameraTimelineApplied: 'Demo 相机时间轴已应用',
+            demoCameraPreviewCanceled: 'Demo 相机预览已取消，并恢复原时间轴',
+            demoCameraCompletion: '请查看当前相机，并确认是否应用。',
+            agentExecutionFailed: 'Agent 执行失败',
+            agentPreviewPlaceholder: 'Agent 生成预览占位',
+            invalidDepthScale: '深度倍率格式错误',
+            setDepthScaleFailed: '设置深度倍率失败',
+            depthScaleSet: '深度倍率: {value}x',
+            invalidFov: 'FOV 格式错误',
+            timelineFovSet: '时间轴 FOV: {value}°',
+            fovSet: 'FOV: {value}°',
+            setFovFailed: '设置 FOV 失败',
+            invalidBackgroundColor: '背景色格式错误，请使用 #RRGGBB',
+            setBackgroundFailed: '设置背景色失败',
+            skyPresetMissing: '天空球预设不存在: {id}',
+            skyPresetSet: '天空球预设: {name}',
+            cameraKeyframeMoveRotateOnly: '相机关键帧仅支持移动和旋转',
+            viewportGizmoSet: '视口控件: {mode}',
+            viewportGizmoOff: '视口控件: 已关闭',
+            switchToFreeCamera: '请先切换到自由视角',
+            cameraKeyframeDragState: '相机关键帧拖动: {state}',
+            cameraPreviewState: '相机预览: {state}',
+            cameraPreviewAspectSet: '相机预览比例: {label}',
+            setCameraSequenceVisibilityFailed: '设置相机序列可见性失败',
+            setCameraDisplaySizeFailed: '设置相机显示大小失败',
+            modelVisibility: '模型可见性: {state}',
+            modelSelectionCleared: '已取消选中模型',
+            selectedModel: '选中模型: {name}',
+            modelUpdated: '模型已更新',
+            transformReset: '变换已重置',
+            noModelSelected: '未选中模型',
+            switchRenderModeFailed: '切换渲染模式失败: {mode}',
+            displayModeSet: '显示模式: {mode}',
+            exportDialogNotInitialized: '导出弹窗未初始化',
+            editorNotInitializedExport: '编辑器尚未初始化，无法导出',
+            invalidResolution: '分辨率格式错误',
+            invalidRenderMode: '渲染模式无效: {mode}',
+            invalidPlaybackSpeed: '倍速格式错误',
+            imageExportDataUnavailable: '无法导出图片数据',
+            renderContextUnavailableImage: '渲染上下文不可用，无法导出图片',
+            recordingCameraInitFailed: '录制相机初始化失败',
+            addKeyframeBeforeVideoExport: '请先在时间轴添加至少 1 个相机关键帧',
+            renderContextUnavailableVideo: '渲染上下文不可用，无法导出视频',
+            imageExported: '图片导出完成: {width}x{height}, {mode}',
+            videoExported: '视频导出完成: {width}x{height}, {mode}',
+            exportFailed: '导出失败: {message}',
+            invalidAssetPath: '无效资源路径: {path}',
+            sceneSavedToWorkspace: '场景已保存到工作区 "{name}"：{count} 个资源{skipped}',
+            sceneSavedSkippedAssets: '，跳过 {count} 个无源模型',
+            editorNotInitializedExportProject: '编辑器尚未初始化，无法导出项目',
+            editorNotInitializedLoadScene: '编辑器尚未初始化，无法加载场景',
+            emptySceneAssets: 'scene.json 中没有可加载的 assets/scenes 模型条目',
+            loadSceneClearConfirm: '加载场景会先清空当前模型，是否继续？',
+            openProjectReplaceConfirm: '打开项目会替换当前场景，是否继续？',
+            urlAssetLoadFailed: 'URL 资源加载失败: {status}',
+            fallbackUrlAssetLoadFailed: 'Fallback URL 资源加载失败: {status}',
+            missingAssetPath: '资产缺少可读取路径: {name}',
+            loadModelFailed: '加载模型失败: {name}',
+            sceneLoaded: '场景加载完成（{name}）：成功 {loaded}，失败 {failed}',
+            demoSceneLoaded: '场景加载完成（{name} Demo）：成功 {loaded}，失败 {failed}',
+            loadSceneFailed: '加载场景失败: {message}',
+            editorNotInitialized: '编辑器尚未初始化',
+            projectSavedAsCurrent: '已将当前内容保存为项目“{name}”',
+            confirmDeleteProject: '确认删除用户“{user}”的项目“{projectId}”？',
+            deletingProject: '正在删除项目...',
+            projectDeleted: '项目已删除',
+            confirmDeleteUser: '确认删除用户“{user}”及其所有项目？',
+            deletingUser: '正在删除用户...',
+            userDeleted: '用户已删除',
+            clearSceneConfirm: '确定要清空所有模型吗？',
+            sceneCleared: '场景已清空',
+            cameraInterpolationSet: '相机插值: {mode}',
+            cameraInterpolationAxisSet: '{axis}: {mode}',
+            parameterSet: '{label}: {value}',
+            invalidFps: 'FPS 格式错误',
+            keyframeAdjusted: '关键帧已调整: {time}s',
+            modelAnimationClipUpdated: '模型动画片段已更新',
+            modelTrackLoopEnds: '循环结束 {time}s',
+            modelAnimationOverflow: '模型动画播放时长超过当前 clip 时长',
+            cameraPoseReadFailed: '无法读取当前相机位姿',
+            keyframeOverwritten: '关键帧已覆盖: {time}s',
+            keyframeAdded: '关键帧已新增: {time}s',
+            fovKeyframeDeleted: 'FOV 关键帧已删除: {time}s',
+            noKeyframeAtCurrentTime: '当前时间戳无关键帧: {time}s',
+            keyframeDeleted: '关键帧已删除: {time}s',
+            cameraSequenceExported: '相机序列已导出: {poseCount} 个位姿关键帧，{fovCount} 个 FOV 关键帧',
+            clearCameraSequenceConfirm: '确定要清空当前相机序列吗？',
+            cameraSequenceCleared: '相机序列已清空',
+            missingKeyframesArray: '缺少 keyframes 数组',
+            cameraSequenceImported: '相机序列已导入: {poseCount} 个位姿关键帧，{fovCount} 个 FOV 关键帧',
+            cameraSequenceImportFailed: '导入相机序列失败: {message}',
+            cameraAnimationPaused: '相机动画: 暂停',
+            cameraAnimationPlaying: '相机动画: 播放',
+            cameraAnimationLoopState: '相机动画循环: {state}',
+            cameraPresetSet: '相机预设: {preset}',
+            focusModel: '聚焦模型: {name}',
+            cameraUpright: '相机回正',
+            cameraModeSet: '相机模式: {mode}',
+            playbackSpeedSet: '全局播放倍速: {speed}x',
+            timelineAutoFit: '时间轴已自动适配到 {duration}s',
+            canvasNotFound: 'Canvas element not found',
+            editorAppModuleLoadFailed: 'Failed to load EditorApp module: {message}',
+            editorInitFailed: 'Failed to initialize editor',
+        },
     },
     en: {
+        editor: {
+            title: 'Visionary Editor 0.1.8',
+        },
         loading: {
             default: 'Loading...',
             loadingModel: 'Loading models... ({current}/{total})',
@@ -710,6 +1085,88 @@ const UI_TEXT = {
             completed: 'Completed',
             generating: 'Generating',
             failed: 'Failed',
+            user: 'User',
+            none: 'None',
+        },
+        workspaceStatus: {
+            localOnly: 'Local sync only',
+            localChanges: 'Local changes not exported',
+            localFolder: 'Local folder: {name}',
+            localFolderSet: 'Workspace set to local folder "{name}"',
+            loginToSync: 'Login to sync with server projects',
+            noLocalWorkspace: 'No sync workspace selected',
+            offline: 'Offline',
+            cannotSync: 'Cannot sync to server project',
+            syncFailed: 'Sync failed',
+            syncing: 'Syncing',
+            projectLabel: 'Project: {name}',
+            projectSyncInProgress: 'Project sync in progress',
+            unsyncedChanges: 'Unsynced changes',
+            noActiveProjectSelected: 'No active project selected',
+            noActiveProject: 'No active project',
+            chooseProjectBeforeSync: 'Choose a server project before syncing',
+            synced: 'Synced',
+            lastStaged: 'Last staged',
+            ariaLabel: 'Workspace status',
+            chooserTitle: 'Set workspace',
+            chooserPrompt: 'Choose the workspace target',
+            chooserPromptLoadScene: 'No workspace is configured. Choose a workspace target before opening a scene.',
+            setServer: 'Set workspace to server',
+            resetServer: 'Reset workspace to server',
+            setLocal: 'Set workspace to local',
+            resetLocal: 'Reset workspace to local',
+        },
+        projectSession: {
+            userButtonLogin: 'Login',
+            userButtonTooltipLoggedIn: 'Projects and logout',
+            loginTitle: 'Login',
+            usernameLabel: 'Username',
+            usernamePlaceholder: 'Enter username',
+            loginAction: 'Login',
+            loginSuccessTitle: 'Login successful',
+            savePrompt: 'Do you want to save the current scene changes into a new project?',
+            currentUser: 'Current user: {user}',
+            newProjectLabel: 'New project name',
+            discardAction: 'Discard',
+            saveAsNewAction: 'Save as New Project',
+            browserTitle: 'My Projects',
+            saveAsLabel: 'Save as project name',
+            saveAction: 'Save',
+            saveCurrentAsAction: 'Save Current As',
+            logoutAction: 'Logout',
+            adminTitle: 'Admin Panel',
+            adminSummary: 'Manage users and all server projects',
+            userListLabel: 'Users',
+            sceneListLabel: 'Projects',
+            loadingProjects: 'Loading projects...',
+            noProjectsYet: 'No projects yet',
+            currentBadge: 'Current',
+            openAction: 'Open',
+            loadingUsers: 'Loading users...',
+            noUsersFound: 'No users found',
+            projectCount: '{count} projects',
+            deleteUserAria: 'Delete user',
+            deleteProjectAria: 'Delete project',
+            projectsOfUser: 'Projects of {user}',
+            selectUser: 'Select a user',
+            selectUserToViewProjects: 'Select a user to view projects',
+            noAdminProjectsYet: 'No projects yet',
+            loginRequired: 'Please login first',
+            enterUsername: 'Please enter a username',
+            loggedInAs: 'Logged in as {user}',
+            keptWithoutCreating: 'Current scene kept without creating a project',
+            projectSynced: 'Project synced: {name}',
+            loadingProject: 'Loading project...',
+            openedProject: 'Opened project "{name}"',
+            openProjectFailedEmpty: 'Failed to open project: no persisted scene content was restored, so server overwrite was blocked',
+            savingProject: 'Saving project...',
+            duplicateProjectName: 'Project name already exists',
+            exportingProject: 'Exporting project...',
+            exportProject: 'Export Project',
+            projectExported: 'Project exported to "{name}"',
+            exportCancelled: 'Project export cancelled',
+            exportFailed: 'Project export failed',
+            folderFallback: 'folder',
         },
         theme: {
             switchToLight: 'Switch to light mode',
@@ -728,6 +1185,8 @@ const UI_TEXT = {
             noWebgpuTitle: 'WebGPU Not Supported',
             noWebgpuIntro: 'This application requires WebGPU support.',
             noWebgpuBrowserHint: 'Please use one of the following browsers:',
+            noWebgpuBrowserChrome: 'Chrome/Edge 113 or later',
+            noWebgpuBrowserFirefox: 'Firefox Nightly',
             noWebgpuCheck: 'Check Browser Support',
         },
         agent: {
@@ -841,10 +1300,12 @@ const UI_TEXT = {
             pointCount: '{count} pts',
             toggleVisibility: 'Toggle visibility',
             deleteModel: 'Delete',
+            resizeModelList: 'Resize model list',
         },
         sceneSettings: {
             title: 'Scene Settings',
             close: 'Close settings',
+            resizePanel: 'Resize settings panel',
             background: 'Background',
             preset: 'Preset',
             mode: 'Mode',
@@ -883,8 +1344,10 @@ const UI_TEXT = {
         },
         timeline: {
             title: 'Camera Keyframes',
-            cameraPreview: 'Camera Preview',
-            cameraSettings: 'Camera Settings',
+            cameraPreview: 'Preview',
+            cameraPreviewTitle: 'Camera Preview',
+            cameraSettings: 'Control',
+            cameraSettingsTitle: 'Camera Control',
             openCameraPreview: 'Open camera preview',
             closeCameraPreview: 'Close camera preview',
             openCameraSettings: 'Open camera settings',
@@ -894,12 +1357,17 @@ const UI_TEXT = {
             dragHint: 'Drag camera keyframes in free camera mode',
             toggleSequenceVisibility: 'Toggle camera sequence visibility',
             size: 'Size',
+            fov: 'FOV',
             interpolation: 'Interpolation',
+            positionInterpolation: 'Position interpolation',
+            rotationInterpolation: 'Rotation interpolation',
+            timingInterpolation: 'Timing',
             parameter: 'Parameter',
             keyframes: 'Keyframes',
             cameraSequence: 'Camera sequence',
             addKeyframe: 'Add keyframe',
             removeKeyframe: 'Remove keyframe',
+            pauseCamera: 'Pause camera animation',
             importSequence: 'Import camera sequence',
             exportSequence: 'Export camera sequence',
             clearSequence: 'Clear camera sequence',
@@ -914,6 +1382,9 @@ const UI_TEXT = {
                 catmull: 'Catmull',
                 ease: 'Ease',
             },
+            rotationModes: {
+                slerp: 'Slerp',
+            },
             interpolationParams: {
                 catmull: 'Tension',
                 ease: 'Strength',
@@ -926,7 +1397,17 @@ const UI_TEXT = {
             exportVideoTitle: 'Render Video',
             exportImageTitle: 'Render Image',
             resolution: 'Resolution',
+            aspectRatio: 'Camera aspect',
+            playbackSpeed: 'Export speed',
+            exportFps: 'Export FPS',
             renderMode: 'Render mode',
+            exportRenderModes: {
+                rgb: 'RGB',
+                depth: 'Depth',
+                normal: 'Normal',
+            },
+            exportProgressIdle: 'Ready to render',
+            exportProgressValue: 'Rendering {percent}%',
             helpTitle: 'Help',
             closeHelp: 'Close help',
             gotIt: 'Got it',
@@ -955,6 +1436,119 @@ const UI_TEXT = {
             },
             exportCurrentFrame: 'Exports a single frame from the current view',
             exportTimeline: 'Timeline export: {duration}s, {fps} FPS, {frames} frames, {keyframes} keyframes',
+        },
+        messages: {
+            agentOperationFailed: 'Agent operation failed: {message}',
+            imagesAddedToComposer: 'Added {count} images to the input area',
+            imageAddedToComposer: 'Image added to input',
+            retryRequest: 'Retry request',
+            imageInput: 'Image input',
+            demoSceneAlreadyFilled: 'Demo scene is already filled',
+            demoSceneRevealStarted: 'Demo scene reveal started',
+            demoCameraPreviewMissing: 'No demo camera preview is waiting to be applied',
+            demoCameraTimelineApplied: 'Demo camera timeline applied',
+            demoCameraPreviewCanceled: 'Demo camera preview was canceled and restored',
+            demoCameraCompletion: 'Please review the current camera preview and confirm whether to apply it.',
+            agentExecutionFailed: 'Agent execution failed',
+            agentPreviewPlaceholder: 'Agent preview placeholder',
+            invalidDepthScale: 'Invalid depth scale',
+            setDepthScaleFailed: 'Failed to set depth scale',
+            depthScaleSet: 'Depth scale: {value}x',
+            invalidFov: 'Invalid FOV',
+            timelineFovSet: 'Timeline FOV: {value}°',
+            fovSet: 'FOV: {value}°',
+            setFovFailed: 'Failed to set FOV',
+            invalidBackgroundColor: 'Invalid background color. Use #RRGGBB',
+            setBackgroundFailed: 'Failed to set background color',
+            skyPresetMissing: 'Sky preset does not exist: {id}',
+            skyPresetSet: 'Sky preset: {name}',
+            cameraKeyframeMoveRotateOnly: 'Camera keyframes only support translate and rotate',
+            viewportGizmoSet: 'Viewport gizmo: {mode}',
+            viewportGizmoOff: 'Viewport gizmo: off',
+            switchToFreeCamera: 'Switch to free camera first',
+            cameraKeyframeDragState: 'Camera keyframe drag: {state}',
+            cameraPreviewState: 'Camera preview: {state}',
+            cameraPreviewAspectSet: 'Camera preview aspect: {label}',
+            setCameraSequenceVisibilityFailed: 'Failed to set camera sequence visibility',
+            setCameraDisplaySizeFailed: 'Failed to set camera display size',
+            modelVisibility: 'Model visibility: {state}',
+            modelSelectionCleared: 'Model selection cleared',
+            selectedModel: 'Selected model: {name}',
+            modelUpdated: 'Model updated',
+            transformReset: 'Transform reset',
+            noModelSelected: 'No model selected',
+            switchRenderModeFailed: 'Failed to switch render mode: {mode}',
+            displayModeSet: 'Display mode: {mode}',
+            exportDialogNotInitialized: 'Export dialog is not initialized',
+            editorNotInitializedExport: 'Editor is not initialized, cannot export',
+            invalidResolution: 'Invalid resolution',
+            invalidRenderMode: 'Invalid render mode: {mode}',
+            invalidPlaybackSpeed: 'Invalid playback speed',
+            imageExportDataUnavailable: 'Unable to export image data',
+            renderContextUnavailableImage: 'Render context is unavailable, cannot export image',
+            recordingCameraInitFailed: 'Failed to initialize recording camera',
+            addKeyframeBeforeVideoExport: 'Add at least 1 camera keyframe on the timeline first',
+            renderContextUnavailableVideo: 'Render context is unavailable, cannot export video',
+            imageExported: 'Image exported: {width}x{height}, {mode}',
+            videoExported: 'Video exported: {width}x{height}, {mode}',
+            exportFailed: 'Export failed: {message}',
+            invalidAssetPath: 'Invalid asset path: {path}',
+            sceneSavedToWorkspace: 'Scene saved to workspace "{name}": {count} assets{skipped}',
+            sceneSavedSkippedAssets: ', skipped {count} sourceless models',
+            editorNotInitializedExportProject: 'Editor is not initialized, cannot export project',
+            editorNotInitializedLoadScene: 'Editor is not initialized, cannot load scene',
+            emptySceneAssets: 'scene.json has no loadable assets/scenes model entries',
+            loadSceneClearConfirm: 'Loading a scene will clear the current models first. Continue?',
+            openProjectReplaceConfirm: 'Opening a project will replace the current scene. Continue?',
+            urlAssetLoadFailed: 'URL asset load failed: {status}',
+            fallbackUrlAssetLoadFailed: 'Fallback URL asset load failed: {status}',
+            missingAssetPath: 'Asset is missing a readable path: {name}',
+            loadModelFailed: 'Failed to load model: {name}',
+            sceneLoaded: 'Scene loaded ({name}): {loaded} succeeded, {failed} failed',
+            demoSceneLoaded: 'Scene loaded ({name} Demo): {loaded} succeeded, {failed} failed',
+            loadSceneFailed: 'Failed to load scene: {message}',
+            editorNotInitialized: 'Editor is not initialized',
+            projectSavedAsCurrent: 'Saved current content as project "{name}"',
+            confirmDeleteProject: 'Delete project "{projectId}" for user "{user}"?',
+            deletingProject: 'Deleting project...',
+            projectDeleted: 'Project deleted',
+            confirmDeleteUser: 'Delete user "{user}" and all projects?',
+            deletingUser: 'Deleting user...',
+            userDeleted: 'User deleted',
+            clearSceneConfirm: 'Clear all models?',
+            sceneCleared: 'Scene cleared',
+            cameraInterpolationSet: 'Camera interpolation: {mode}',
+            cameraInterpolationAxisSet: '{axis}: {mode}',
+            parameterSet: '{label}: {value}',
+            invalidFps: 'Invalid FPS',
+            keyframeAdjusted: 'Keyframe adjusted: {time}s',
+            modelAnimationClipUpdated: 'Model animation clip updated',
+            modelTrackLoopEnds: 'Loop ends {time}s',
+            modelAnimationOverflow: 'Model animation duration exceeds the current clip length',
+            cameraPoseReadFailed: 'Unable to read current camera pose',
+            keyframeOverwritten: 'Keyframe overwritten: {time}s',
+            keyframeAdded: 'Keyframe added: {time}s',
+            fovKeyframeDeleted: 'FOV keyframe deleted: {time}s',
+            noKeyframeAtCurrentTime: 'No keyframe at current timestamp: {time}s',
+            keyframeDeleted: 'Keyframe deleted: {time}s',
+            cameraSequenceExported: 'Camera sequence exported: {poseCount} pose keyframes, {fovCount} FOV keyframes',
+            clearCameraSequenceConfirm: 'Clear the current camera sequence?',
+            cameraSequenceCleared: 'Camera sequence cleared',
+            missingKeyframesArray: 'Missing keyframes array',
+            cameraSequenceImported: 'Camera sequence imported: {poseCount} pose keyframes, {fovCount} FOV keyframes',
+            cameraSequenceImportFailed: 'Failed to import camera sequence: {message}',
+            cameraAnimationPaused: 'Camera animation: paused',
+            cameraAnimationPlaying: 'Camera animation: playing',
+            cameraAnimationLoopState: 'Camera animation loop: {state}',
+            cameraPresetSet: 'Camera preset: {preset}',
+            focusModel: 'Focus model: {name}',
+            cameraUpright: 'Camera upright',
+            cameraModeSet: 'Camera mode: {mode}',
+            playbackSpeedSet: 'Global playback speed: {speed}x',
+            timelineAutoFit: 'Timeline auto-fitted to {duration}s',
+            canvasNotFound: 'Canvas element not found',
+            editorAppModuleLoadFailed: 'Failed to load EditorApp module: {message}',
+            editorInitFailed: 'Failed to initialize editor',
         },
     },
 };
@@ -1005,6 +1599,32 @@ function setElementText(element, text) {
     }
 }
 
+function clearProjectNameConflictState(input, errorElement) {
+    input?.classList.remove('has-error');
+    if (errorElement) {
+        errorElement.textContent = '';
+        errorElement.classList.add('hidden');
+    }
+}
+
+function setProjectNameConflictState(input, errorElement) {
+    if (input) {
+        input.classList.add('has-error');
+        input.focus();
+        input.select?.();
+    }
+    if (errorElement) {
+        errorElement.textContent = t('projectSession.duplicateProjectName');
+        errorElement.classList.remove('hidden');
+    }
+}
+
+function isDuplicateProjectNameError(error) {
+    const code = String(error?.code || '').trim().toUpperCase();
+    const message = String(error?.message || '').trim().toLowerCase();
+    return code === 'CONFLICT' || message.includes('project name already exists');
+}
+
 function logCameraControlDebug(kind = 'unknown') {
     const info = app?.getCameraControlDebugInfo?.();
     if (!info) return null;
@@ -1033,6 +1653,639 @@ function setButtonTooltip(button, tooltip, ariaLabel = tooltip) {
     button.title = tooltip;
     button.setAttribute('data-tooltip', tooltip);
     button.setAttribute('aria-label', ariaLabel);
+}
+
+function applyDeclarativeI18n(root = document) {
+    root.querySelectorAll('[data-i18n]').forEach((element) => {
+        const key = element.getAttribute('data-i18n');
+        if (!key) return;
+        element.textContent = t(key);
+    });
+    root.querySelectorAll('[data-i18n-placeholder]').forEach((element) => {
+        const key = element.getAttribute('data-i18n-placeholder');
+        if (!key) return;
+        element.setAttribute('placeholder', t(key));
+    });
+    root.querySelectorAll('[data-i18n-attrs]').forEach((element) => {
+        const raw = element.getAttribute('data-i18n-attrs');
+        if (!raw) return;
+        raw.split(';').forEach((entry) => {
+            const trimmed = entry.trim();
+            if (!trimmed) return;
+            const separatorIndex = trimmed.indexOf(':');
+            if (separatorIndex <= 0) return;
+            const attrName = trimmed.slice(0, separatorIndex).trim();
+            const key = trimmed.slice(separatorIndex + 1).trim();
+            if (!attrName || !key) return;
+            const value = t(key);
+            element.setAttribute(attrName, value);
+            if (attrName === 'title') {
+                element.setAttribute('data-tooltip', value);
+            }
+        });
+    });
+}
+
+function formatWorkspaceSavedAt(savedAt) {
+    if (!Number.isFinite(savedAt) || savedAt <= 0) {
+        return state.uiLanguage === 'en' ? 'None' : '无';
+    }
+    try {
+        return new Intl.DateTimeFormat(undefined, {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+        }).format(new Date(savedAt));
+    } catch (error) {
+        return new Date(savedAt).toLocaleString();
+    }
+}
+
+function getWorkspaceCombinedLastSavedAt() {
+    const sceneSavedAt = Number(state.workspace?.lastSavedAt) || 0;
+    const agentSavedAt = Number(state.workspace?.agentLastSavedAt) || 0;
+    const latest = Math.max(sceneSavedAt, agentSavedAt);
+    return latest > 0 ? latest : null;
+}
+
+function isServerProjectSessionActive() {
+    return Boolean(
+        state.projectSession?.authenticated
+        && state.projectSession?.activeProjectId
+        && state.workspace?.mode === 'server'
+    );
+}
+
+function isLocalWorkspaceSyncMode() {
+    return !isServerProjectSessionActive();
+}
+
+function resolveWorkspaceIndicatorStatus() {
+    const workspace = state.workspace || createWorkspaceState();
+    const online = typeof navigator === 'undefined' ? true : navigator.onLine !== false;
+    const combinedError = workspace.error || workspace.agentError || null;
+    const combinedSaving = Boolean(workspace.saving || workspace.agentSaving);
+    const combinedDirty = Boolean(workspace.dirty || workspace.agentDirty);
+    const isEnglish = state.uiLanguage === 'en';
+
+    if (isLocalWorkspaceSyncMode()) {
+        if (combinedError) {
+            return {
+                code: 'error',
+                label: t('workspaceStatus.syncFailed'),
+                detail: String(combinedError),
+            };
+        }
+        if (combinedSaving) {
+            return {
+                code: 'saving',
+                label: t('workspaceStatus.syncing'),
+                detail: workspace.name
+                    ? t('workspaceStatus.localFolder', { name: workspace.name })
+                    : t('workspaceStatus.loginToSync'),
+            };
+        }
+        return {
+            code: combinedDirty ? 'dirty' : (workspace.name ? 'clean' : 'no-workspace'),
+            label: combinedDirty
+                ? t('workspaceStatus.localChanges')
+                : (workspace.name ? t('workspaceStatus.localOnly') : t('workspaceStatus.noLocalWorkspace')),
+            detail: workspace.name
+                ? t('workspaceStatus.localFolder', { name: workspace.name })
+                : t('workspaceStatus.loginToSync'),
+        };
+    }
+
+    if (!online) {
+        return {
+            code: 'offline',
+            label: isEnglish ? 'Offline' : '离线',
+            detail: t('workspaceStatus.cannotSync'),
+        };
+    }
+    if (combinedError) {
+        return {
+            code: 'error',
+            label: t('workspaceStatus.syncFailed'),
+            detail: String(combinedError),
+        };
+    }
+    if (combinedSaving) {
+        return {
+            code: 'saving',
+            label: t('workspaceStatus.syncing'),
+            detail: workspace.name
+                ? t('workspaceStatus.projectLabel', { name: workspace.name })
+                : t('workspaceStatus.projectSyncInProgress'),
+        };
+    }
+    if (combinedDirty) {
+        return {
+            code: 'dirty',
+            label: t('workspaceStatus.unsyncedChanges'),
+            detail: workspace.name
+                ? t('workspaceStatus.projectLabel', { name: workspace.name })
+                : t('workspaceStatus.noActiveProjectSelected'),
+        };
+    }
+    if (!workspace.name) {
+        return {
+            code: 'no-workspace',
+            label: t('workspaceStatus.noActiveProject'),
+            detail: t('workspaceStatus.chooseProjectBeforeSync'),
+        };
+    }
+    return {
+        code: 'clean',
+        label: t('workspaceStatus.synced'),
+        detail: t('workspaceStatus.projectLabel', { name: workspace.name }),
+    };
+}
+
+function updateWorkspaceStatusIndicator() {
+    if (!dom.workspaceStatusIndicator) return;
+    const status = resolveWorkspaceIndicatorStatus();
+    const savedAtLabel = formatWorkspaceSavedAt(getWorkspaceCombinedLastSavedAt());
+    const lastSavedLabel = state.uiLanguage === 'en' ? 'Last staged' : '上次暂存';
+    const ariaLabel = state.uiLanguage === 'en' ? 'Workspace status' : '工作区状态';
+    const tooltip = `${status.label}\n${status.detail}\n${lastSavedLabel}: ${savedAtLabel}`;
+    dom.workspaceStatusIndicator.dataset.status = status.code;
+    setButtonTooltip(dom.workspaceStatusIndicator, tooltip, ariaLabel);
+}
+
+function getProjectSessionDefaultProjectName() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    return `Untitled Project ${year}-${month}-${day} ${hours}-${minutes}`;
+}
+
+function getProjectSessionAvatarToken(user) {
+    const trimmed = String(user || '').trim();
+    if (!trimmed) return '';
+    return Array.from(trimmed)[0] || '';
+}
+
+function getProjectSessionAvatarGradient(token) {
+    const normalized = String(token || '').trim();
+    if (!normalized) {
+        return {
+            start: '#66758d',
+            end: '#465267',
+        };
+    }
+    const codePoint = Array.from(normalized)[0]?.codePointAt(0) || 0;
+    const startHue = codePoint % 360;
+    const endHue = (startHue + 42) % 360;
+    return {
+        start: `hsl(${startHue} 72% 58%)`,
+        end: `hsl(${endHue} 74% 44%)`,
+    };
+}
+
+function syncProjectSessionButton() {
+    if (!dom.btnUserSession) return;
+    const authenticated = Boolean(state.projectSession?.authenticated);
+    const user = state.projectSession?.user || '';
+    const avatarToken = authenticated ? getProjectSessionAvatarToken(user) : '';
+    const avatarLabel = avatarToken ? avatarToken.toLocaleUpperCase() : '';
+    const gradient = getProjectSessionAvatarGradient(avatarToken);
+    dom.btnUserSession.dataset.authenticated = String(authenticated);
+    dom.btnUserSession.style.setProperty('--agent-user-avatar-start', gradient.start);
+    dom.btnUserSession.style.setProperty('--agent-user-avatar-end', gradient.end);
+    setElementText(dom.btnUserSession.querySelector('.agent-user-avatar-text'), avatarLabel);
+    setButtonTooltip(
+        dom.btnUserSession,
+        authenticated
+            ? t('projectSession.userButtonTooltipLoggedIn')
+            : t('projectSession.userButtonLogin'),
+        authenticated
+            ? t('projectSession.currentUser', { user })
+            : t('projectSession.userButtonLogin'),
+    );
+}
+
+function isAdminUser(user) {
+    return String(user || '').trim().toLowerCase() === 'admin';
+}
+
+function openLoginModal() {
+    dom.loginModal?.classList.remove('hidden');
+    if (dom.projectSessionUsernameInput) {
+        dom.projectSessionUsernameInput.value = state.projectSession?.user || '';
+        dom.projectSessionUsernameInput.focus();
+        dom.projectSessionUsernameInput.select?.();
+    }
+}
+
+function closeLoginModal() {
+    dom.loginModal?.classList.add('hidden');
+}
+
+function openPostLoginProjectModal() {
+    if (dom.projectSessionTitle) {
+        dom.projectSessionTitle.textContent = t('projectSession.loginSuccessTitle');
+    }
+    if (dom.projectSessionPrompt) {
+        dom.projectSessionPrompt.textContent = t('projectSession.savePrompt');
+    }
+    if (dom.projectSessionUserSummary) {
+        dom.projectSessionUserSummary.textContent = state.projectSession?.user
+            ? t('projectSession.currentUser', { user: state.projectSession.user })
+            : '';
+    }
+    if (dom.projectSessionNewProjectName) {
+        dom.projectSessionNewProjectName.value = getProjectSessionDefaultProjectName();
+    }
+    dom.postLoginProjectModal?.classList.remove('hidden');
+    void refreshProjectSessionProjects();
+}
+
+function closePostLoginProjectModal() {
+    clearProjectNameConflictState(dom.projectSessionNewProjectName, dom.projectSessionNewProjectNameError);
+    dom.postLoginProjectModal?.classList.add('hidden');
+}
+
+function openProjectBrowserModal() {
+    if (dom.projectBrowserTitle) {
+        dom.projectBrowserTitle.textContent = t('projectSession.browserTitle');
+    }
+    if (dom.projectBrowserUserSummary) {
+        dom.projectBrowserUserSummary.textContent = state.projectSession?.user
+            ? t('projectSession.currentUser', { user: state.projectSession.user })
+            : '';
+    }
+    if (dom.projectBrowserSaveAsName) {
+        dom.projectBrowserSaveAsName.value = state.projectSession.activeProjectName || getProjectSessionDefaultProjectName();
+    }
+    closeProjectBrowserSaveAsPanel();
+    dom.projectBrowserModal?.classList.remove('hidden');
+    void refreshProjectSessionProjects();
+}
+
+function closeProjectBrowserModal() {
+    clearProjectNameConflictState(dom.projectBrowserSaveAsName, dom.projectBrowserSaveAsNameError);
+    closeProjectBrowserSaveAsPanel();
+    dom.projectBrowserModal?.classList.add('hidden');
+}
+
+function hasConfiguredWorkspaceTarget() {
+    return Boolean(
+        (state.workspace?.mode === 'server' && state.projectSession?.authenticated)
+        || state.workspace?.writable
+        || sceneFs.isWorkspaceWritable?.()
+    );
+}
+
+function syncWorkspaceTargetModalLabels(mode = 'status') {
+    if (dom.workspaceTargetTitle) {
+        dom.workspaceTargetTitle.textContent = t('workspaceStatus.chooserTitle');
+    }
+    if (dom.workspaceTargetPrompt) {
+        dom.workspaceTargetPrompt.textContent = mode === 'load-scene'
+            ? t('workspaceStatus.chooserPromptLoadScene')
+            : t('workspaceStatus.chooserPrompt');
+    }
+    const hasWorkspace = hasConfiguredWorkspaceTarget();
+    setButtonTooltip(dom.btnWorkspaceTargetClose, t('common.close'), t('common.close'));
+    setElementText(
+        dom.btnWorkspaceTargetServer,
+        hasWorkspace ? t('workspaceStatus.resetServer') : t('workspaceStatus.setServer'),
+    );
+    setElementText(
+        dom.btnWorkspaceTargetLocal,
+        hasWorkspace ? t('workspaceStatus.resetLocal') : t('workspaceStatus.setLocal'),
+    );
+    setElementText(dom.btnWorkspaceTargetCancel, t('common.cancel'));
+}
+
+function openWorkspaceTargetModal(mode = 'status') {
+    syncWorkspaceTargetModalLabels(mode);
+    if (dom.workspaceTargetModal) {
+        dom.workspaceTargetModal.dataset.reason = mode;
+    }
+    dom.workspaceTargetModal?.classList.remove('hidden');
+}
+
+function closeWorkspaceTargetModal() {
+    if (dom.workspaceTargetModal) {
+        delete dom.workspaceTargetModal.dataset.reason;
+    }
+    dom.workspaceTargetModal?.classList.add('hidden');
+}
+
+function setPendingWorkspaceTargetAction(action = null) {
+    state.pendingWorkspaceTargetAction = action;
+}
+
+function markWorkspaceTargetMigrationRequired(target) {
+    if (target === 'local') {
+        state.forceFullWorkspaceAssetMigration = true;
+        return;
+    }
+    if (target === 'server') {
+        state.forceFullServerAssetMigration = true;
+    }
+}
+
+function clearActiveServerProjectSelection() {
+    state.projectSession.activeProjectId = '';
+    state.projectSession.activeProjectName = '';
+    clearActiveServerProjectAssetCaches();
+}
+
+async function selectLocalWorkspace(options = {}) {
+    const { silentCancel = true } = options;
+    try {
+        await sceneFs.openWorkspaceReadWrite();
+        const workspaceInfo = sceneFs.getWorkspaceInfo();
+        clearActiveServerProjectSelection();
+        syncWorkspaceStateFromSceneFS({
+            mode: 'local',
+            name: workspaceInfo.name,
+            writable: workspaceInfo.writable,
+            dirty: false,
+            saving: false,
+            error: null,
+            syncStatus: 'clean',
+        });
+        syncProjectSessionButton();
+        updateWorkspaceStatusIndicator();
+        return sceneFs.getWorkspaceHandle();
+    } catch (error) {
+        if (silentCancel && isWorkspaceSelectionCancelledError(error)) {
+            return null;
+        }
+        throw error;
+    }
+}
+
+async function pickLocalSceneFolder(options = {}) {
+    const { silentCancel = true } = options;
+    try {
+        const handle = await window.showDirectoryPicker({
+            mode: 'readwrite',
+        });
+        return handle;
+    } catch (error) {
+        if (silentCancel && isWorkspaceSelectionCancelledError(error)) {
+            return null;
+        }
+        throw error;
+    }
+}
+
+async function handleWorkspaceTargetServerSelection(options = {}) {
+    const { reason = 'status' } = options;
+    closeWorkspaceTargetModal();
+    if (reason === 'load-scene-after-load') {
+        setPendingWorkspaceTargetAction({
+            type: 'create-server-project-from-loaded-scene',
+        });
+    } else {
+        setPendingWorkspaceTargetAction(null);
+    }
+    if (state.projectSession.authenticated) {
+        if (state.projectSession.isAdmin) {
+            openAdminProjectModal();
+            return true;
+        }
+        if (reason === 'load-scene-after-load') {
+            openPostLoginProjectModal();
+        } else {
+            openProjectBrowserModal();
+        }
+        return true;
+    }
+    openLoginModal();
+    return true;
+}
+
+async function handleWorkspaceTargetLocalSelection(options = {}) {
+    const { reason = 'status' } = options;
+    closeWorkspaceTargetModal();
+    const handle = await selectLocalWorkspace({ silentCancel: true });
+    if (!handle) {
+        return null;
+    }
+    markWorkspaceTargetMigrationRequired('local');
+    showInfo(t('workspaceStatus.localFolderSet', { name: handle.name || 'workspace' }));
+    return handle;
+}
+
+function openAdminProjectModal() {
+    if (dom.adminProjectTitle) {
+        dom.adminProjectTitle.textContent = t('projectSession.adminTitle');
+    }
+    if (dom.adminProjectSummary) {
+        dom.adminProjectSummary.textContent = t('projectSession.adminSummary');
+    }
+    dom.adminProjectModal?.classList.remove('hidden');
+    void refreshAdminUsers();
+}
+
+function closeAdminProjectModal() {
+    dom.adminProjectModal?.classList.add('hidden');
+}
+
+function openProjectBrowserSaveAsPanel() {
+    clearProjectNameConflictState(dom.projectBrowserSaveAsName, dom.projectBrowserSaveAsNameError);
+    dom.projectBrowserSaveAsPanel?.classList.remove('hidden');
+    if (dom.projectBrowserSaveAsName) {
+        dom.projectBrowserSaveAsName.value = state.projectSession.activeProjectName || getProjectSessionDefaultProjectName();
+        dom.projectBrowserSaveAsName.focus();
+        dom.projectBrowserSaveAsName.select?.();
+    }
+}
+
+function closeProjectBrowserSaveAsPanel() {
+    clearProjectNameConflictState(dom.projectBrowserSaveAsName, dom.projectBrowserSaveAsNameError);
+    dom.projectBrowserSaveAsPanel?.classList.add('hidden');
+}
+
+function renderProjectBrowserProjectGrid() {
+    if (!dom.projectBrowserProjectGrid) return;
+    const projects = Array.isArray(state.projectSession?.projects) ? state.projectSession.projects : [];
+    if (state.projectSession?.loadingProjects) {
+        dom.projectBrowserProjectGrid.innerHTML = `<div class="project-session-empty">${t('projectSession.loadingProjects')}</div>`;
+        return;
+    }
+    if (projects.length === 0) {
+        dom.projectBrowserProjectGrid.innerHTML = `<div class="project-session-empty">${t('projectSession.noProjectsYet')}</div>`;
+        return;
+    }
+    dom.projectBrowserProjectGrid.innerHTML = projects.map((project) => {
+        const isActive = (project.id || '') === (state.projectSession.activeProjectId || '');
+        return `
+        <div class="project-browser-project-card${isActive ? ' is-active' : ''}">
+            <div class="project-browser-project-card-header">
+                ${isActive ? `<span class="project-browser-project-card-badge">${escapeHtml(t('projectSession.currentBadge'))}</span>` : ''}
+                <span class="project-browser-project-card-title">${escapeHtml(project.name || project.id || '')}</span>
+                <span class="project-browser-project-card-subtitle">${escapeHtml(project.updatedAt || '')}</span>
+            </div>
+            <div class="project-browser-project-card-actions">
+                <button type="button" class="button button-secondary" data-project-open="${escapeHtml(project.id || '')}">
+                    ${escapeHtml(t('projectSession.openAction'))}
+                </button>
+            </div>
+        </div>
+    `;
+    }).join('');
+}
+
+function renderAdminUserList() {
+    if (!dom.adminUserList) return;
+    const users = Array.isArray(state.projectSession.adminUsers) ? state.projectSession.adminUsers : [];
+    if (state.projectSession.loadingAdminUsers) {
+        dom.adminUserList.innerHTML = `<div class="project-session-empty">${t('projectSession.loadingUsers')}</div>`;
+        return;
+    }
+    if (users.length === 0) {
+        dom.adminUserList.innerHTML = `<div class="project-session-empty">${t('projectSession.noUsersFound')}</div>`;
+        return;
+    }
+    dom.adminUserList.innerHTML = users.map((user) => {
+        const isActive = user.user === state.projectSession.adminSelectedUser;
+        return `
+        <div class="admin-user-card${isActive ? ' is-active' : ''}" data-admin-user-select="${escapeHtml(user.user || '')}">
+            <div class="admin-user-card-meta">
+                <div class="admin-user-card-title">${escapeHtml(user.user || '')}</div>
+                <div class="admin-user-card-subtitle">${escapeHtml(t('projectSession.projectCount', { count: user.projectCount || 0 }))}</div>
+            </div>
+            <button type="button" class="admin-delete-btn" data-admin-user-delete="${escapeHtml(user.user || '')}" aria-label="${escapeHtml(t('projectSession.deleteUserAria'))}">×</button>
+        </div>
+    `;
+    }).join('');
+}
+
+function renderAdminProjectGrid() {
+    if (!dom.adminProjectGrid) return;
+    if (dom.adminSceneOwnerLabel) {
+        dom.adminSceneOwnerLabel.textContent = state.projectSession.adminSelectedUser
+            ? t('projectSession.projectsOfUser', { user: state.projectSession.adminSelectedUser })
+            : t('projectSession.selectUser');
+    }
+    if (!state.projectSession.adminSelectedUser) {
+        dom.adminProjectGrid.innerHTML = `<div class="project-session-empty">${t('projectSession.selectUserToViewProjects')}</div>`;
+        return;
+    }
+    if (state.projectSession.loadingProjects) {
+        dom.adminProjectGrid.innerHTML = `<div class="project-session-empty">${t('projectSession.loadingProjects')}</div>`;
+        return;
+    }
+    const projects = Array.isArray(state.projectSession.projects) ? state.projectSession.projects : [];
+    if (projects.length === 0) {
+        dom.adminProjectGrid.innerHTML = `<div class="project-session-empty">${t('projectSession.noAdminProjectsYet')}</div>`;
+        return;
+    }
+    dom.adminProjectGrid.innerHTML = projects.map((project) => `
+        <div class="project-browser-project-card">
+            <button type="button" class="admin-delete-btn admin-project-card-delete" data-admin-project-delete="${escapeHtml(project.id || '')}" aria-label="${escapeHtml(t('projectSession.deleteProjectAria'))}">×</button>
+            <div class="project-browser-project-card-header">
+                <span class="project-browser-project-card-title">${escapeHtml(project.name || project.id || '')}</span>
+                <span class="project-browser-project-card-subtitle">${escapeHtml(project.updatedAt || '')}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function refreshAdminUsers() {
+    state.projectSession.loadingAdminUsers = true;
+    renderAdminUserList();
+    try {
+        state.projectSession.adminUsers = await projectApi.listUsers();
+        state.projectSession.lastError = null;
+        if (!state.projectSession.adminSelectedUser || !state.projectSession.adminUsers.some((item) => item.user === state.projectSession.adminSelectedUser)) {
+            state.projectSession.adminSelectedUser = state.projectSession.adminUsers[0]?.user || '';
+        }
+        renderAdminUserList();
+        await refreshAdminSelectedUserProjects();
+    } catch (error) {
+        state.projectSession.lastError = error?.message || String(error);
+        showError(state.projectSession.lastError);
+    } finally {
+        state.projectSession.loadingAdminUsers = false;
+        renderAdminUserList();
+    }
+}
+
+async function refreshAdminSelectedUserProjects() {
+    if (!state.projectSession.adminSelectedUser) {
+        state.projectSession.projects = [];
+        state.projectSession.loadingProjects = false;
+        renderAdminProjectGrid();
+        return;
+    }
+    state.projectSession.loadingProjects = true;
+    renderAdminProjectGrid();
+    try {
+        state.projectSession.projects = await projectApi.listProjects(state.projectSession.adminSelectedUser);
+        state.projectSession.lastError = null;
+    } catch (error) {
+        state.projectSession.lastError = error?.message || String(error);
+        showError(state.projectSession.lastError);
+    } finally {
+        state.projectSession.loadingProjects = false;
+        renderAdminProjectGrid();
+    }
+}
+
+async function refreshProjectSessionProjects() {
+    if (state.projectSession?.isAdmin) {
+        renderAdminProjectGrid();
+        return;
+    }
+    if (!state.projectSession?.authenticated || !state.projectSession.user) {
+        state.projectSession.projects = [];
+        state.projectSession.loadingProjects = false;
+        renderProjectBrowserProjectGrid();
+        return;
+    }
+    state.projectSession.loadingProjects = true;
+    renderProjectBrowserProjectGrid();
+    try {
+        state.projectSession.projects = await projectApi.listProjects(state.projectSession.user);
+        state.projectSession.lastError = null;
+    } catch (error) {
+        state.projectSession.lastError = error?.message || String(error);
+        showError(state.projectSession.lastError);
+    } finally {
+        state.projectSession.loadingProjects = false;
+        renderProjectBrowserProjectGrid();
+    }
+}
+
+async function openProjectSessionPopover() {
+    if (state.projectSession.authenticated) {
+        if (state.projectSession.isAdmin) {
+            openAdminProjectModal();
+            return;
+        }
+        openProjectBrowserModal();
+        return;
+    }
+    openLoginModal();
+}
+
+function setProjectSessionUser(user) {
+    const normalized = String(user || '').trim();
+    state.projectSession.user = normalized;
+    state.projectSession.authenticated = Boolean(normalized);
+    state.projectSession.isAdmin = isAdminUser(normalized);
+    if (normalized) {
+        localStorage.setItem(PROJECT_SESSION_USER_STORAGE_KEY, normalized);
+    } else {
+        localStorage.removeItem(PROJECT_SESSION_USER_STORAGE_KEY);
+    }
+    syncProjectSessionButton();
+    updateWorkspaceStatusIndicator();
 }
 
 function getSkyPresetDisplayName(presetOrId) {
@@ -1069,52 +2322,37 @@ function updateLanguageToggleLabel() {
 
 function updateLocalizedStaticUi() {
     document.documentElement.lang = state.uiLanguage === 'en' ? 'en' : 'zh-CN';
+    applyDeclarativeI18n();
 
     if (dom.loadingOverlay && dom.loadingOverlay.classList.contains('hidden')) {
         setElementText(dom.loadingOverlay.querySelector('.loading-text'), t('canvas.loading'));
     }
-    setElementText(dom.noWebGPU?.querySelector('h2'), t('canvas.noWebgpuTitle'));
-    const noWebGpuParagraphs = dom.noWebGPU?.querySelectorAll('p') || [];
-    setElementText(noWebGpuParagraphs[0], t('canvas.noWebgpuIntro'));
-    setElementText(noWebGpuParagraphs[1], t('canvas.noWebgpuBrowserHint'));
-    const noWebGpuButton = dom.noWebGPU?.querySelector('a.button');
-    setElementText(noWebGpuButton, t('canvas.noWebgpuCheck'));
-
-    dom.agentWorkbench?.setAttribute('aria-label', t('agent.workbench'));
-    dom.agentWorkflowTabs?.setAttribute('aria-label', t('agent.workflowTabs'));
-    dom.agentMessageScroll?.setAttribute('aria-label', t('agent.messageHistory'));
-    dom.agentComposerAttachments?.setAttribute('aria-label', t('agent.pendingImages'));
     if (dom.agentComposerInput) {
         dom.agentComposerInput.placeholder = t('agent.inputPlaceholder');
     }
-    setButtonTooltip(dom.btnAgentAddImage, t('common.addImage'));
-    setElementText(dom.btnAgentSend, t('common.send'));
-    dom.agentWorkbenchResizer?.setAttribute('aria-label', t('agent.resizeAria'));
     document.querySelectorAll('.agent-workflow-tab').forEach((button) => {
         const workflowId = button.dataset.workflow;
+        if (!workflowId) return;
         const label = AGENT_WORKFLOW_DEFS[workflowId]?.label || workflowId;
         const shortLabel = getAgentWorkflowShortLabel(workflowId);
         button.title = label;
         button.setAttribute('aria-label', label);
         setElementText(button.querySelector('.agent-workflow-label'), shortLabel);
     });
+    syncProjectSessionButton();
+    syncProjectSessionModalLabels();
 
-    setElementText(document.querySelector('#left-sidebar .sidebar-header h2'), t('sidebar.title'));
     setButtonTooltip(dom.btnAddModel, t('sidebar.loadModel'));
     setButtonTooltip(dom.btnLoadScene, t('sidebar.loadScene'));
-    setButtonTooltip(dom.btnSaveScene, t('sidebar.saveScene'));
+    setButtonTooltip(dom.btnSaveScene, t('projectSession.exportProject'));
     setButtonTooltip(dom.btnClearScene, t('sidebar.clearScene'));
-    setElementText(document.querySelector('#modelTransformSection .subsection-title'), t('sidebar.transform'));
     setButtonTooltip(dom.btnResetTransform, t('common.reset'));
     const transformLabels = dom.modelTransformSection?.querySelectorAll('.transform-property-row .property-label span') || [];
     setElementText(transformLabels[0], t('sidebar.position'));
     setElementText(transformLabels[1], t('sidebar.rotation'));
     setElementText(transformLabels[2], t('sidebar.scale'));
-    setElementText(document.querySelector('#onnxAnimSection .subsection-title'), t('sidebar.animation'));
-    setElementText(document.querySelector('#onnxAnimSection .property-label span'), t('sidebar.speed'));
     dom.modelAnimSpeedValue?.setAttribute('aria-label', t('sidebar.speed'));
 
-    setElementText(document.querySelector('#sceneSettingsPanel .settings-card-header h3'), t('sceneSettings.title'));
     setButtonTooltip(dom.btnSceneSettingsClose, t('sceneSettings.close'), t('sceneSettings.close'));
     const sceneSettingLabels = dom.sceneSettingsPanel?.querySelectorAll('.property-row .property-label span') || [];
     setElementText(sceneSettingLabels[0], t('sceneSettings.background'));
@@ -1142,22 +2380,21 @@ function updateLocalizedStaticUi() {
     setButtonTooltip(dom.btnExportFlyout, t('toolbar.export'));
     setButtonTooltip(dom.btnToggleSceneSettings, t('toolbar.sceneSettings'));
     setButtonTooltip(dom.btnHelpTips, t('toolbar.help'));
+    updateWorkspaceStatusIndicator();
 
-    setElementText(document.querySelector('#bottom-timeline .timeline-header h2'), t('timeline.title'));
     setButtonTooltip(dom.btnToggleCameraPreview, t('timeline.openCameraPreview'), t('timeline.openCameraPreview'));
     setElementText(dom.btnToggleCameraPreview?.querySelector('.btn-text'), t('timeline.cameraPreview'));
     setButtonTooltip(dom.btnToggleCameraSettings, t('timeline.openCameraSettings'), t('timeline.openCameraSettings'));
     setElementText(dom.btnToggleCameraSettings?.querySelector('.btn-text'), t('timeline.cameraSettings'));
-    setElementText(document.querySelector('#cameraPreviewPanel .settings-card-header h3'), t('timeline.cameraPreview'));
     setButtonTooltip(dom.btnCameraPreviewClose, t('timeline.closeCameraPreview'), t('timeline.closeCameraPreview'));
-    setElementText(document.querySelector('#cameraPreviewPanel .property-label'), t('timeline.previewRatio'));
-    setElementText(document.querySelector('#cameraSettingsPanel .settings-card-header h3'), t('timeline.cameraSettings'));
     setButtonTooltip(dom.btnCameraSettingsClose, t('sceneSettings.close'), t('sceneSettings.close'));
     const cameraSettingLabels = dom.cameraSettingsPanel?.querySelectorAll('.property-row .property-label') || [];
     setElementText(cameraSettingLabels[0], t('timeline.track'));
     setElementText(cameraSettingLabels[1], t('timeline.size'));
-    setElementText(cameraSettingLabels[2], t('timeline.interpolation'));
-    setElementText(dom.timelineInterpolationParamLabel, t('timeline.parameter'));
+    setElementText(cameraSettingLabels[2], t('timeline.fov'));
+    setElementText(dom.timelinePositionInterpolationLabel, t('timeline.positionInterpolation'));
+    setElementText(dom.timelineRotationInterpolationLabel, t('timeline.rotationInterpolation'));
+    setElementText(dom.timelineTimingInterpolationLabel, t('timeline.timingInterpolation'));
     setElementText(dom.btnToggleCameraSequenceDrag?.querySelector('.btn-text'), t('timeline.drag'));
     setButtonTooltip(dom.btnToggleCameraSequenceDrag, t('timeline.dragHint'), t('timeline.dragHint'));
     dom.btnToggleCameraSequence?.setAttribute('title', t('timeline.toggleSequenceVisibility'));
@@ -1172,30 +2409,17 @@ function updateLocalizedStaticUi() {
     dom.btnPlayCamera?.closest('.timeline-control-group')?.setAttribute('aria-label', t('timeline.playbackControls'));
     setButtonTooltip(dom.btnPlayCamera, t('timeline.playCamera'), t('timeline.playCamera'));
     setButtonTooltip(dom.btnLoopCamera, t('timeline.loopPlayback'), t('timeline.loopPlayback'));
-    setElementText(document.querySelector('.timeline-header-right .timeline-fps-control:first-child label'), t('timeline.speed'));
-    setElementText(document.querySelector('.timeline-placeholder .placeholder-text'), t('timeline.placeholder'));
-    const interpolationOptions = dom.timelineCameraInterpolation?.options || [];
-    if (interpolationOptions[0]) interpolationOptions[0].textContent = t('timeline.interpolationModes.linear');
-    if (interpolationOptions[1]) interpolationOptions[1].textContent = t('timeline.interpolationModes.squad');
-    if (interpolationOptions[2]) interpolationOptions[2].textContent = t('timeline.interpolationModes.catmull');
-    if (interpolationOptions[3]) interpolationOptions[3].textContent = t('timeline.interpolationModes.ease');
 
-    setElementText(dom.modelModal?.querySelector('h3'), t('modal.modelTitle'));
-    setElementText(dom.modelModal?.querySelector('.modal-body p'), t('modal.modelHint'));
-    setElementText(dom.modalCancel, t('common.cancel'));
-    setElementText(dom.modalConfirm, t('common.confirm'));
     if (!pendingExportType) {
         setElementText(dom.exportModalTitle, t('modal.exportTitle'));
     }
-    setElementText(document.querySelector('label[for="exportResolution"]'), t('modal.resolution'));
-    setElementText(document.querySelector('label[for="exportMode"]'), t('modal.renderMode'));
     const exportModeOptions = dom.exportMode?.options || [];
-    if (exportModeOptions[0]) exportModeOptions[0].textContent = t('sceneSettings.renderModes.color');
-    if (exportModeOptions[1]) exportModeOptions[1].textContent = t('sceneSettings.renderModes.depth');
-    if (exportModeOptions[2]) exportModeOptions[2].textContent = t('sceneSettings.renderModes.normal');
-    setElementText(dom.exportCancel, t('common.cancel'));
-
-    setElementText(document.querySelector('#helpTipsModal h3'), t('modal.helpTitle'));
+    if (exportModeOptions[0]) exportModeOptions[0].textContent = t('modal.exportRenderModes.rgb');
+    if (exportModeOptions[1]) exportModeOptions[1].textContent = t('modal.exportRenderModes.depth');
+    if (exportModeOptions[2]) exportModeOptions[2].textContent = t('modal.exportRenderModes.normal');
+    if (dom.exportProgressText && !isExporting) {
+        dom.exportProgressText.textContent = t('modal.exportProgressIdle');
+    }
     setButtonTooltip(dom.helpTipsClose, t('modal.closeHelp'), t('modal.closeHelp'));
     const helpSectionTitles = dom.helpTipsModal?.querySelectorAll('.help-section h4') || [];
     setElementText(helpSectionTitles[0], t('modal.helpSections.mouse'));
@@ -1222,7 +2446,26 @@ function updateLocalizedStaticUi() {
         t('modal.helpItems.speedUp'),
     ];
     helpSpans.forEach((span, index) => setElementText(span, helpTexts[index] || span.textContent));
-    setElementText(dom.helpTipsConfirm, t('modal.gotIt'));
+}
+
+function syncProjectSessionModalLabels() {
+    setButtonTooltip(dom.btnLoginModalClose, t('common.close'), t('common.close'));
+    setButtonTooltip(dom.btnProjectSessionClose, t('common.close'), t('common.close'));
+    setButtonTooltip(dom.btnProjectBrowserClose, t('common.close'), t('common.close'));
+    syncWorkspaceTargetModalLabels(dom.workspaceTargetModal?.dataset.reason || 'status');
+    if (dom.projectSessionNewProjectName) {
+        dom.projectSessionNewProjectName.placeholder = getProjectSessionDefaultProjectName();
+    }
+    if (dom.projectBrowserSaveAsName) {
+        dom.projectBrowserSaveAsName.placeholder = getProjectSessionDefaultProjectName();
+    }
+    setElementText(dom.btnProjectBrowserSaveAs, t('projectSession.saveCurrentAsAction'));
+    setElementText(dom.btnProjectBrowserSaveAsCancel, t('common.cancel'));
+    setElementText(dom.btnProjectBrowserSaveAsConfirm, t('projectSession.saveAction'));
+    setElementText(dom.btnProjectBrowserLogout, t('projectSession.logoutAction'));
+
+    setButtonTooltip(dom.btnAdminProjectClose, t('common.close'), t('common.close'));
+    setElementText(dom.btnAdminProjectLogout, t('projectSession.logoutAction'));
 }
 
 function refreshAgentWorkflowLanguageState() {
@@ -1443,6 +2686,38 @@ function ensureAgentSessionStore() {
     return agentSessionStore;
 }
 
+function syncAgentWorkspacePersistenceState(overrides = {}) {
+    state.workspace = {
+        ...state.workspace,
+        agentDirty: false,
+        agentSaving: false,
+        agentLastSavedAt: null,
+        agentError: null,
+        ...overrides,
+    };
+    updateWorkspaceStatusIndicator();
+    return state.workspace;
+}
+
+function syncAgentSessionStoreWorkspaceBinding() {
+    const store = ensureAgentSessionStore();
+    const workspaceHandle = sceneFs.getWorkspaceHandle?.() || null;
+    if (workspaceHandle && sceneFs.isWorkspaceWritable?.()) {
+        store.bindWorkspaceRoot(workspaceHandle);
+        if (store.getStatus().storageMode === 'workspace') {
+            syncAgentWorkspacePersistenceState({
+                agentError: null,
+            });
+        }
+        return store.getStatus();
+    }
+    if (store.getStatus().storageMode === 'workspace') {
+        store.bindWorkspaceRoot(null);
+        syncAgentWorkspacePersistenceState();
+    }
+    return store.getStatus();
+}
+
 function ensureAgentWorkflowThread(workflowId = state.agentWorkflow) {
     if (!AGENT_WORKFLOW_DEFS[workflowId]) {
         workflowId = 'scene-build';
@@ -1463,9 +2738,42 @@ function setCurrentAgentWorkflowThread(workflowId = state.agentWorkflow) {
     return thread;
 }
 
+function isDefaultAgentStarterMessage(item, workflowId) {
+    const workflow = AGENT_WORKFLOW_DEFS[workflowId];
+    if (!workflow || !item || item.kind !== 'message' || item.role !== 'assistant') {
+        return false;
+    }
+    const itemSuggestions = Array.isArray(item.promptSuggestions) ? item.promptSuggestions : [];
+    const starterSuggestions = Array.isArray(workflow.starterSuggestions) ? workflow.starterSuggestions : [];
+    return String(item.text || '') === String(workflow.starter || '')
+        && itemSuggestions.length === starterSuggestions.length
+        && itemSuggestions.every((value, index) => value === starterSuggestions[index])
+        && (!Array.isArray(item.attachments) || item.attachments.length === 0)
+        && (!Array.isArray(item.blocks) || item.blocks.length === 0);
+}
+
+function hasMeaningfulAgentConversation() {
+    return Object.keys(AGENT_WORKFLOW_DEFS).some((workflowId) => {
+        const items = state.agentWorkflowThreads[workflowId]?.items;
+        if (!Array.isArray(items) || items.length === 0) {
+            return false;
+        }
+        if (items.length > 1) {
+            return true;
+        }
+        return !isDefaultAgentStarterMessage(items[0], workflowId);
+    });
+}
+
+function hasCurrentSceneDraftToSave() {
+    const modelCount = Array.isArray(app?.getModels?.()) ? app.getModels().length : 0;
+    return modelCount > 0 || hasMeaningfulAgentConversation();
+}
+
 function buildAgentConversationSnapshot() {
-    return {
-        version: 1,
+        const legacyInterpolation = buildLegacyCameraInterpolationSnapshot();
+        return {
+            version: 2,
         savedAt: new Date().toISOString(),
         workflows: Object.keys(AGENT_WORKFLOW_DEFS).map((workflowId) => {
             const thread = ensureAgentWorkflowThread(workflowId);
@@ -1478,14 +2786,199 @@ function buildAgentConversationSnapshot() {
     };
 }
 
+async function buildPersistableAgentConversationExport(options = {}) {
+    const store = ensureAgentSessionStore();
+    return store.exportSnapshot(buildAgentConversationSnapshot(), {
+        includeAssets: options.includeAssets !== false,
+        includeAssetPayloads: options.includeAssetPayloads === true,
+    });
+}
+
+function hydrateAgentConversationAssetUrls(snapshot, resolveAssetUrl) {
+    if (!snapshot || typeof resolveAssetUrl !== 'function') {
+        return snapshot;
+    }
+    const nextSnapshot = JSON.parse(JSON.stringify(snapshot));
+    const workflows = Array.isArray(nextSnapshot.workflows) ? nextSnapshot.workflows : [];
+    workflows.forEach((workflow) => {
+        const items = Array.isArray(workflow?.items) ? workflow.items : [];
+        items.forEach((item) => {
+            if (Array.isArray(item?.attachments)) {
+                item.attachments = item.attachments.map((attachment) => {
+                    const assetPath = String(attachment?.assetPath || '');
+                    if (!assetPath) {
+                        return attachment;
+                    }
+                    return {
+                        ...attachment,
+                        previewUrl: resolveAssetUrl(assetPath),
+                    };
+                });
+            }
+            if (item?.kind === 'session' && Array.isArray(item?.attempts)) {
+                item.attempts = item.attempts.map((attempt) => ({
+                    ...attempt,
+                    blocks: Array.isArray(attempt?.blocks)
+                        ? attempt.blocks.map((block) => {
+                            const assetPath = String(block?.assetPath || '');
+                            if (!assetPath) {
+                                return block;
+                            }
+                            if (block.type === 'image') {
+                                return {
+                                    ...block,
+                                    src: resolveAssetUrl(assetPath),
+                                };
+                            }
+                            if (block.type === 'viewer3d') {
+                                return {
+                                    ...block,
+                                    assetUrl: resolveAssetUrl(assetPath),
+                                };
+                            }
+                            return block;
+                        })
+                        : [],
+                }));
+            }
+        });
+    });
+    return nextSnapshot;
+}
+
+async function hydrateAgentConversationLocalWorkspaceAssets(snapshot, rootHandle) {
+    if (!snapshot || !rootHandle || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+        return snapshot;
+    }
+    const nextSnapshot = JSON.parse(JSON.stringify(snapshot));
+    const workflows = Array.isArray(nextSnapshot.workflows) ? nextSnapshot.workflows : [];
+
+    async function resolveLocalAssetUrl(relativePath) {
+        const file = await readFileByRelativePath(rootHandle, relativePath);
+        return URL.createObjectURL(file);
+    }
+
+    for (const workflow of workflows) {
+        const items = Array.isArray(workflow?.items) ? workflow.items : [];
+        for (const item of items) {
+            if (Array.isArray(item?.attachments)) {
+                for (const attachment of item.attachments) {
+                    const assetPath = String(attachment?.assetPath || '');
+                    if (!assetPath) continue;
+                    try {
+                        attachment.previewUrl = await resolveLocalAssetUrl(assetPath);
+                    } catch (error) {
+                        console.warn('[Agent Sessions] failed to hydrate local attachment asset', assetPath, error);
+                    }
+                }
+            }
+            if (item?.kind === 'session' && Array.isArray(item?.attempts)) {
+                for (const attempt of item.attempts) {
+                    const blocks = Array.isArray(attempt?.blocks) ? attempt.blocks : [];
+                    for (const block of blocks) {
+                        const assetPath = String(block?.assetPath || '');
+                        if (!assetPath) continue;
+                        try {
+                            const assetUrl = await resolveLocalAssetUrl(assetPath);
+                            if (block.type === 'image') {
+                                block.src = assetUrl;
+                            } else if (block.type === 'viewer3d') {
+                                block.assetUrl = assetUrl;
+                            }
+                        } catch (error) {
+                            console.warn('[Agent Sessions] failed to hydrate local block asset', assetPath, error);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return nextSnapshot;
+}
+
+function hydrateAgentConversationSnapshot(snapshot) {
+    const workflows = Array.isArray(snapshot?.workflows) ? snapshot.workflows : [];
+    state.agentWorkflowThreads = {};
+    Object.keys(AGENT_WORKFLOW_DEFS).forEach((workflowId) => {
+        const matched = workflows.find((workflow) => workflow?.workflow === workflowId);
+        state.agentWorkflowThreads[workflowId] = {
+            workflow: workflowId,
+            label: matched?.label || AGENT_WORKFLOW_DEFS[workflowId]?.label || workflowId,
+            items: Array.isArray(matched?.items) && matched.items.length > 0
+                ? matched.items
+                : createDefaultAgentMessages(workflowId),
+        };
+    });
+    setCurrentAgentWorkflowThread(state.agentWorkflow);
+    renderAgentMessages({ autoScroll: 'always' });
+}
+
 async function persistAgentConversationsNow() {
     const store = ensureAgentSessionStore();
+    syncAgentSessionStoreWorkspaceBinding();
     if (!store.getStatus().enabled) return null;
-    return store.persistSnapshot(buildAgentConversationSnapshot());
+    if (store.getStatus().storageMode === 'workspace') {
+        syncAgentWorkspacePersistenceState({
+            agentSaving: true,
+            agentError: null,
+        });
+    }
+    try {
+        console.debug('[AgentSync] persistAgentConversationsNow:start', {
+            storageMode: store.getStatus().storageMode,
+            storageName: store.getStatus().storageName,
+        });
+        const result = await store.persistSnapshot(buildAgentConversationSnapshot());
+        console.debug('[AgentSync] persistAgentConversationsNow:complete', {
+            storageMode: store.getStatus().storageMode,
+            lastSavedAt: result?.lastSavedAt || null,
+        });
+        if (store.getStatus().storageMode === 'workspace') {
+            syncAgentWorkspacePersistenceState({
+                agentDirty: false,
+                agentSaving: false,
+                agentLastSavedAt: result?.lastSavedAt ? Date.parse(result.lastSavedAt) : Date.now(),
+                agentError: null,
+            });
+        }
+        return result;
+    } catch (error) {
+        console.debug('[AgentSync] persistAgentConversationsNow:error', {
+            storageMode: store.getStatus().storageMode,
+            error: error?.message || String(error),
+        });
+        if (store.getStatus().storageMode === 'workspace') {
+            syncAgentWorkspacePersistenceState({
+                agentDirty: true,
+                agentSaving: false,
+                agentError: error?.message || String(error),
+            });
+        }
+        throw error;
+    }
 }
 
 function schedulePersistAgentConversations() {
     window.clearTimeout(agentSessionPersistTimer);
+    const store = ensureAgentSessionStore();
+    syncAgentSessionStoreWorkspaceBinding();
+    if (isServerProjectSessionActive()) {
+        syncAgentWorkspacePersistenceState({
+            agentDirty: true,
+            agentError: null,
+        });
+        agentSessionPersistTimer = window.setTimeout(() => {
+            scheduleWorkspaceAutosave();
+        }, 160);
+        return;
+    }
+    if (store.getStatus().storageMode === 'workspace') {
+        syncAgentWorkspacePersistenceState({
+            agentDirty: true,
+            agentError: null,
+        });
+    }
     agentSessionPersistTimer = window.setTimeout(() => {
         persistAgentConversationsNow().catch((error) => {
             console.warn('[Agent Sessions] persist failed', error);
@@ -1627,20 +3120,20 @@ async function handleDemoSceneAgentApply({ workflow }) {
         const started = startDemoSceneModelReveal();
         if (!started) {
             if (state.demoScene.sceneRevealCompleted) {
-                showInfo(state.uiLanguage === 'en' ? 'Demo scene is already filled' : 'Demo 场景已完成填充');
+                showInfo(t('messages.demoSceneAlreadyFilled'));
             }
             return;
         }
-        showInfo(state.uiLanguage === 'en' ? 'Demo scene reveal started' : 'Demo 场景开始填充');
+        showInfo(t('messages.demoSceneRevealStarted'));
         return;
     }
     if (workflow === DEMO_CAMERA_WORKFLOW_ID) {
         if (!state.demoScene.cameraPreviewActive) {
-            showInfo(state.uiLanguage === 'en' ? 'No demo camera preview is waiting to be applied' : '当前没有待应用的 Demo 相机预览');
+            showInfo(t('messages.demoCameraPreviewMissing'));
             return;
         }
         setDemoSceneState(commitDemoCameraPreview(state.demoScene));
-        showInfo(state.uiLanguage === 'en' ? 'Demo camera timeline applied' : 'Demo 相机时间轴已应用');
+        showInfo(t('messages.demoCameraTimelineApplied'));
     }
 }
 
@@ -1648,7 +3141,7 @@ async function handleDemoSceneAgentCancel({ workflow }) {
     if (!state.demoScene?.active || workflow !== DEMO_CAMERA_WORKFLOW_ID || !state.demoScene.cameraPreviewActive) return;
     setDemoSceneState(restoreDemoCameraBackup(state.demoScene));
     syncDemoCameraPreviewTimeline({ focusLatest: false, resetToBackup: true });
-    showInfo(state.uiLanguage === 'en' ? 'Demo camera preview was canceled and restored' : 'Demo 相机预览已取消，并恢复原时间轴');
+    showInfo(t('messages.demoCameraPreviewCanceled'));
 }
 
 async function handleDemoSceneAgentRetry({ workflow }) {
@@ -1659,9 +3152,7 @@ async function handleDemoSceneAgentRetry({ workflow }) {
 }
 
 function getDemoCameraWorkflowCompletionText() {
-    return state.uiLanguage === 'en'
-        ? 'Please review the current camera preview and confirm whether to apply it.'
-        : '请查看当前相机，并确认是否应用。';
+    return t('messages.demoCameraCompletion');
 }
 
 function finalizeDemoCameraWorkflowPreview(handle) {
@@ -1671,7 +3162,7 @@ function finalizeDemoCameraWorkflowPreview(handle) {
         revealDemoCameraPreviewForProgress(1);
     }
     handle.updateText(getDemoCameraWorkflowCompletionText());
-    setCameraPreviewOpen(true);
+    setCameraPreviewOpen(true, { markDirty: false, silent: true });
 }
 
 function getAgentSessionArchiveThumbnail(session) {
@@ -1851,7 +3342,7 @@ function createAgentMessageHandle(messageId) {
         },
         fail(errorText) {
             updateAgentMessageById(messageId, (message) => {
-                message.text = String(errorText ?? (state.uiLanguage === 'en' ? 'Agent execution failed' : 'Agent 执行失败'));
+                message.text = String(errorText ?? t('messages.agentExecutionFailed'));
                 message.blocks = (message.blocks || []).map((block) => (
                     block.type === 'progress'
                         ? { ...block, indeterminate: false, statusText: t('common.failed') }
@@ -1906,7 +3397,7 @@ function createAgentSessionHandle(sessionId, attemptId) {
                 ));
                 return updateAgentSessionAttempt(session, {
                     attemptId,
-                    text: String(errorText ?? (state.uiLanguage === 'en' ? 'Agent execution failed' : 'Agent 执行失败')),
+                    text: String(errorText ?? t('messages.agentExecutionFailed')),
                     status: 'failed',
                     blocks: failedBlocks,
                 });
@@ -1961,7 +3452,7 @@ function createMockImageDataUrl(label, tint = '#7aa2ff') {
     ctx.fillText(label, 48, 88);
     ctx.font = '400 18px Segoe UI';
     ctx.fillStyle = 'rgba(248,250,252,0.88)';
-    ctx.fillText(state.uiLanguage === 'en' ? 'Agent preview placeholder' : 'Agent 生成预览占位', 48, 124);
+    ctx.fillText(t('messages.agentPreviewPlaceholder'), 48, 124);
 
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = 2;
@@ -2413,6 +3904,14 @@ function syncAgentMessageScrollbar() {
     dom.agentMessageScrollbarThumb.style.transform = `translateY(${Math.max(0, metrics.thumbTop)}px)`;
 }
 
+function scheduleAgentMessageScrollbarSync() {
+    if (agentMessageScrollbarSyncRaf !== 0) return;
+    agentMessageScrollbarSyncRaf = requestAnimationFrame(() => {
+        agentMessageScrollbarSyncRaf = 0;
+        syncAgentMessageScrollbar();
+    });
+}
+
 function beginAgentMessageScrollbarDrag(event) {
     if (event.button !== 0 || !dom.agentMessageScroll) return;
     const metrics = getAgentMessageScrollbarMetrics();
@@ -2563,18 +4062,29 @@ function syncAgentWorkbenchCollapsedState() {
         dom.btnToggleAgentWorkbench.setAttribute('aria-label', label);
     }
     syncAgentWorkbenchLayoutVars();
-    requestAnimationFrame(syncAgentMessageScrollbar);
+    scheduleAgentMessageScrollbarSync();
 }
 
-function applyAgentWorkbenchWidth(width, persist = true) {
-    preferredAgentWorkbenchWidth = clampAgentWorkbenchWidth(width);
-    document.documentElement.style.setProperty('--agent-workbench-width', `${preferredAgentWorkbenchWidth}px`);
+function applyAgentWorkbenchWidth(width, persist = true, {
+    syncViewport = true,
+    syncScrollbar = true,
+} = {}) {
+    const nextWidth = clampAgentWorkbenchWidth(width);
+    const widthChanged = preferredAgentWorkbenchWidth !== nextWidth;
+    preferredAgentWorkbenchWidth = nextWidth;
+    if (widthChanged) {
+        document.documentElement.style.setProperty('--agent-workbench-width', `${preferredAgentWorkbenchWidth}px`);
+        syncAgentWorkbenchLayoutVars();
+    }
     if (persist) {
         localStorage.setItem(AGENT_WORKBENCH_WIDTH_STORAGE_KEY, String(preferredAgentWorkbenchWidth));
     }
-    syncAgentWorkbenchLayoutVars();
-    syncCanvasContainerToViewport();
-    requestAnimationFrame(syncAgentMessageScrollbar);
+    if (syncViewport) {
+        syncCanvasContainerToViewport();
+    }
+    if (syncScrollbar) {
+        scheduleAgentMessageScrollbarSync();
+    }
 }
 
 function setAgentWorkbenchCollapsed(collapsed, persist = true) {
@@ -2651,7 +4161,7 @@ function handleAgentMessageListClick(event) {
         if (!action || !sessionId) return;
         handleAgentSessionAction(sessionId, action).catch((error) => {
             console.warn('[Agent Sessions] action failed', error);
-            showError(`Agent 操作失败: ${error?.message || String(error)}`);
+            showError(t('messages.agentOperationFailed', { message: error?.message || String(error) }));
         });
         return;
     }
@@ -2715,7 +4225,7 @@ function handleAgentComposerDrop(event) {
     if (count > 0) {
         event.preventDefault();
         event.stopPropagation();
-        showInfo(`已添加 ${count} 张图片到输入区`);
+        showInfo(t('messages.imagesAddedToComposer', { count }));
     }
     clearAgentComposerDropTarget();
 }
@@ -2729,7 +4239,7 @@ function handleAgentImageInputChange(event) {
     if (!(input instanceof HTMLInputElement)) return;
     const count = queueAgentComposerImages(input.files);
     if (count > 0) {
-        showInfo(`已添加 ${count} 张图片到输入区`);
+        showInfo(t('messages.imagesAddedToComposer', { count }));
     }
     input.value = '';
 }
@@ -2928,7 +4438,7 @@ async function handleAgentSessionAction(sessionId, action) {
     }
 
     if (action === 'retry') {
-        const retryPrompt = session.prompt || activeAttempt?.text || (state.uiLanguage === 'en' ? 'Retry request' : '重试任务');
+        const retryPrompt = session.prompt || activeAttempt?.text || t('messages.retryRequest');
         const { blocks, progressBlock, imageBlock, viewerBlock } = createMockAgentAttemptBlocks(session.workflow);
         const nextAttempt = createAgentGenerationAttempt({
             workflow: session.workflow,
@@ -2957,7 +4467,7 @@ async function handleAgentSessionAction(sessionId, action) {
 function submitAgentPrompt(promptText, attachments = []) {
     const prompt = String(promptText || '').trim();
     if (!prompt && attachments.length === 0) return;
-    const attachmentFallback = state.uiLanguage === 'en' ? 'Image input' : '图片输入';
+    const attachmentFallback = t('messages.imageInput');
 
     const userMessage = createAgentMessage('user', prompt || attachmentFallback);
     userMessage.attachments = attachments;
@@ -2985,14 +4495,31 @@ function handleAgentComposerSubmit(event) {
     renderAgentComposerAttachments();
 }
 
+function scheduleAgentWorkbenchResizeWidth(width) {
+    if (!agentWorkbenchResizeState) return;
+    agentWorkbenchResizeState.latestWidth = clampAgentWorkbenchWidth(width);
+    if (agentWorkbenchResizeRaf !== 0) return;
+    agentWorkbenchResizeRaf = requestAnimationFrame(() => {
+        agentWorkbenchResizeRaf = 0;
+        if (!agentWorkbenchResizeState) return;
+        // Keep drag feedback responsive by deferring viewport/canvas relayout until drag end.
+        applyAgentWorkbenchWidth(agentWorkbenchResizeState.latestWidth, false, {
+            syncViewport: false,
+            syncScrollbar: false,
+        });
+    });
+}
+
 function beginAgentWorkbenchResize(event) {
     if (event.button !== 0 || state.agentWorkbenchCollapsed) return;
     agentWorkbenchResizeState = {
         startX: event.clientX,
         width: preferredAgentWorkbenchWidth ?? AGENT_WORKBENCH_DEFAULT_WIDTH,
+        latestWidth: preferredAgentWorkbenchWidth ?? AGENT_WORKBENCH_DEFAULT_WIDTH,
     };
     dom.agentWorkbenchResizer?.classList.add('is-active');
     document.body.classList.add('sidebar-resizing');
+    document.body.classList.add('agent-workbench-resizing');
     window.addEventListener('mousemove', onAgentWorkbenchResizeMove);
     window.addEventListener('mouseup', endAgentWorkbenchResize);
     window.addEventListener('blur', endAgentWorkbenchResize);
@@ -3002,15 +4529,21 @@ function beginAgentWorkbenchResize(event) {
 function onAgentWorkbenchResizeMove(event) {
     if (!agentWorkbenchResizeState) return;
     const deltaX = event.clientX - agentWorkbenchResizeState.startX;
-    applyAgentWorkbenchWidth(agentWorkbenchResizeState.width + deltaX, true);
+    scheduleAgentWorkbenchResizeWidth(agentWorkbenchResizeState.width + deltaX);
     event.preventDefault();
 }
 
 function endAgentWorkbenchResize() {
     if (!agentWorkbenchResizeState) return;
+    if (agentWorkbenchResizeRaf !== 0) {
+        cancelAnimationFrame(agentWorkbenchResizeRaf);
+        agentWorkbenchResizeRaf = 0;
+    }
+    applyAgentWorkbenchWidth(agentWorkbenchResizeState.latestWidth, true);
     agentWorkbenchResizeState = null;
     dom.agentWorkbenchResizer?.classList.remove('is-active');
     document.body.classList.remove('sidebar-resizing');
+    document.body.classList.remove('agent-workbench-resizing');
     window.removeEventListener('mousemove', onAgentWorkbenchResizeMove);
     window.removeEventListener('mouseup', endAgentWorkbenchResize);
     window.removeEventListener('blur', endAgentWorkbenchResize);
@@ -3020,15 +4553,15 @@ function initializeAgentWorkbench() {
     const savedWidth = localStorage.getItem(AGENT_WORKBENCH_WIDTH_STORAGE_KEY);
     const savedCollapsed = localStorage.getItem(AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY);
     const savedWorkflow = localStorage.getItem(AGENT_WORKBENCH_WORKFLOW_STORAGE_KEY);
+    const initialWorkbenchWidth = clampAgentWorkbenchWidth(savedWidth);
 
-    preferredAgentWorkbenchWidth = clampAgentWorkbenchWidth(savedWidth);
     if (savedWorkflow && AGENT_WORKFLOW_DEFS[savedWorkflow]) {
         state.agentWorkflow = savedWorkflow;
     }
     state.agentWorkbenchCollapsed = savedCollapsed === 'true';
     setCurrentAgentWorkflowThread(state.agentWorkflow);
 
-    applyAgentWorkbenchWidth(preferredAgentWorkbenchWidth, false);
+    applyAgentWorkbenchWidth(initialWorkbenchWidth, false);
     syncAgentWorkbenchCollapsedState();
     refreshAgentWorkbench();
 }
@@ -3130,7 +4663,6 @@ function applySidebarWidths(nextLeftWidth, nextRightWidth, persist = true) {
     if (sidebarWidthDebugHistory.length > 30) {
         sidebarWidthDebugHistory = sidebarWidthDebugHistory.slice(-30);
     }
-    console.log('[Editor Sidebar Width]', debugEntry);
 
     if (dom.leftSidebar) {
         dom.leftSidebar.style.width = `${LEFT_SIDEBAR_DEFAULT_WIDTH}px`;
@@ -3217,15 +4749,26 @@ function syncCanvasContainerToViewport() {
     const hostTop = hostRect?.top || 0;
     const width = Math.max(1, Math.round(viewportRect.width || 0));
     const height = Math.max(1, Math.round(viewportRect.height || 0));
+    const left = Math.round(viewportRect.left - hostLeft);
+    const top = Math.round(viewportRect.top - hostTop);
+    const nextViewportSync = { left, top, width, height };
+    const viewportChanged = !lastCanvasViewportSync
+        || lastCanvasViewportSync.left !== left
+        || lastCanvasViewportSync.top !== top
+        || lastCanvasViewportSync.width !== width
+        || lastCanvasViewportSync.height !== height;
 
-    dom.canvasContainer.style.left = `${Math.round(viewportRect.left - hostLeft)}px`;
-    dom.canvasContainer.style.top = `${Math.round(viewportRect.top - hostTop)}px`;
+    dom.canvasContainer.style.left = `${left}px`;
+    dom.canvasContainer.style.top = `${top}px`;
     dom.canvasContainer.style.width = `${width}px`;
     dom.canvasContainer.style.height = `${height}px`;
     dom.canvasContainer.style.right = 'auto';
     dom.canvasContainer.style.bottom = 'auto';
 
-    app?.refreshViewportLayout?.();
+    if (viewportChanged) {
+        lastCanvasViewportSync = nextViewportSync;
+        app?.refreshViewportLayout?.();
+    }
 }
 
 function clampModelAnimationSpeed(value) {
@@ -3319,13 +4862,13 @@ function syncSceneDepthRangeInputs() {
 function applySceneDepthRangeScale(value, silent = false, syncInputText = true) {
     const safe = Number(value);
     if (!Number.isFinite(safe)) {
-        showError('深度倍率格式错误');
+        showError(t('messages.invalidDepthScale'));
         return;
     }
 
     const ok = app?.setSceneDepthRangeScale?.(safe);
     if (!ok) {
-        showError('设置深度倍率失败');
+        showError(t('messages.setDepthScaleFailed'));
         return;
     }
 
@@ -3337,7 +4880,7 @@ function applySceneDepthRangeScale(value, silent = false, syncInputText = true) 
         dom.sceneDepthScaleNumber.value = String(safe);
     }
     if (!silent) {
-        showInfo(`深度倍率: ${state.sceneDepthRangeScale.toFixed(3)}x`);
+        showInfo(t('messages.depthScaleSet', { value: state.sceneDepthRangeScale.toFixed(3) }));
     }
 }
 
@@ -3392,22 +4935,139 @@ function clampSceneFov(value) {
     return Math.max(1, Math.min(179, n));
 }
 
+function findCameraFovKeyframeIndexByFrame(frame) {
+    const safeFrame = clampTimelineFrame(frame);
+    return state.cameraFovKeyframes.findIndex((keyframe) => Number(keyframe.frame) === safeFrame);
+}
+
+function getFallbackTimelineCameraFov() {
+    return clampSceneFov(state.sceneCameraFov) || 45;
+}
+
+function getTimelineCameraFovAtTime(timeSec) {
+    const keyframes = Array.isArray(state.cameraFovKeyframes) ? state.cameraFovKeyframes : [];
+    if (keyframes.length === 0) {
+        return getFallbackTimelineCameraFov();
+    }
+    if (keyframes.length === 1) {
+        return clampSceneFov(keyframes[0]?.fovDegrees) || getFallbackTimelineCameraFov();
+    }
+    if (timeSec <= keyframes[0].time) {
+        return clampSceneFov(keyframes[0]?.fovDegrees) || getFallbackTimelineCameraFov();
+    }
+    const last = keyframes[keyframes.length - 1];
+    if (timeSec >= last.time) {
+        return clampSceneFov(last?.fovDegrees) || getFallbackTimelineCameraFov();
+    }
+    for (let i = 0; i < keyframes.length - 1; i++) {
+        const a = keyframes[i];
+        const b = keyframes[i + 1];
+        if (timeSec < a.time || timeSec > b.time) continue;
+        const safeA = clampSceneFov(a?.fovDegrees) || getFallbackTimelineCameraFov();
+        const safeB = clampSceneFov(b?.fovDegrees) || safeA;
+        const span = Math.max(1e-6, Number(b.time) - Number(a.time));
+        const t = (timeSec - Number(a.time)) / span;
+        return lerpNumber(safeA, safeB, t);
+    }
+    return clampSceneFov(last?.fovDegrees) || getFallbackTimelineCameraFov();
+}
+
+function applyTimelineFovToPose(pose, timeSec) {
+    if (!pose) return null;
+    return {
+        ...pose,
+        fovDegrees: getTimelineCameraFovAtTime(Number(timeSec) || 0),
+    };
+}
+
+function syncTimelineCameraFovInputs() {
+    const currentFov = getTimelineCameraFovAtTime(Number(state.currentTime) || 0);
+    const fixed = Number(currentFov || getFallbackTimelineCameraFov()).toFixed(3);
+    if (dom.timelineCameraFovRange) dom.timelineCameraFovRange.value = fixed;
+    if (dom.timelineCameraFovNumber) dom.timelineCameraFovNumber.value = fixed;
+}
+
+function applyTimelineCameraFov(value, silent = false, markDirty = true) {
+    const safe = clampSceneFov(value);
+    if (safe === null) {
+        showError(t('messages.invalidFov'));
+        return false;
+    }
+    const frame = clampTimelineFrame(state.selectedFrame);
+    const existingIndex = findCameraFovKeyframeIndexByFrame(frame);
+    if (existingIndex >= 0) {
+        const existingFov = clampSceneFov(state.cameraFovKeyframes[existingIndex]?.fovDegrees);
+        if (existingFov !== null && Math.abs(existingFov - safe) <= 1e-6) {
+            syncTimelineCameraFovInputs();
+            return true;
+        }
+    } else {
+        const currentFov = getTimelineCameraFovAtTime(Number(state.currentTime) || 0);
+        if (Math.abs(currentFov - safe) <= 1e-6) {
+            syncTimelineCameraFovInputs();
+            return true;
+        }
+    }
+    const keyframe = {
+        frame,
+        time: frameToTime(frame),
+        fovDegrees: safe,
+    };
+    if (existingIndex >= 0) {
+        state.cameraFovKeyframes[existingIndex] = keyframe;
+    } else {
+        state.cameraFovKeyframes.push(keyframe);
+        state.cameraFovKeyframes.sort((a, b) => a.frame - b.frame);
+    }
+    syncTimelineCameraFovInputs();
+    syncTimelineDrivenCameraPreviewPose();
+    syncCameraSequenceVisualization();
+    updateTimelineUI();
+    if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
+        updateExportTimelineHint('video');
+    }
+    if (markDirty) {
+        markWorkspaceDirty('timeline-camera-fov');
+    }
+    if (!silent) {
+        showInfo(t('messages.timelineFovSet', { value: safe.toFixed(3) }));
+    }
+    return true;
+}
+
+function commitTimelineCameraFovFromInput() {
+    if (!dom.timelineCameraFovNumber) return;
+    applyTimelineCameraFov(dom.timelineCameraFovNumber.value, false);
+}
+
+function handleTimelineCameraFovInputKeydown(e) {
+    if (!dom.timelineCameraFovNumber) return;
+    if (e.key === 'Enter') {
+        commitTimelineCameraFovFromInput();
+        dom.timelineCameraFovNumber.blur();
+    }
+}
+
 function syncSceneFovInputs() {
     const fixed = Number(state.sceneCameraFov || 45).toFixed(3);
     if (dom.sceneFovRange) dom.sceneFovRange.value = fixed;
     if (dom.sceneFovNumber) dom.sceneFovNumber.value = fixed;
 }
 
-function applySceneCameraFov(value, silent = false) {
+function applySceneCameraFov(value, silent = false, markDirty = true) {
     const safe = clampSceneFov(value);
     if (safe === null) {
-        showError('FOV 格式错误');
+        showError(t('messages.invalidFov'));
+        return;
+    }
+    if (Math.abs((Number(state.sceneCameraFov) || 45) - safe) <= 1e-6) {
+        syncSceneFovInputs();
         return;
     }
 
     const ok = app?.setSceneCameraFovDegrees?.(safe);
     if (!ok) {
-        showError('设置 FOV 失败');
+        showError(t('messages.setFovFailed'));
         return;
     }
 
@@ -3416,21 +5076,28 @@ function applySceneCameraFov(value, silent = false) {
     if (state.keyframes.length === 0) {
         syncTimelineDrivenCameraPreviewPose();
     }
+    if (markDirty) {
+        markWorkspaceDirty('scene-camera-fov');
+    }
     if (!silent) {
-        showInfo(`FOV: ${safe.toFixed(3)}°`);
+        showInfo(t('messages.fovSet', { value: safe.toFixed(3) }));
     }
 }
 
-function applySceneBackgroundHex(hex, skyPresetId = 'custom') {
+function applySceneBackgroundHex(hex, skyPresetId = 'custom', markDirty = true) {
     const normalized = normalizeHexColor(hex);
     if (!normalized) {
-        showError('背景色格式错误，请使用 #RRGGBB');
+        showError(t('messages.invalidBackgroundColor'));
+        return;
+    }
+    if (normalized === state.sceneBackgroundHex && skyPresetId === state.sceneSkyPresetId) {
+        syncSceneBackgroundInputs();
         return;
     }
 
     const ok = app?.setSceneBackgroundColorHex?.(normalized);
     if (!ok) {
-        showError('设置背景色失败');
+        showError(t('messages.setBackgroundFailed'));
         return;
     }
 
@@ -3439,13 +5106,16 @@ function applySceneBackgroundHex(hex, skyPresetId = 'custom') {
     syncAgentWorkbenchSceneBackground();
     syncSceneBackgroundInputs();
     renderSkyPresetGrid();
+    if (markDirty) {
+        markWorkspaceDirty('scene-background');
+    }
 }
 
 function applySkyPreset(presetId) {
     if (!app) return;
     const preset = app.applySceneSkyPreset?.(presetId);
     if (!preset) {
-        showError(`天空球预设不存在: ${presetId}`);
+        showError(t('messages.skyPresetMissing', { id: presetId }));
         return;
     }
 
@@ -3454,7 +5124,7 @@ function applySkyPreset(presetId) {
     syncAgentWorkbenchSceneBackground();
     syncSceneBackgroundInputs();
     renderSkyPresetGrid();
-    showInfo(`天空球预设: ${preset.name}`);
+    showInfo(t('messages.skyPresetSet', { name: preset.name }));
 }
 
 function initSceneSettingsUI() {
@@ -3471,6 +5141,7 @@ function initSceneSettingsUI() {
     syncSceneBackgroundInputs();
     syncSceneDepthRangeInputs();
     syncSceneFovInputs();
+    syncTimelineCameraFovInputs();
     renderSkyPresetGrid();
 }
 
@@ -3482,8 +5153,10 @@ function setModelEditorActive(active) {
 function syncViewportGizmoControls() {
     const selectionKind = resolveViewportSelectionKind({
         cameraSequenceDragEnabled: state.cameraSequenceDragEnabled,
-        selectedCameraSequenceFrame: state.selectedCameraSequenceFrame,
+        hasTimelineCamera: hasTimelineCameraPose(),
+        cameraGizmoTargetFrame: state.selectedCameraSequenceFrame,
         selectedModelId: state.selectedModelId,
+        playbackActive: state.isPlaying,
     });
     const cameraSelectionActive = selectionKind === 'camera';
     const buttons = [
@@ -3493,7 +5166,7 @@ function syncViewportGizmoControls() {
     ];
     for (const [button, mode] of buttons) {
         if (!button) continue;
-        const disabled = !app || (mode === 'scale' && cameraSelectionActive);
+        const disabled = !app || (mode === 'scale' && cameraSelectionActive) || (cameraSelectionActive && state.isPlaying);
         button.disabled = disabled;
         button.classList.toggle('active', !disabled && state.viewportGizmoMode === mode);
     }
@@ -3504,12 +5177,14 @@ function setViewportGizmoMode(mode, silent = false) {
     const nextMode = state.viewportGizmoMode === mode ? null : mode;
     const selectionKind = resolveViewportSelectionKind({
         cameraSequenceDragEnabled: state.cameraSequenceDragEnabled,
-        selectedCameraSequenceFrame: state.selectedCameraSequenceFrame,
+        hasTimelineCamera: hasTimelineCameraPose(),
+        cameraGizmoTargetFrame: state.selectedCameraSequenceFrame,
         selectedModelId: state.selectedModelId,
+        playbackActive: state.isPlaying,
     });
     if (nextMode === 'scale' && selectionKind === 'camera') {
         if (!silent) {
-            showInfo('相机关键帧仅支持移动和旋转');
+            showInfo(t('messages.cameraKeyframeMoveRotateOnly'));
         }
         return false;
     }
@@ -3519,10 +5194,14 @@ function setViewportGizmoMode(mode, silent = false) {
     state.viewportGizmoMode = nextMode;
     syncViewportGizmoControls();
     if (!silent) {
-        const labels = { translate: '移动', rotate: '旋转', scale: '缩放' };
-        showInfo(nextMode ? `视口控件: ${labels[nextMode] || nextMode}` : '视口控件: 已关闭');
+        const labels = { translate: t('toolbar.translate'), rotate: t('toolbar.rotate'), scale: t('toolbar.scale') };
+        showInfo(nextMode ? t('messages.viewportGizmoSet', { mode: labels[nextMode] || nextMode }) : t('messages.viewportGizmoOff'));
     }
     return true;
+}
+
+function syncCameraSequenceInteractionEnabled() {
+    app?.setCameraSequenceInteractionEnabled?.(!state.isPlaying);
 }
 
 function isFreeCameraMode() {
@@ -3534,6 +5213,9 @@ function isFreeCameraMode() {
 
 function syncCameraSequenceDragButton() {
     if (!dom.btnToggleCameraSequenceDrag) return;
+    const disabled = !syncCameraSequenceVisibilityState();
+    dom.btnToggleCameraSequenceDrag.disabled = disabled;
+    dom.btnToggleCameraSequenceDrag.setAttribute('aria-disabled', disabled ? 'true' : 'false');
     dom.btnToggleCameraSequenceDrag.classList.toggle('active', state.cameraSequenceDragEnabled);
     const textEl = dom.btnToggleCameraSequenceDrag.querySelector('.btn-text');
     if (textEl) {
@@ -3556,9 +5238,13 @@ function syncSelectedCameraSequenceFrameToApp() {
     }
 }
 
+function hasTimelineCameraPose() {
+    return Array.isArray(state.keyframes) && state.keyframes.length > 0;
+}
+
 function syncManualTimelineCameraSelection(frame) {
     const safeFrame = clampTimelineFrame(frame);
-    if (!state.cameraSequenceDragEnabled) {
+    if (!state.cameraSequenceDragEnabled || !state.cameraSequenceVisible) {
         if (state.selectedCameraSequenceFrame !== null) {
             state.selectedCameraSequenceFrame = null;
             syncCameraSequenceVisualization();
@@ -3574,12 +5260,50 @@ function syncManualTimelineCameraSelection(frame) {
     return safeFrame;
 }
 
+function syncTimelineFrameToCameraGizmo(frame = state.selectedFrame) {
+    const target = resolveTimelineGizmoTarget({
+        cameraSequenceDragEnabled: state.cameraSequenceDragEnabled,
+        cameraSequenceVisible: state.cameraSequenceVisible,
+        hasTimelineCamera: hasTimelineCameraPose(),
+        playbackActive: state.isPlaying,
+        selectedModelId: state.selectedModelId,
+        currentFrame: frame,
+    });
+    if (target.kind !== 'camera-current' || target.frame === null) return false;
+    if (!app?.setSelectedCameraSequenceFrame) return false;
+    const safeFrame = clampTimelineFrame(target.frame);
+    if (state.selectedModelId) {
+        closeEditor();
+    }
+    state.selectedCameraSequenceFrame = safeFrame;
+    state.viewportGizmoMode = normalizeViewportGizmoModeForSelection(state.viewportGizmoMode, 'camera');
+    syncSelectedCameraSequenceFrameToApp();
+    syncCameraSequenceInteractionEnabled();
+    syncViewportGizmoControls();
+    return Number.isFinite(Number(safeFrame));
+}
+
+function activateTimelineCameraKeyframeSelection(frame, { silent = false } = {}) {
+    const safeFrame = clampTimelineFrame(frame);
+    if (!syncCameraSequenceVisibilityState()) {
+        return safeFrame;
+    }
+    if (!state.cameraSequenceDragEnabled) {
+        setCameraSequenceDragEnabled(true, silent);
+    }
+    syncTimelineFrameToCameraGizmo(safeFrame);
+    return safeFrame;
+}
+
 function setCameraSequenceDragEnabled(enabled, silent = false) {
     if (!app?.setCameraSequenceEditEnabled) return false;
     const nextEnabled = Boolean(enabled);
+    if (nextEnabled && !syncCameraSequenceVisibilityState()) {
+        return false;
+    }
     if (nextEnabled && !isFreeCameraMode()) {
         if (!silent) {
-            showInfo('请先切换到自由视角');
+            showInfo(t('messages.switchToFreeCamera'));
         }
         return false;
     }
@@ -3587,6 +5311,10 @@ function setCameraSequenceDragEnabled(enabled, silent = false) {
         return false;
     }
     state.cameraSequenceDragEnabled = nextEnabled;
+    if (nextEnabled && hasTimelineCameraPose()) {
+        state.selectedCameraSequenceFrame = clampTimelineFrame(state.selectedFrame);
+        syncSelectedCameraSequenceFrameToApp();
+    }
     if (!nextEnabled) {
         state.selectedCameraSequenceFrame = null;
         syncSelectedCameraSequenceFrameToApp();
@@ -3595,17 +5323,48 @@ function setCameraSequenceDragEnabled(enabled, silent = false) {
         state.viewportGizmoMode,
         resolveViewportSelectionKind({
             cameraSequenceDragEnabled: state.cameraSequenceDragEnabled,
-            selectedCameraSequenceFrame: state.selectedCameraSequenceFrame,
+            hasTimelineCamera: hasTimelineCameraPose(),
+            cameraGizmoTargetFrame: state.selectedCameraSequenceFrame,
             selectedModelId: state.selectedModelId,
+            playbackActive: state.isPlaying,
         })
     );
     syncCameraSequenceDragButton();
     syncCameraSequenceVisualization();
+    syncCameraSequenceInteractionEnabled();
     syncViewportGizmoControls();
     if (!silent) {
-        showInfo(nextEnabled ? '相机关键帧拖动: 已开启' : '相机关键帧拖动: 已关闭');
+        showInfo(t('messages.cameraKeyframeDragState', { state: nextEnabled ? t('common.active') : t('common.inactive') }));
     }
     return true;
+}
+
+function suspendCameraSequenceDragForHiddenTrajectory() {
+    if (state.cameraSequenceDragEnabledBeforeHidden === null) {
+        state.cameraSequenceDragEnabledBeforeHidden = Boolean(state.cameraSequenceDragEnabled);
+    }
+    if (state.cameraSequenceDragEnabled) {
+        setCameraSequenceDragEnabled(false, true);
+    } else {
+        state.selectedCameraSequenceFrame = null;
+        syncSelectedCameraSequenceFrameToApp();
+    }
+    syncCameraSequenceDragButton();
+    syncViewportGizmoControls();
+    syncCameraSequenceVisualization();
+}
+
+function restoreCameraSequenceDragAfterVisibleTrajectory() {
+    const shouldRestore = state.cameraSequenceDragEnabledBeforeHidden === true;
+    state.cameraSequenceDragEnabledBeforeHidden = null;
+    syncCameraSequenceDragButton();
+    if (shouldRestore) {
+        setCameraSequenceDragEnabled(true, true);
+        syncTimelineFrameToCameraGizmo(state.selectedFrame);
+    } else {
+        syncCameraSequenceVisualization();
+        syncViewportGizmoControls();
+    }
 }
 
 function syncSceneSettingsPanel() {
@@ -3661,34 +5420,207 @@ function syncCameraPreviewViewportAspect() {
     const option = getCameraPreviewAspectOption(state.cameraPreviewAspectId);
     dom.cameraPreviewAspectRatio && (dom.cameraPreviewAspectRatio.value = option.id);
     dom.cameraPreviewViewport?.style.setProperty('--camera-preview-aspect', String(option.aspect));
+    applyCameraPreviewPanelSize();
+}
+
+function clampCameraPreviewMaxSize(value) {
+    const numeric = Number(value);
+    const viewportLimitedMax = Math.min(
+        CAMERA_PREVIEW_MAX_SIZE_MAX,
+        Math.max(CAMERA_PREVIEW_MAX_SIZE_MIN, (window.innerWidth - 48 - CAMERA_PREVIEW_PANEL_HORIZONTAL_PADDING) / 3),
+        Math.max(CAMERA_PREVIEW_MAX_SIZE_MIN, (window.innerHeight - 120) / 4),
+    );
+    if (!Number.isFinite(numeric)) {
+        return Math.min(CAMERA_PREVIEW_MAX_SIZE_DEFAULT, viewportLimitedMax);
+    }
+    return Math.max(CAMERA_PREVIEW_MAX_SIZE_MIN, Math.min(viewportLimitedMax, numeric));
+}
+
+function resolveCameraPreviewViewportSize(maxSize = state.cameraPreviewMaxSize, aspect = getCameraPreviewAspectOption(state.cameraPreviewAspectId).aspect) {
+    const safeMaxSize = clampCameraPreviewMaxSize(maxSize);
+    const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : (16 / 9);
+    const maxWidth = safeMaxSize * 3;
+    const maxHeight = safeMaxSize * 4;
+    let width = maxWidth;
+    let height = width / safeAspect;
+    if (height > maxHeight) {
+        height = maxHeight;
+        width = height * safeAspect;
+    }
+    return {
+        width,
+        height,
+        maxSize: safeMaxSize,
+    };
+}
+
+function applyCameraPreviewPanelSize() {
+    if (!dom.cameraPreviewPanel || !dom.cameraPreviewViewport) return;
+    const { width, height, maxSize } = resolveCameraPreviewViewportSize();
+    state.cameraPreviewMaxSize = maxSize;
+    dom.cameraPreviewPanel.style.width = `${Math.ceil(width + CAMERA_PREVIEW_PANEL_HORIZONTAL_PADDING)}px`;
+    dom.cameraPreviewViewport.style.width = `${Math.round(width)}px`;
+    dom.cameraPreviewViewport.style.height = `${Math.round(height)}px`;
+    app?.requestCameraPreviewResizeSync?.(80);
+}
+
+function readStoredCameraPreviewPosition() {
+    return null;
+}
+
+function persistCameraPreviewPosition(left, bottom) {
+    return { left, bottom };
+}
+
+function measureCameraPreviewPanelRect() {
+    if (!dom.cameraPreviewPanel) {
+        return { width: 320, height: 220 };
+    }
+    const panel = dom.cameraPreviewPanel;
+    const wasHidden = panel.classList.contains('hidden');
+    const previousVisibility = panel.style.visibility;
+    const previousDisplay = panel.style.display;
+    if (wasHidden) {
+        panel.classList.remove('hidden');
+        panel.style.visibility = 'hidden';
+        panel.style.display = 'block';
+    }
+    const rect = panel.getBoundingClientRect();
+    if (wasHidden) {
+        panel.classList.add('hidden');
+        panel.style.visibility = previousVisibility;
+        panel.style.display = previousDisplay;
+    }
+    return {
+        width: rect.width || panel.offsetWidth || 320,
+        height: rect.height || panel.offsetHeight || 220,
+    };
+}
+
+function resolveDefaultCameraPreviewPanelPosition() {
+    const margin = 12;
+    const gap = CAMERA_PREVIEW_PANEL_DEFAULT_GAP;
+    const panelRect = measureCameraPreviewPanelRect();
+    const actualWidth = panelRect.width;
+    const actualHeight = panelRect.height;
+    const agentRect = dom.agentWorkbench?.getBoundingClientRect();
+    const timelineRect = dom.bottomTimeline?.getBoundingClientRect();
+    const editorStageRect = dom.editorStage?.getBoundingClientRect();
+    const fallbackPosition = resolveFloatingPanelPosition({
+        shellRect: editorStageRect,
+        anchorRect: dom.btnToggleCameraPreview?.getBoundingClientRect(),
+        panelWidth: actualWidth,
+        panelHeight: actualHeight,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+    });
+
+    let left = fallbackPosition.left;
+    let top = fallbackPosition.top;
+
+    if (agentRect) {
+        left = Math.max(margin, agentRect.right + gap);
+    }
+    if (timelineRect) {
+        top = timelineRect.top - actualHeight - gap;
+    }
+
+    const maxLeft = Math.max(margin, window.innerWidth - margin - actualWidth);
+    const headerHeight = Math.max(
+        37,
+        dom.cameraPreviewPanel?.querySelector('.camera-preview-header')?.getBoundingClientRect?.().height || 0
+    );
+    const maxTop = Math.max(margin, window.innerHeight - margin - headerHeight);
+    return {
+        left: Math.max(margin, Math.min(maxLeft, left)),
+        top: Math.max(margin, Math.min(maxTop, top)),
+    };
+}
+
+function captureCameraPreviewWorkspacePreset() {
+    if (!dom.cameraPreviewPanel) {
+        return {
+            open: Boolean(state.cameraPreviewOpen),
+            position: null,
+        };
+    }
+    const rect = dom.cameraPreviewPanel.getBoundingClientRect();
+    const left = Number.parseFloat(dom.cameraPreviewPanel.style.left || '');
+    const top = Number.parseFloat(dom.cameraPreviewPanel.style.top || '');
+    if (!Number.isFinite(left) || !Number.isFinite(top)) {
+        return {
+            open: Boolean(state.cameraPreviewOpen),
+            position: null,
+        };
+    }
+    return {
+        open: Boolean(state.cameraPreviewOpen),
+        position: {
+            left: Math.round(left),
+            bottom: Math.max(12, Math.round(window.innerHeight - top - rect.height)),
+        },
+    };
+}
+
+function clearCameraPreviewWorkspacePresetLayout() {
+    if (!dom.cameraPreviewPanel) return;
+    dom.cameraPreviewPanel.style.left = '';
+    dom.cameraPreviewPanel.style.top = '';
+    delete dom.cameraPreviewPanel.dataset.pendingBottom;
+}
+
+function applyCameraPreviewWorkspacePreset(preset = null, markDirty = false) {
+    clearCameraPreviewWorkspacePresetLayout();
+    if (preset?.position && dom.cameraPreviewPanel) {
+        const left = Number(preset.position.left);
+        const bottom = Number(preset.position.bottom);
+        if (Number.isFinite(left)) {
+            dom.cameraPreviewPanel.style.left = `${left}px`;
+        }
+        if (Number.isFinite(bottom)) {
+            dom.cameraPreviewPanel.dataset.pendingBottom = String(bottom);
+        }
+    }
+    setCameraPreviewOpen(Boolean(preset?.open), { markDirty });
 }
 
 function positionCameraPreviewPanel() {
     if (!dom.cameraPreviewPanel || !dom.editorStage) return;
     let left = Number.parseFloat(dom.cameraPreviewPanel.style.left || '');
     let top = Number.parseFloat(dom.cameraPreviewPanel.style.top || '');
+    let bottom = Number.parseFloat(dom.cameraPreviewPanel.dataset.pendingBottom || '');
 
     if (!Number.isFinite(left) || !Number.isFinite(top)) {
-        const position = resolveFloatingPanelPosition({
-            shellRect: dom.editorStage.getBoundingClientRect(),
-            anchorRect: dom.btnToggleCameraPreview?.getBoundingClientRect(),
-            panelWidth: dom.cameraPreviewPanel.offsetWidth || 320,
-            panelHeight: dom.cameraPreviewPanel.offsetHeight || 0,
-            viewportWidth: window.innerWidth,
-            viewportHeight: window.innerHeight,
-        });
-        left = position.left;
-        top = position.top;
+        const position = readStoredCameraPreviewPosition() || resolveDefaultCameraPreviewPanelPosition();
+        if (!Number.isFinite(left)) {
+            left = position.left;
+        }
+        if (!Number.isFinite(top) && Number.isFinite(position.bottom)) {
+            bottom = position.bottom;
+        } else if (!Number.isFinite(top) && Number.isFinite(position.top)) {
+            top = position.top;
+        }
     }
 
     const panelRect = dom.cameraPreviewPanel.getBoundingClientRect();
     const margin = 12;
-    const shellRect = dom.editorStage.getBoundingClientRect();
-    const minLeft = Math.max(margin, shellRect.left + margin);
-    const maxLeft = Math.max(minLeft, Math.min(window.innerWidth - margin - panelRect.width, shellRect.right - margin - panelRect.width));
-    const maxTop = Math.max(margin, window.innerHeight - margin - panelRect.height);
-    dom.cameraPreviewPanel.style.left = `${Math.max(minLeft, Math.min(maxLeft, left))}px`;
-    dom.cameraPreviewPanel.style.top = `${Math.max(margin, Math.min(maxTop, top))}px`;
+    const minLeft = margin;
+    const maxLeft = Math.max(minLeft, window.innerWidth - margin - panelRect.width);
+    const headerHeight = Math.max(
+        37,
+        dom.cameraPreviewPanel.querySelector('.camera-preview-header')?.getBoundingClientRect?.().height || 0
+    );
+    const maxTop = Math.max(margin, window.innerHeight - margin - headerHeight);
+    if (!Number.isFinite(top) && Number.isFinite(bottom)) {
+        top = window.innerHeight - bottom - panelRect.height;
+    }
+    const resolvedLeft = Math.max(minLeft, Math.min(maxLeft, left));
+    const resolvedTop = Math.max(margin, Math.min(maxTop, top));
+    const resolvedBottom = Math.max(margin, window.innerHeight - resolvedTop - panelRect.height);
+    dom.cameraPreviewPanel.style.left = `${resolvedLeft}px`;
+    dom.cameraPreviewPanel.style.top = `${resolvedTop}px`;
+    delete dom.cameraPreviewPanel.dataset.pendingBottom;
+    persistCameraPreviewPosition(resolvedLeft, resolvedBottom);
 }
 
 function syncCameraPreviewPanel() {
@@ -3697,17 +5629,32 @@ function syncCameraPreviewPanel() {
     app?.setCameraPreviewVisible?.(state.cameraPreviewOpen);
     syncFloatingPanelLayerOrder();
     if (state.cameraPreviewOpen) {
+        applyCameraPreviewPanelSize();
         syncTimelineDrivenCameraPreviewPose();
-        requestAnimationFrame(positionCameraPreviewPanel);
+        requestAnimationFrame(() => {
+            applyCameraPreviewPanelSize();
+            positionCameraPreviewPanel();
+            requestAnimationFrame(positionCameraPreviewPanel);
+        });
     }
 }
 
-function setCameraPreviewOpen(open) {
+function setCameraPreviewOpen(open, options = {}) {
+    const markDirty = options.markDirty === true;
+    const silent = options.silent === true;
+    const nextOpen = Boolean(open);
+    const changed = state.cameraPreviewOpen !== nextOpen;
     state.cameraPreviewOpen = Boolean(open);
     if (state.cameraPreviewOpen) {
         activeFloatingPanelKey = 'cameraPreview';
     }
     syncCameraPreviewPanel();
+    if (changed && markDirty) {
+        markWorkspaceDirty('camera-preview-preset');
+    }
+    if (changed && !silent && markDirty) {
+        showInfo(t('messages.cameraPreviewState', { state: state.cameraPreviewOpen ? t('common.active') : t('common.inactive') }));
+    }
 }
 
 function mountCameraPreviewPanelToMainUi() {
@@ -3739,8 +5686,9 @@ function applyCameraPreviewAspect(aspectId, silent = false) {
     app?.setCameraPreviewAspectRatio?.(option.aspect);
     syncCameraSequenceVisualization();
     localStorage.setItem(CAMERA_PREVIEW_ASPECT_STORAGE_KEY, option.id);
+    requestAnimationFrame(positionCameraPreviewPanel);
     if (!silent) {
-        showInfo(`相机预览比例: ${option.label}`);
+        showInfo(t('messages.cameraPreviewAspectSet', { label: option.label }));
     }
 }
 
@@ -3766,14 +5714,54 @@ function moveCameraPreviewPanel(event) {
     const nextLeft = event.clientX - cameraPreviewDragState.offsetX;
     const nextTop = event.clientY - cameraPreviewDragState.offsetY;
     const margin = 12;
+    const headerHeight = Math.max(
+        37,
+        dom.cameraPreviewPanel.querySelector('.camera-preview-header')?.getBoundingClientRect?.().height || 0
+    );
     const maxLeft = Math.max(margin, window.innerWidth - margin - rect.width);
-    const maxTop = Math.max(margin, window.innerHeight - margin - rect.height);
+    const maxTop = Math.max(margin, window.innerHeight - margin - headerHeight);
     dom.cameraPreviewPanel.style.left = `${Math.max(margin, Math.min(maxLeft, nextLeft))}px`;
     dom.cameraPreviewPanel.style.top = `${Math.max(margin, Math.min(maxTop, nextTop))}px`;
 }
 
 function endCameraPreviewPanelDrag() {
+    if (dom.cameraPreviewPanel && state.workspace?.writable) {
+        markWorkspaceDirty('camera-preview-preset');
+    }
     cameraPreviewDragState = null;
+}
+
+function beginCameraPreviewPanelResize(event) {
+    if (!dom.cameraPreviewResizeHandle) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (!target.closest('#cameraPreviewResizeHandle')) return;
+    cameraPreviewResizeState = {
+        startX: event.clientX,
+        startY: event.clientY,
+        startMaxSize: state.cameraPreviewMaxSize,
+    };
+    focusFloatingPanel('cameraPreview');
+    event.preventDefault();
+    event.stopPropagation();
+}
+
+function moveCameraPreviewPanelResize(event) {
+    if (!cameraPreviewResizeState) return;
+    const deltaWidth = (event.clientX - cameraPreviewResizeState.startX) / 3;
+    const deltaHeight = (event.clientY - cameraPreviewResizeState.startY) / 4;
+    state.cameraPreviewMaxSize = clampCameraPreviewMaxSize(
+        cameraPreviewResizeState.startMaxSize + Math.max(deltaWidth, deltaHeight)
+    );
+    applyCameraPreviewPanelSize();
+    positionCameraPreviewPanel();
+}
+
+function endCameraPreviewPanelResize() {
+    if (dom.cameraPreviewPanel && state.workspace?.writable) {
+        markWorkspaceDirty('camera-preview-preset');
+    }
+    cameraPreviewResizeState = null;
 }
 
 function initializeCameraPreviewControls() {
@@ -4105,15 +6093,17 @@ function registerDebugHooks() {
 /**
  * 显示加载状态
  */
-function showLoading(show, text = t('loading.default'), progress = 0) {
+function showLoading(show, text = t('loading.default'), progress = 0, options = {}) {
     if (dom.loadingOverlay) {
         if (show) {
             dom.loadingOverlay.classList.remove('hidden');
+            dom.loadingOverlay.classList.toggle('loading-overlay-passive', options?.passive === true);
             const loadingText = dom.loadingOverlay.querySelector('.loading-text');
             if (loadingText) loadingText.textContent = text;
             if (dom.progressFill) dom.progressFill.style.width = `${progress}%`;
             if (dom.progressText) dom.progressText.textContent = `${Math.round(progress)}%`;
         } else {
+            dom.loadingOverlay.classList.remove('loading-overlay-passive');
             dom.loadingOverlay.classList.add('hidden');
         }
     }
@@ -4161,10 +6151,15 @@ function setCameraSequenceVisibility(nextVisible, silent = false) {
     const safe = Boolean(nextVisible);
     const ok = app?.setCameraSequenceVisible?.(safe);
     if (ok === false) {
-        showError(state.uiLanguage === 'en' ? 'Failed to set camera sequence visibility' : '设置相机序列可见性失败');
+        showError(t('messages.setCameraSequenceVisibilityFailed'));
         return false;
     }
     state.cameraSequenceVisible = safe;
+    if (!safe) {
+        suspendCameraSequenceDragForHiddenTrajectory();
+    } else {
+        restoreCameraSequenceDragAfterVisibleTrajectory();
+    }
     updateCameraSequenceToggleButton();
     if (!silent) {
         showInfo(`${t('timeline.cameraSequence')}: ${safe ? t('common.visible') : t('common.hidden')}`);
@@ -4189,7 +6184,7 @@ function syncCameraSequenceDisplayScaleControl() {
         dom.cameraDisplayScale.value = state.cameraSequenceDisplayScale.toFixed(2);
     }
     if (dom.cameraDisplayScaleValue) {
-        dom.cameraDisplayScaleValue.textContent = state.cameraSequenceDisplayScale.toFixed(2);
+        dom.cameraDisplayScaleValue.value = state.cameraSequenceDisplayScale.toFixed(2);
     }
 }
 
@@ -4197,7 +6192,7 @@ function setCameraSequenceDisplayScale(value, silent = false) {
     const safe = clampCameraSequenceDisplayScale(value);
     const ok = app?.setCameraSequenceDisplayScale?.(safe);
     if (ok === false) {
-        showError(state.uiLanguage === 'en' ? 'Failed to set camera display size' : '设置相机显示大小失败');
+        showError(t('messages.setCameraDisplaySizeFailed'));
         return false;
     }
     state.cameraSequenceDisplayScale = safe;
@@ -4210,6 +6205,19 @@ function setCameraSequenceDisplayScale(value, silent = false) {
     return true;
 }
 
+function commitCameraSequenceDisplayScaleFromInput() {
+    if (!dom.cameraDisplayScaleValue) return;
+    setCameraSequenceDisplayScale(dom.cameraDisplayScaleValue.value, false);
+}
+
+function handleCameraSequenceDisplayScaleInputKeydown(e) {
+    if (!dom.cameraDisplayScaleValue) return;
+    if (e.key === 'Enter') {
+        commitCameraSequenceDisplayScaleFromInput();
+        dom.cameraDisplayScaleValue.blur();
+    }
+}
+
 function updateCameraSequenceToggleButton() {
     if (!dom.btnToggleCameraSequence) return;
     const visible = syncCameraSequenceVisibilityState();
@@ -4220,6 +6228,7 @@ function updateCameraSequenceToggleButton() {
     } else {
         dom.btnToggleCameraSequence.textContent = visible ? t('common.visible') : t('common.hidden');
     }
+    syncCameraSequenceDragButton();
 }
 
 /**
@@ -4268,7 +6277,8 @@ function updateModelList() {
                 const nextVisible = !model.visible;
                 app.setModelVisibility(id, nextVisible);
                 updateModelList();
-                showInfo(`模型可见性: ${nextVisible ? '可见' : '隐藏'}`);
+                markWorkspaceDirty('model-visibility');
+                showInfo(t('messages.modelVisibility', { state: nextVisible ? t('common.visible') : t('common.hidden') }));
             });
         });
 
@@ -4294,7 +6304,7 @@ function selectModel(id, options = {}) {
     if (allowToggle && state.selectedModelId === id) {
         closeEditor();
         if (!silent) {
-            showInfo('已取消选中模型');
+            showInfo(t('messages.modelSelectionCleared'));
         }
         return;
     }
@@ -4303,6 +6313,7 @@ function selectModel(id, options = {}) {
 
     const preservedFrame = clampTimelineFrame(state.selectedFrame);
     state.selectedModelId = id;
+    state.selectedCameraSequenceFrame = null;
     if (syncAppSelection) {
         syncingSelectedModelSelection = true;
         try {
@@ -4311,7 +6322,7 @@ function selectModel(id, options = {}) {
             syncingSelectedModelSelection = false;
         }
     }
-    state.selectedCameraSequenceFrame = null;
+    syncSelectedCameraSequenceFrameToApp();
     if (state.selectedFrame !== preservedFrame) {
         setTimelineFrame(preservedFrame, { applyPose: false, syncSlider: true });
     }
@@ -4335,7 +6346,7 @@ function selectModel(id, options = {}) {
     syncViewportGizmoControls();
     updateModelList();
     if (!silent) {
-        showInfo(`选中模型: ${model.name}`);
+        showInfo(t('messages.selectedModel', { name: model.name }));
     }
 }
 
@@ -4379,9 +6390,10 @@ function updateModelFromEditor() {
     const scale = parseFloat(dom.scaleS?.value || 1);
     app.setModelScale(id, scale);
     app.refreshSelectedModelViewportGizmo?.();
+    markWorkspaceDirty('model-transform');
 
     if (!isInputLabelDragging) {
-        showInfo('模型已更新');
+        showInfo(t('messages.modelUpdated'));
     }
 }
 
@@ -4390,20 +6402,38 @@ function updateModelFromEditor() {
  */
 function resetTransform() {
     if (!state.selectedModelId || !app) return;
+    const modelBefore = app.getModel(state.selectedModelId);
+    if (modelBefore) {
+        const alreadyReset =
+            Math.abs(Number(modelBefore.position?.x) || 0) <= 1e-6 &&
+            Math.abs(Number(modelBefore.position?.y) || 0) <= 1e-6 &&
+            Math.abs(Number(modelBefore.position?.z) || 0) <= 1e-6 &&
+            Math.abs(Number(modelBefore.rotation?.x) || 0) <= 1e-6 &&
+            Math.abs(Number(modelBefore.rotation?.y) || 0) <= 1e-6 &&
+            Math.abs(Number(modelBefore.rotation?.z) || 0) <= 1e-6 &&
+            Math.abs((Number(modelBefore.scale) || 1) - 1) <= 1e-6;
+        if (alreadyReset) {
+            if (modelBefore) {
+                updateEditorValues(modelBefore);
+            }
+            return;
+        }
+    }
     app.resetModelTransform(state.selectedModelId);
     app.setSelectedModel?.(state.selectedModelId);
     const model = app.getModel(state.selectedModelId);
     if (model) {
         updateEditorValues(model);
     }
-    showInfo('变换已重置');
+    markWorkspaceDirty('reset-model-transform');
+    showInfo(t('messages.transformReset'));
 }
 
 /**
  * 关闭模型编辑器
  */
 function closeEditor() {
-    if (dom.selectedModelName) dom.selectedModelName.textContent = '未选中模型';
+    if (dom.selectedModelName) dom.selectedModelName.textContent = t('messages.noModelSelected');
     state.selectedModelId = null;
     syncingSelectedModelSelection = true;
     try {
@@ -4599,13 +6629,17 @@ function setExportMode(mode, silent = false) {
 
     const ok = applyPreviewModeToAllModels(mode);
     if (app && ok === false) {
-        showError(`切换渲染模式失败: ${mode}`);
+        showError(t('messages.switchRenderModeFailed', { mode }));
         return;
     }
 
-    const labelMap = { color: '颜色', depth: '深度图', normal: '法向图' };
+    const labelMap = {
+        color: t('sceneSettings.renderModes.color'),
+        depth: t('sceneSettings.renderModes.depth'),
+        normal: t('sceneSettings.renderModes.normal'),
+    };
     if (!silent) {
-        showInfo(`显示模式: ${labelMap[mode] || mode}`);
+        showInfo(t('messages.displayModeSet', { mode: labelMap[mode] || mode }));
     }
 }
 
@@ -4668,13 +6702,62 @@ function parseResolutionValue(value) {
     return { width, height };
 }
 
+function makeEvenExportDimension(value) {
+    const rounded = Math.max(2, Math.round(Number(value) || 2));
+    return Math.max(2, rounded - (rounded % 2));
+}
+
+function deriveResolutionForAspect(baseResolution, aspect) {
+    const safeAspect = Number(aspect);
+    if (!Number.isFinite(safeAspect) || safeAspect <= 0) {
+        return {
+            width: makeEvenExportDimension(baseResolution?.width),
+            height: makeEvenExportDimension(baseResolution?.height),
+        };
+    }
+    const baseWidth = Math.max(2, Number(baseResolution?.width) || 1920);
+    const baseHeight = Math.max(2, Number(baseResolution?.height) || 1080);
+    const area = Math.max(4, baseWidth * baseHeight);
+    const width = makeEvenExportDimension(Math.sqrt(area * safeAspect));
+    const height = makeEvenExportDimension(width / safeAspect);
+    return { width, height };
+}
+
 function getExportModeLabel(mode) {
     const labels = {
-        color: t('sceneSettings.renderModes.color'),
-        depth: t('sceneSettings.renderModes.depth'),
-        normal: t('sceneSettings.renderModes.normal'),
+        color: t('modal.exportRenderModes.rgb'),
+        depth: t('modal.exportRenderModes.depth'),
+        normal: t('modal.exportRenderModes.normal'),
     };
     return labels[mode] || mode;
+}
+
+function clampExportFps(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    return Math.max(1, Math.min(240, Math.round(numeric)));
+}
+
+function clampExportPlaybackSpeed(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    return Math.max(0.01, Math.min(100, numeric));
+}
+
+function getExportVideoFpsValue() {
+    return clampExportFps(dom.exportVideoFps?.value) || Math.max(1, Number(state.timelineFps || EXPORT_FALLBACK_FPS));
+}
+
+function getExportVideoSpeedValue() {
+    return clampExportPlaybackSpeed(dom.exportVideoSpeed?.value) || Math.max(0.01, Number(state.timelinePlaybackSpeed || 1));
+}
+
+function getExportVideoDurationSec(playbackSpeed = getExportVideoSpeedValue()) {
+    return Math.max(0, frameToTime(getTimelineTotalFrames())) / Math.max(0.01, Number(playbackSpeed) || 1);
+}
+
+function getExportVideoFrameCount(fps = getExportVideoFpsValue(), playbackSpeed = getExportVideoSpeedValue()) {
+    return Math.max(1, Math.round(getExportVideoDurationSec(playbackSpeed) * Math.max(1, Number(fps) || 1)) + 1);
 }
 
 function updateExportTimelineHint(type) {
@@ -4683,9 +6766,10 @@ function updateExportTimelineHint(type) {
         dom.exportTimelineHint.textContent = t('modal.exportCurrentFrame');
         return;
     }
-    const fps = Math.max(1, Number(state.timelineFps || EXPORT_FALLBACK_FPS));
-    const totalFrames = Math.max(1, getTimelineTotalFrames() + 1);
-    const duration = frameToTime(getTimelineTotalFrames());
+    const fps = getExportVideoFpsValue();
+    const playbackSpeed = getExportVideoSpeedValue();
+    const totalFrames = getExportVideoFrameCount(fps, playbackSpeed);
+    const duration = getExportVideoDurationSec(playbackSpeed);
     const keyframes = state.keyframes.length;
     dom.exportTimelineHint.textContent = t('modal.exportTimeline', {
         duration: duration.toFixed(3),
@@ -4695,31 +6779,86 @@ function updateExportTimelineHint(type) {
     });
 }
 
-function buildExportResolutionOptions() {
+function getSelectedExportAspectOption() {
+    return getCameraPreviewAspectOption(dom.exportAspectRatio?.value || state.cameraPreviewAspectId);
+}
+
+function buildExportAspectRatioOptions() {
+    if (!dom.exportAspectRatio) return;
+    const selected = normalizeCameraPreviewAspectId(dom.exportAspectRatio.value || state.cameraPreviewAspectId);
+    dom.exportAspectRatio.innerHTML = CAMERA_PREVIEW_ASPECT_OPTIONS
+        .map((item) => `<option value="${item.id}">${item.label}</option>`)
+        .join('');
+    dom.exportAspectRatio.value = selected;
+}
+
+function syncExportVideoTimingControls() {
+    if (dom.exportVideoSpeed) {
+        dom.exportVideoSpeed.value = String(Number(state.timelinePlaybackSpeed || 1));
+        if (dom.exportVideoSpeed.value !== String(Number(state.timelinePlaybackSpeed || 1))) {
+            dom.exportVideoSpeed.value = '1.0';
+        }
+    }
+    if (dom.exportVideoFps) {
+        dom.exportVideoFps.value = String(Math.max(1, Number(state.timelineFps || EXPORT_FALLBACK_FPS)));
+        if (dom.exportVideoFps.value !== String(Math.max(1, Number(state.timelineFps || EXPORT_FALLBACK_FPS)))) {
+            dom.exportVideoFps.value = String(EXPORT_FALLBACK_FPS);
+        }
+    }
+}
+
+function buildExportResolutionOptions(aspectOption = null) {
     if (!dom.exportResolution) return;
 
     const options = [];
     const seen = new Set();
-    const current = getViewportResolution();
+    const selectedValue = dom.exportResolution.value;
+    const current = aspectOption
+        ? deriveResolutionForAspect(getViewportResolution(), aspectOption.aspect)
+        : getViewportResolution();
     const currentValue = resolutionToValue(current.width, current.height);
     options.push({ value: currentValue, label: `${current.width} x ${current.height} (${t('common.currentWindow')})` });
     seen.add(currentValue);
 
     for (const preset of EXPORT_PRESET_RESOLUTIONS) {
-        const value = resolutionToValue(preset.width, preset.height);
+        const resolution = aspectOption
+            ? deriveResolutionForAspect(preset, aspectOption.aspect)
+            : preset;
+        const value = resolutionToValue(resolution.width, resolution.height);
         if (seen.has(value)) continue;
         seen.add(value);
-        options.push({ value, label: preset.label });
+        const presetSuffix = /\(([^)]+)\)/.exec(preset.label)?.[1];
+        const label = aspectOption
+            ? `${resolution.width} x ${resolution.height} (${presetSuffix || aspectOption.label})`
+            : preset.label;
+        options.push({ value, label });
     }
 
     dom.exportResolution.innerHTML = options
         .map((opt) => `<option value="${opt.value}">${opt.label}</option>`)
         .join('');
-    dom.exportResolution.value = currentValue;
+    dom.exportResolution.value = seen.has(selectedValue) ? selectedValue : currentValue;
+}
+
+function setExportProgress(percent, visible = pendingExportType === 'video') {
+    const safePercent = Math.max(0, Math.min(100, Number(percent) || 0));
+    dom.exportProgress?.classList.toggle('hidden', !visible);
+    dom.exportProgress?.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    if (dom.exportProgressFill) {
+        dom.exportProgressFill.style.width = `${safePercent}%`;
+    }
+    if (dom.exportProgressText) {
+        dom.exportProgressText.textContent = safePercent > 0
+            ? t('modal.exportProgressValue', { percent: Math.round(safePercent) })
+            : t('modal.exportProgressIdle');
+    }
 }
 
 function setExportModalBusy(busy) {
     if (dom.exportResolution) dom.exportResolution.disabled = busy;
+    if (dom.exportAspectRatio) dom.exportAspectRatio.disabled = busy;
+    if (dom.exportVideoSpeed) dom.exportVideoSpeed.disabled = busy;
+    if (dom.exportVideoFps) dom.exportVideoFps.disabled = busy;
     if (dom.exportMode) dom.exportMode.disabled = busy;
     if (dom.exportFov) dom.exportFov.disabled = busy;
     if (dom.exportCancel) dom.exportCancel.disabled = busy;
@@ -4736,26 +6875,42 @@ function closeExportModal() {
 
 function openExportModal(type) {
     if (!dom.exportModal || !dom.exportModalTitle) {
-        showError(state.uiLanguage === 'en' ? 'Export dialog is not initialized' : '导出弹窗未初始化');
+        showError(t('messages.exportDialogNotInitialized'));
         return;
     }
     if (!app) {
-        showError(state.uiLanguage === 'en' ? 'Editor is not initialized, cannot export' : '编辑器尚未初始化，无法导出');
+        showError(t('messages.editorNotInitializedExport'));
         return;
     }
 
     pendingExportType = type === 'video' ? 'video' : 'image';
-    buildExportResolutionOptions();
+    const isVideo = pendingExportType === 'video';
+    dom.exportAspectRatioRow?.classList.toggle('hidden', !isVideo);
+    if (dom.exportAspectRatioRow) dom.exportAspectRatioRow.hidden = !isVideo;
+    dom.exportVideoSpeedRow?.classList.toggle('hidden', !isVideo);
+    if (dom.exportVideoSpeedRow) dom.exportVideoSpeedRow.hidden = !isVideo;
+    dom.exportVideoFpsRow?.classList.toggle('hidden', !isVideo);
+    if (dom.exportVideoFpsRow) dom.exportVideoFpsRow.hidden = !isVideo;
+    dom.exportFovRow?.classList.toggle('hidden', isVideo);
+    if (dom.exportFovRow) dom.exportFovRow.hidden = isVideo;
+    if (isVideo) {
+        buildExportAspectRatioOptions();
+        syncExportVideoTimingControls();
+        buildExportResolutionOptions(getSelectedExportAspectOption());
+    } else {
+        buildExportResolutionOptions();
+    }
 
     if (dom.exportMode) {
         dom.exportMode.value = state.exportMode;
     }
-    if (dom.exportFov) {
+    if (!isVideo && dom.exportFov) {
         dom.exportFov.value = Number(state.sceneCameraFov || 45).toFixed(3);
     }
 
     dom.exportModalTitle.textContent = pendingExportType === 'video' ? t('modal.exportVideoTitle') : t('modal.exportImageTitle');
     updateExportTimelineHint(pendingExportType);
+    setExportProgress(0, isVideo);
     setExportModalBusy(false);
     dom.exportModal.classList.remove('hidden');
 }
@@ -4763,20 +6918,38 @@ function openExportModal(type) {
 function readExportOptionsFromModal() {
     const resolution = parseResolutionValue(dom.exportResolution?.value || '');
     if (!resolution) {
-        throw new Error('分辨率格式错误');
+        throw new Error(t('messages.invalidResolution'));
     }
 
     const mode = String(dom.exportMode?.value || state.exportMode);
     if (!['color', 'depth', 'normal'].includes(mode)) {
-        throw new Error(`渲染模式无效: ${mode}`);
+        throw new Error(t('messages.invalidRenderMode', { mode }));
     }
 
-    const fov = clampSceneFov(dom.exportFov?.value);
-    if (fov === null) {
-        throw new Error('FOV 格式错误');
+    const isVideo = pendingExportType === 'video';
+    const fov = isVideo ? null : clampSceneFov(dom.exportFov?.value);
+    if (!isVideo && fov === null) {
+        throw new Error(t('messages.invalidFov'));
+    }
+    const fps = isVideo ? clampExportFps(dom.exportVideoFps?.value) : null;
+    if (isVideo && fps === null) {
+        throw new Error(t('messages.invalidFps'));
+    }
+    const playbackSpeed = isVideo ? clampExportPlaybackSpeed(dom.exportVideoSpeed?.value) : null;
+    if (isVideo && playbackSpeed === null) {
+        throw new Error(t('messages.invalidPlaybackSpeed'));
     }
 
-    return { resolution, mode, fov };
+    const aspectOption = isVideo ? getSelectedExportAspectOption() : null;
+    return {
+        resolution,
+        mode,
+        fov,
+        fps,
+        playbackSpeed,
+        aspectId: aspectOption?.id || null,
+        aspect: aspectOption?.aspect || (resolution.width / resolution.height),
+    };
 }
 
 async function ensureImageExportApiLoaded() {
@@ -4798,7 +6971,7 @@ async function ensureVideoExportApiLoaded() {
     return videoExportApi;
 }
 
-function applySnapshotToRecordingCamera(recordingCamera, snapshot, fovOverride) {
+function applySnapshotToRecordingCamera(recordingCamera, snapshot, fovOverride, aspectOverride = null) {
     if (!recordingCamera?.camera || !snapshot) return false;
     recordingCamera.camera.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
     recordingCamera.camera.quaternion.set(
@@ -4811,7 +6984,68 @@ function applySnapshotToRecordingCamera(recordingCamera, snapshot, fovOverride) 
     recordingCamera.camera.fov = safeFov ?? Number(snapshot.fovDegrees || 45);
     recordingCamera.camera.near = Math.max(1e-4, Number(snapshot.near || 0.01));
     recordingCamera.camera.far = Math.max(recordingCamera.camera.near + 1e-3, Number(snapshot.far || 2000));
-    recordingCamera.camera.aspect = Math.max(1e-6, Number(snapshot.aspect || 1));
+    recordingCamera.camera.aspect = Math.max(1e-6, Number(aspectOverride || snapshot.aspect || 1));
+    recordingCamera.camera.updateProjectionMatrix();
+    recordingCamera.camera.updateMatrixWorld(true);
+    return true;
+}
+
+function invertUnitQuaternion(q) {
+    return {
+        x: -(Number(q?.x) || 0),
+        y: -(Number(q?.y) || 0),
+        z: -(Number(q?.z) || 0),
+        w: Number(q?.w) || 1,
+    };
+}
+
+function rotateVectorByQuaternion(vector, quaternion) {
+    const x = Number(vector?.x) || 0;
+    const y = Number(vector?.y) || 0;
+    const z = Number(vector?.z) || 0;
+    const qx = Number(quaternion?.x) || 0;
+    const qy = Number(quaternion?.y) || 0;
+    const qz = Number(quaternion?.z) || 0;
+    const qw = Number(quaternion?.w) || 1;
+
+    const ix = (qw * x) + (qy * z) - (qz * y);
+    const iy = (qw * y) + (qz * x) - (qx * z);
+    const iz = (qw * z) + (qx * y) - (qy * x);
+    const iw = -(qx * x) - (qy * y) - (qz * z);
+
+    return {
+        x: (ix * qw) + (iw * -qx) + (iy * -qz) - (iz * -qy),
+        y: (iy * qw) + (iw * -qy) + (iz * -qx) - (ix * -qz),
+        z: (iz * qw) + (iw * -qz) + (ix * -qy) - (iy * -qx),
+    };
+}
+
+function applyTimelinePoseToRecordingCamera(recordingCamera, pose, options = {}) {
+    if (!recordingCamera?.camera || !pose?.position || !pose?.rotation) return false;
+    const px = Number(pose.position.x) || 0;
+    const py = Number(pose.position.y) || 0;
+    const pz = Number(pose.position.z) || 0;
+    recordingCamera.camera.position.set(
+        px,
+        py,
+        pz
+    );
+    const c2w = invertUnitQuaternion(pose.rotation);
+    const forward = rotateVectorByQuaternion({ x: 0, y: 0, z: 1 }, c2w);
+    const up = rotateVectorByQuaternion({ x: 0, y: 1, z: 0 }, c2w);
+    recordingCamera.camera.up.set(up.x, up.y, up.z);
+    recordingCamera.camera.lookAt(
+        px + forward.x,
+        py + forward.y,
+        pz + forward.z
+    );
+    const fallbackSnapshot = options.fallbackSnapshot || {};
+    recordingCamera.camera.fov = clampSceneFov(pose.fovDegrees)
+        ?? clampSceneFov(fallbackSnapshot.fovDegrees)
+        ?? 45;
+    recordingCamera.camera.near = Math.max(1e-4, Number(fallbackSnapshot.near || 0.01));
+    recordingCamera.camera.far = Math.max(recordingCamera.camera.near + 1e-3, Number(fallbackSnapshot.far || 2000));
+    recordingCamera.camera.aspect = Math.max(1e-6, Number(options.aspect || fallbackSnapshot.aspect || 1));
     recordingCamera.camera.updateProjectionMatrix();
     recordingCamera.camera.updateMatrixWorld(true);
     return true;
@@ -4823,7 +7057,7 @@ async function withTemporaryPreviewMode(mode, fn) {
     if (changed) {
         const ok = applyPreviewModeToAllModels(mode);
         if (app && ok === false) {
-            throw new Error(`切换渲染模式失败: ${mode}`);
+            throw new Error(t('messages.switchRenderModeFailed', { mode }));
         }
     }
     try {
@@ -4835,24 +7069,14 @@ async function withTemporaryPreviewMode(mode, fn) {
     }
 }
 
-async function withTemporaryCameraSequenceHidden(fn) {
-    const previousVisible = syncCameraSequenceVisibilityState();
-    if (previousVisible) {
-        setCameraSequenceVisibility(false, true);
-    }
-    try {
-        return await fn();
-    } finally {
-        if (previousVisible) {
-            setCameraSequenceVisibility(true, true);
-        }
-    }
-}
-
-function buildExportTimelineController(recordingCamera, exportFov) {
+function buildExportTimelineController(recordingCamera, options = {}) {
     const callbacks = new Set();
-    const maxFrame = Math.max(0, getTimelineTotalFrames());
-    const totalFrames = Math.max(1, maxFrame + 1);
+    const sourceMaxFrame = Math.max(0, getTimelineTotalFrames());
+    const sourceDurationSec = Math.max(0, frameToTime(sourceMaxFrame));
+    const exportFps = Math.max(1, Number(options.fps || state.timelineFps || EXPORT_FALLBACK_FPS));
+    const playbackSpeed = Math.max(0.01, Number(options.playbackSpeed || 1));
+    const exportDurationSec = sourceDurationSec / playbackSpeed;
+    const totalFrames = Math.max(1, Math.round(exportDurationSec * exportFps) + 1);
     let currentIndex = 0;
 
     return {
@@ -4860,7 +7084,7 @@ function buildExportTimelineController(recordingCamera, exportFov) {
             return totalFrames;
         },
         getFrameRate() {
-            return Math.max(1, Number(state.timelineFps || EXPORT_FALLBACK_FPS));
+            return exportFps;
         },
         getCurrentIndex() {
             return currentIndex;
@@ -4874,19 +7098,25 @@ function buildExportTimelineController(recordingCamera, exportFov) {
                     max = Math.max(max, Math.round(frame));
                 }
             }
-            return Math.min(maxFrame, Math.max(-1, max));
+            return Math.min(totalFrames - 1, Math.max(-1, Math.round((frameToTime(max) / playbackSpeed) * exportFps)));
         },
         async setFrameIndex(frameIndex) {
-            const safeFrame = Math.max(0, Math.min(maxFrame, Math.round(Number(frameIndex) || 0)));
+            const safeFrame = Math.max(0, Math.min(totalFrames - 1, Math.round(Number(frameIndex) || 0)));
             currentIndex = safeFrame;
-            setTimelineFrame(safeFrame, { applyPose: true, syncSlider: true });
-            const snapshot = app?.getRenderCameraSnapshot?.();
-            if (snapshot) {
-                applySnapshotToRecordingCamera(recordingCamera, snapshot, exportFov);
+            const sourceTimeSec = Math.min(sourceDurationSec, (safeFrame / exportFps) * playbackSpeed);
+            const pose = interpolateCameraPoseAt(sourceTimeSec);
+            if (pose) {
+                applyTimelinePoseToRecordingCamera(recordingCamera, pose, {
+                    aspect: options.aspect,
+                    fallbackSnapshot: options.fallbackSnapshot,
+                });
             }
+            app?.setGlobalTimelineTime?.(sourceTimeSec);
+            app?.setGlobalTimelineFrame?.(Math.max(0, Math.min(sourceMaxFrame, timeToFrame(sourceTimeSec))));
             for (const callback of Array.from(callbacks)) {
                 await callback();
             }
+            options.onProgress?.(((safeFrame + 1) / totalFrames) * 100);
         },
         registerFrameUpdateCallback(callback) {
             callbacks.add(callback);
@@ -4902,7 +7132,7 @@ async function downloadCanvasAsPng(canvas, filePrefix = 'Image') {
                 resolve(value);
                 return;
             }
-            reject(new Error('无法导出图片数据'));
+            reject(new Error(t('messages.imageExportDataUnavailable')));
         }, 'image/png');
     });
 
@@ -4924,7 +7154,7 @@ async function exportImageWithOfficialPipeline(options) {
     const cameraSnapshot = app?.getRenderCameraSnapshot?.();
 
     if (!renderer || !scene || !cameraSnapshot) {
-        throw new Error('渲染上下文不可用，无法导出图片');
+        throw new Error(t('messages.renderContextUnavailableImage'));
     }
 
     const recordingCamera = new RecordingCamera(
@@ -4944,7 +7174,7 @@ async function exportImageWithOfficialPipeline(options) {
         const gaussianModels = fusedRenderer?.getGaussianModels?.() || [];
         const initialized = await recordingCamera.initializeRenderer(renderer, scene, gaussianModels);
         if (!initialized) {
-            throw new Error('录制相机初始化失败');
+            throw new Error(t('messages.recordingCameraInitFailed'));
         }
 
         recordingCamera.setScenePreviewMode?.(options.mode);
@@ -4958,7 +7188,7 @@ async function exportImageWithOfficialPipeline(options) {
 
 async function exportVideoWithOfficialPipeline(options) {
     if (!Array.isArray(state.keyframes) || state.keyframes.length === 0) {
-        throw new Error('请先在时间轴添加至少 1 个相机关键帧');
+        throw new Error(t('messages.addKeyframeBeforeVideoExport'));
     }
 
     const { RecordingCamera, exportVideoWithRecordingCamera } = await ensureVideoExportApiLoaded();
@@ -4968,19 +7198,20 @@ async function exportVideoWithOfficialPipeline(options) {
     const cameraSnapshot = app?.getRenderCameraSnapshot?.();
 
     if (!renderer || !scene || !cameraSnapshot) {
-        throw new Error('渲染上下文不可用，无法导出视频');
+        throw new Error(t('messages.renderContextUnavailableVideo'));
     }
 
     const recordingCamera = new RecordingCamera(
         `editor_export_video_${Date.now().toString(36)}`,
         options.resolution.width,
         options.resolution.height,
-        options.fov,
+        clampSceneFov(cameraSnapshot.fovDegrees) || 45,
         false,
         'EditorExportVideo'
     );
 
     const restoreFrame = Number(state.selectedFrame || 0);
+    const restoreTime = Number(state.currentTime || frameToTime(restoreFrame));
     const wasPlaying = Boolean(state.isPlaying);
     if (state.isPlaying) {
         stopTimelinePlayback(false);
@@ -4989,16 +7220,33 @@ async function exportVideoWithOfficialPipeline(options) {
     try {
         recordingCamera.setScenePreviewMode?.(options.mode);
         recordingCamera.setSceneDepthRangeScale?.(state.sceneDepthRangeScale);
-        applySnapshotToRecordingCamera(recordingCamera, cameraSnapshot, options.fov);
+        const startPose = interpolateCameraPoseAt(frameToTime(0));
+        if (startPose) {
+            applyTimelinePoseToRecordingCamera(recordingCamera, startPose, {
+                aspect: options.aspect,
+                fallbackSnapshot: cameraSnapshot,
+            });
+        } else {
+            applySnapshotToRecordingCamera(recordingCamera, cameraSnapshot, null, options.aspect);
+        }
 
-        const timelineController = buildExportTimelineController(recordingCamera, options.fov);
+        const timelineController = buildExportTimelineController(recordingCamera, {
+            aspect: options.aspect,
+            fps: options.fps,
+            playbackSpeed: options.playbackSpeed,
+            fallbackSnapshot: cameraSnapshot,
+            onProgress: (percent) => {
+                setExportProgress(percent, true);
+                showLoading(true, t('loading.renderingVideo'), percent, { passive: true });
+            },
+        });
         (window).startTime = Date.now();
         await exportVideoWithRecordingCamera(
             renderer,
             scene,
             recordingCamera,
-            Math.max(0.1, frameToTime(getTimelineTotalFrames())),
-            Math.max(1, Number(state.timelineFps || EXPORT_FALLBACK_FPS)),
+            Math.max(0.1, getExportVideoDurationSec(options.playbackSpeed)),
+            Math.max(1, Number(options.fps || state.timelineFps || EXPORT_FALLBACK_FPS)),
             options.resolution,
             fusedRenderer || undefined,
             false,
@@ -5007,7 +7255,9 @@ async function exportVideoWithOfficialPipeline(options) {
             getExportModeLabel(options.mode)
         );
     } finally {
-        setTimelineFrame(restoreFrame, { applyPose: true, syncSlider: true });
+        app?.setGlobalTimelineTime?.(restoreTime);
+        app?.setGlobalTimelineFrame?.(restoreFrame);
+        setTimelineFrame(restoreFrame, { applyPose: true, syncSlider: true, syncGizmo: false });
         if (wasPlaying) {
             playCameraAnimation();
         }
@@ -5018,7 +7268,7 @@ async function exportVideoWithOfficialPipeline(options) {
 async function onConfirmExportModal() {
     if (!pendingExportType || isExporting) return;
     if (!app) {
-        showError('编辑器尚未初始化，无法导出');
+        showError(t('messages.editorNotInitializedExport'));
         return;
     }
 
@@ -5032,19 +7282,30 @@ async function onConfirmExportModal() {
 
     isExporting = true;
     setExportModalBusy(true);
-    showLoading(true, pendingExportType === 'video' ? t('loading.renderingVideo') : t('loading.renderingImage'), 10);
+    if (pendingExportType === 'video') {
+        setExportProgress(0, true);
+        showLoading(true, t('loading.renderingVideo'), 0, { passive: true });
+    } else {
+        showLoading(true, t('loading.renderingImage'), 10);
+    }
 
     try {
-        await withTemporaryCameraSequenceHidden(async () => {
-            await withTemporaryPreviewMode(options.mode, async () => {
-                if (pendingExportType === 'image') {
-                    await exportImageWithOfficialPipeline(options);
-                    showInfo(`图片导出完成: ${options.resolution.width}x${options.resolution.height}, ${getExportModeLabel(options.mode)}`);
-                    return;
-                }
-                await exportVideoWithOfficialPipeline(options);
-                showInfo(`视频导出完成: ${options.resolution.width}x${options.resolution.height}, ${getExportModeLabel(options.mode)}`);
-            });
+        await withTemporaryPreviewMode(options.mode, async () => {
+            if (pendingExportType === 'image') {
+                await exportImageWithOfficialPipeline(options);
+                showInfo(t('messages.imageExported', {
+                    width: options.resolution.width,
+                    height: options.resolution.height,
+                    mode: getExportModeLabel(options.mode),
+                }));
+                return;
+            }
+            await exportVideoWithOfficialPipeline(options);
+            showInfo(t('messages.videoExported', {
+                width: options.resolution.width,
+                height: options.resolution.height,
+                mode: getExportModeLabel(options.mode),
+            }));
         });
         isExporting = false;
         setExportModalBusy(false);
@@ -5055,12 +7316,12 @@ async function onConfirmExportModal() {
         isExporting = false;
         setExportModalBusy(false);
         showLoading(false);
-        showError(`导出失败: ${error?.message || String(error)}`);
+        showError(t('messages.exportFailed', { message: error?.message || String(error) }));
     }
 }
 
 function isHttpUrl(value) {
-    return typeof value === 'string' && /^https?:\/\//i.test(value);
+    return typeof value === 'string' && (/^https?:\/\//i.test(value) || value.startsWith('/'));
 }
 
 function sanitizeFileName(name) {
@@ -5110,7 +7371,7 @@ async function readFileByRelativePath(rootHandle, relativePath) {
     const normalized = String(relativePath || '').replace(/\\/g, '/');
     const parts = normalized.split('/').filter(Boolean);
     if (parts.length === 0) {
-        throw new Error(`无效资源路径: ${relativePath}`);
+        throw new Error(t('messages.invalidAssetPath', { path: relativePath }));
     }
 
     const fileName = parts.pop();
@@ -5168,96 +7429,256 @@ function parseSceneTimeline(raw) {
     return timeline;
 }
 
-/**
- * 保存场景（Visionary 原生流程：文件夹 + scene.json + 资源文件）
- */
-async function saveScene() {
-    if (!app) {
-        showError('编辑器尚未初始化，无法保存场景');
+function clearWorkspaceAutosaveTimer() {
+    if (!workspaceAutosaveTimer) return;
+    window.clearTimeout(workspaceAutosaveTimer);
+    workspaceAutosaveTimer = 0;
+}
+
+function isWorkspaceMaterializedAssetPath(sourcePath) {
+    return typeof sourcePath === 'string' && /^assets\//i.test(sourcePath);
+}
+
+function isServerMaterializedAssetPath(sourcePath) {
+    return typeof sourcePath === 'string' && /^assets\/[0-9a-f]{32,}\.[^/]+$/i.test(sourcePath);
+}
+
+function isServerAgentAssetPath(sourcePath) {
+    return typeof sourcePath === 'string' && /^agent_history\//i.test(sourcePath);
+}
+
+function collectServerSceneAssetPaths(rawScene) {
+    const assetPaths = new Set();
+    const assets = Array.isArray(rawScene?.assets) ? rawScene.assets : [];
+    assets.forEach((asset) => {
+        const relativePath = String(asset?.path || asset?.extras?.visionaryRelativePath || '').trim();
+        if (isServerMaterializedAssetPath(relativePath)) {
+            assetPaths.add(relativePath);
+        }
+    });
+    return assetPaths;
+}
+
+function collectServerAgentAssetPaths(agentHistory) {
+    const assetPaths = new Set();
+    const assetIndex = Array.isArray(agentHistory?.asset_index) ? agentHistory.asset_index : [];
+    assetIndex.forEach((entry) => {
+        const relativePath = String(entry?.path || '').trim();
+        if (isServerAgentAssetPath(relativePath)) {
+            assetPaths.add(relativePath);
+        }
+    });
+    return assetPaths;
+}
+
+function updateActiveServerProjectAssetCaches({ scene, agentHistory } = {}) {
+    if (scene !== undefined) {
+        state.projectSession.activeProjectSceneAssetPaths = collectServerSceneAssetPaths(scene);
+    }
+    if (agentHistory !== undefined) {
+        state.projectSession.activeProjectAgentAssetPaths = collectServerAgentAssetPaths(agentHistory);
+    }
+}
+
+function clearActiveServerProjectAssetCaches() {
+    state.projectSession.activeProjectSceneAssetPaths = new Set();
+    state.projectSession.activeProjectAgentAssetPaths = new Set();
+}
+
+async function resolveModelAssetBytes(model, sourcePath) {
+    const sourceFile = model?.sourceFile;
+    if (sourceFile instanceof Blob) {
+        return sourceFile.arrayBuffer();
+    }
+    if (sceneFs.isWorkspaceWritable?.() && isWorkspaceMaterializedAssetPath(sourcePath)) {
+        const workspaceHandle = sceneFs.getWorkspaceHandle?.();
+        if (workspaceHandle) {
+            const file = await readFileByRelativePath(workspaceHandle, sourcePath);
+            return file.arrayBuffer();
+        }
+    }
+    return null;
+}
+
+function syncWorkspaceStateFromSceneFS(overrides = {}) {
+    const workspaceInfo = sceneFs.getWorkspaceInfo();
+    state.workspace = {
+        ...state.workspace,
+        name: workspaceInfo.name,
+        writable: workspaceInfo.writable,
+        ...overrides,
+    };
+    syncAgentSessionStoreWorkspaceBinding();
+    updateWorkspaceStatusIndicator();
+    return workspaceInfo;
+}
+
+function isWorkspaceSelectionCancelledError(error) {
+    const message = String(error?.message || error || '');
+    return error?.name === 'AbortError' || /cancelled by user/i.test(message);
+}
+
+function scheduleWorkspaceAutosave() {
+    clearWorkspaceAutosaveTimer();
+    if (isServerProjectSessionActive()) {
+        workspaceAutosaveTimer = window.setTimeout(() => {
+            workspaceAutosaveTimer = 0;
+            void saveServerProjectToCurrentProject({ silent: true });
+        }, 1500);
+        return;
+    }
+    if (!isLocalWorkspaceSyncMode()) return;
+    if (!state.workspace?.writable) return;
+    workspaceAutosaveTimer = window.setTimeout(() => {
+        workspaceAutosaveTimer = 0;
+        const includeAssetPayloads = hasPendingWorkspaceAssetMaterialization();
+        void saveWorkspaceToCurrentWorkspace({
+            requestWorkspaceIfNeeded: false,
+            silent: true,
+            includeAssetPayloads,
+        });
+    }, 1500);
+}
+
+function markWorkspaceDirty(reason = 'scene-change') {
+    if (isServerProjectSessionActive()) {
+        state.workspace = {
+            ...state.workspace,
+            dirty: true,
+            saving: false,
+            error: null,
+            lastDirtyReason: reason,
+            syncStatus: 'dirty',
+        };
+        updateWorkspaceStatusIndicator();
+        scheduleWorkspaceAutosave();
         return;
     }
 
-    if (typeof window.showDirectoryPicker !== 'function') {
-        showError('当前浏览器不支持文件夹读写（File System Access API）');
-        return;
+    syncWorkspaceStateFromSceneFS({
+        dirty: true,
+        error: null,
+        lastDirtyReason: reason,
+        syncStatus: state.workspace?.writable ? 'dirty' : 'no-workspace',
+    });
+    scheduleWorkspaceAutosave();
+}
+
+async function ensureWritableWorkspaceSelected() {
+    if (sceneFs.isWorkspaceWritable()) {
+        return syncWorkspaceStateFromSceneFS();
     }
+    await sceneFs.openWorkspaceReadWrite();
+    return syncWorkspaceStateFromSceneFS({
+        mode: 'local',
+        dirty: false,
+        saving: false,
+        error: null,
+        syncStatus: 'clean',
+    });
+}
 
-    try {
-        const folderHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-        const models = app.getModels();
-        const usedNames = new Set();
-        const assets = [];
-        let skipped = 0;
+function hasPendingWorkspaceAssetMaterialization() {
+    if (state.forceFullWorkspaceAssetMigration) {
+        return true;
+    }
+    if (!app?.getModels) return false;
+    const models = app.getModels();
+    return models.some((model) => {
+        const sourceFile = model?.sourceFile;
+        const sourcePath = String(model?.sourcePath || sourceFile?.name || model?.name || '');
+        return sourceFile instanceof Blob || (sceneFs.isWorkspaceWritable?.() && isWorkspaceMaterializedAssetPath(sourcePath));
+    });
+}
 
-        const bgHex = normalizeHexColor(state.sceneBackgroundHex) || '#707070';
-        const r = Number.parseInt(bgHex.slice(1, 3), 16) / 255;
-        const g = Number.parseInt(bgHex.slice(3, 5), 16) / 255;
-        const b = Number.parseInt(bgHex.slice(5, 7), 16) / 255;
+async function buildSceneWorkspaceSnapshot(options = {}) {
+    const {
+        includeAssetPayloads = true,
+        showProgress = includeAssetPayloads,
+        allowWorkspaceMaterializedAssetReuse = true,
+        allowServerMaterializedAssetReuse = false,
+    } = options;
+    const models = app.getModels();
+    const assets = [];
+    const assetInputs = [];
+    let skipped = 0;
 
-        for (let i = 0; i < models.length; i++) {
-            const model = models[i];
-            showLoading(true, t('loading.savingAssets', { current: i + 1, total: models.length }), (i / Math.max(1, models.length)) * 90);
+    const bgHex = normalizeHexColor(state.sceneBackgroundHex) || '#707070';
+    const r = Number.parseInt(bgHex.slice(1, 3), 16) / 255;
+    const g = Number.parseInt(bgHex.slice(3, 5), 16) / 255;
+    const b = Number.parseInt(bgHex.slice(5, 7), 16) / 255;
 
-            const sourceFile = model.sourceFile;
-            if (!(sourceFile instanceof Blob)) {
-                skipped++;
-                continue;
-            }
-
-            const candidateName = sanitizeFileName(
-                extractFileName(model.sourcePath || sourceFile.name || model.name)
+    for (let i = 0; i < models.length; i++) {
+        const model = models[i];
+        const sourceFile = model.sourceFile;
+        const sourcePath = String(model.sourcePath || sourceFile?.name || model.name || `model-${i + 1}`);
+        const candidateName = sanitizeFileName(extractFileName(sourcePath));
+        const shouldReuseWorkspaceMaterializedPath = allowWorkspaceMaterializedAssetReuse && isWorkspaceMaterializedAssetPath(sourcePath);
+        const shouldReuseServerMaterializedPath = allowServerMaterializedAssetReuse && isServerMaterializedAssetPath(sourcePath);
+        const canProvideAssetPayload = sourceFile instanceof Blob || (sceneFs.isWorkspaceWritable?.() && isWorkspaceMaterializedAssetPath(sourcePath));
+        const shouldMaterializeAsset = includeAssetPayloads
+            && canProvideAssetPayload
+            && !shouldReuseWorkspaceMaterializedPath
+            && !shouldReuseServerMaterializedPath;
+        if (showProgress && shouldMaterializeAsset) {
+            showLoading(
+                true,
+                t('loading.savingAssets', { current: i + 1, total: models.length }),
+                (i / Math.max(1, models.length)) * 90,
+                { passive: true },
             );
-            let saveName = candidateName;
-            let suffix = 1;
-            while (usedNames.has(saveName)) {
-                const dot = candidateName.lastIndexOf('.');
-                if (dot > 0) {
-                    saveName = `${candidateName.slice(0, dot)}_${suffix}${candidateName.slice(dot)}`;
-                } else {
-                    saveName = `${candidateName}_${suffix}`;
-                }
-                suffix++;
-            }
-            usedNames.add(saveName);
+        }
+        const asset = {
+            name: candidateName || `asset-${i + 1}`,
+            type: model.modelType || inferAssetType(candidateName || sourcePath),
+            path: sourcePath,
+            visible: model.visible !== false,
+        };
 
-            const fileHandle = await folderHandle.getFileHandle(saveName, { create: true });
-            const writable = await fileHandle.createWritable();
-            await writable.write(sourceFile);
-            await writable.close();
-
-            const asset = {
-                name: saveName,
-                type: model.modelType || inferAssetType(saveName),
-                path: saveName,
-                visible: model.visible !== false,
+        if ((asset.type === 'onnx' || asset.type === 'glb' || asset.type === 'gltf') && modelHasTimelineAnimation(model)) {
+            asset.dynamic = true;
+            asset.animation = {
+                speed: Number(getModelAnimationSpeedValue(model)),
+                startTime: Number(getModelAnimationStartTime(model)),
+                endTime: Number(getModelAnimationEndTime(model)),
             };
-
-            if ((asset.type === 'onnx' || asset.type === 'glb' || asset.type === 'gltf') && modelHasTimelineAnimation(model)) {
-                asset.dynamic = true;
-                asset.animation = {
-                    speed: Number(getModelAnimationSpeedValue(model)),
-                    startTime: Number(getModelAnimationStartTime(model)),
-                    endTime: Number(getModelAnimationEndTime(model)),
-                };
-            }
-
-            const position = [model.position.x || 0, model.position.y || 0, model.position.z || 0];
-            const rotationEulerRad = [model.rotation.x || 0, model.rotation.y || 0, model.rotation.z || 0];
-            const scale = Number(model.scale || 1);
-            const scaleVec = [scale, scale, scale];
-            const hasTransform = (
-                position[0] !== 0 || position[1] !== 0 || position[2] !== 0 ||
-                rotationEulerRad[0] !== 0 || rotationEulerRad[1] !== 0 || rotationEulerRad[2] !== 0 ||
-                scale !== 1
-            );
-            if (hasTransform) {
-                asset.transform = { position, rotationEulerRad, scale: scaleVec };
-            }
-
-            assets.push(asset);
         }
 
-        const manifest = {
+        const position = [model.position.x || 0, model.position.y || 0, model.position.z || 0];
+        const rotationEulerRad = [model.rotation.x || 0, model.rotation.y || 0, model.rotation.z || 0];
+        const scale = Number(model.scale || 1);
+        const scaleVec = [scale, scale, scale];
+        const hasTransform = (
+            position[0] !== 0 || position[1] !== 0 || position[2] !== 0 ||
+            rotationEulerRad[0] !== 0 || rotationEulerRad[1] !== 0 || rotationEulerRad[2] !== 0 ||
+            scale !== 1
+        );
+        if (hasTransform) {
+            asset.transform = { position, rotationEulerRad, scale: scaleVec };
+        }
+
+        if (shouldMaterializeAsset) {
+            const assetBytes = await resolveModelAssetBytes(model, sourcePath);
+            if (assetBytes) {
+                assetInputs.push({
+                    sourcePath,
+                    fileName: candidateName || sourceFile?.name || candidateName,
+                    content: assetBytes,
+                });
+            } else {
+                skipped++;
+            }
+        } else if (!sourcePath) {
+            skipped++;
+        }
+
+        assets.push(asset);
+    }
+
+    return {
+        skipped,
+        assetInputs,
+        manifest: {
             version: 2,
             meta: {
                 app: 'WebGaussianJS',
@@ -5276,13 +7697,22 @@ async function saveScene() {
                 cameraSequenceVisible: Boolean(state.cameraSequenceVisible),
                 cameraDisplayScale: Number(state.cameraSequenceDisplayScale || CAMERA_DISPLAY_SCALE_DEFAULT),
                 cameraPreviewAspectId: state.cameraPreviewAspectId || '16:9',
+                cameraPreviewPreset: captureCameraPreviewWorkspacePreset(),
             },
             timeline: {
                 fps: Number(state.timelineFps || 24),
                 durationSec: Number(state.timelineDurationSec || TIMELINE_MIN_DURATION_SEC),
                 playbackSpeed: Number(state.timelinePlaybackSpeed || 1),
-                interpolationMode: normalizeCameraInterpolationMode(state.cameraInterpolationMode),
-                interpolationParam: Number(state.cameraInterpolationParam ?? 0.5),
+                interpolationMode: legacyInterpolation.mode,
+                interpolationParam: Number(legacyInterpolation.param ?? 0.5),
+                positionInterpolationMode: resolveCameraPositionInterpolationModeFromTension(state.cameraCatmullTension),
+                rotationInterpolationMode: resolveCameraRotationInterpolationModeFromStrength(state.cameraRotationStrength),
+                timingInterpolationMode: resolveCameraTimingInterpolationModeFromStrength(state.cameraEaseStrength),
+                positionInterpolationStrength: Number(state.cameraCatmullTension ?? 1),
+                rotationInterpolationStrength: Number(state.cameraRotationStrength ?? 0),
+                timingInterpolationStrength: Number(state.cameraEaseStrength ?? 0),
+                catmullTension: Number(state.cameraCatmullTension ?? 1),
+                easeStrength: Number(state.cameraEaseStrength ?? 0),
                 selectedFrame: Number(state.selectedFrame || 0),
                 currentTime: Number(state.currentTime || 0),
                 isLooping: Boolean(state.isLooping),
@@ -5301,30 +7731,531 @@ async function saveScene() {
                             z: Number(keyframe.camera?.rotation?.z || 0),
                             w: Number(keyframe.camera?.rotation?.w || 1),
                         },
-                        fovDegrees: Number(keyframe.camera?.fovDegrees || 45),
                     },
+                })),
+                fovKeyframes: (Array.isArray(state.cameraFovKeyframes) ? state.cameraFovKeyframes : []).map((keyframe) => ({
+                    frame: Number(keyframe.frame || 0),
+                    time: Number(keyframe.time || 0),
+                    fovDegrees: Number(keyframe.fovDegrees || getFallbackTimelineCameraFov()),
                 })),
             },
             assets,
+        },
+    };
+}
+
+function applyWorkspaceAssetWritesToLoadedModels(assetWrites = []) {
+    if (!app || !Array.isArray(assetWrites) || assetWrites.length === 0) return;
+    const models = app.getModels?.() || [];
+    assetWrites.forEach((assetWrite) => {
+        if (!assetWrite?.sourcePath || !assetWrite?.targetPath) return;
+        models.forEach((model) => {
+            if (String(model?.sourcePath || '') !== String(assetWrite.sourcePath)) return;
+            model.sourcePath = assetWrite.targetPath;
+        });
+    });
+}
+
+async function computeAssetContentHashHex(content) {
+    const bytes = content instanceof ArrayBuffer
+        ? new Uint8Array(content)
+        : (content instanceof Uint8Array ? content : new Uint8Array(content || []));
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function buildServerAssetRelativePath(hashHex, fileName) {
+    const extension = String(extractFileName(fileName || '') || '')
+        .split('.')
+        .pop()
+        ?.trim()
+        ?.toLowerCase();
+    return extension && extension !== String(fileName || '').trim().toLowerCase()
+        ? `assets/${hashHex}.${extension}`
+        : `assets/${hashHex}.bin`;
+}
+
+async function uploadServerProjectAssets({ user, projectId, assetInputs = [], existingAssetPaths = new Set() } = {}) {
+    if (!user || !projectId || !Array.isArray(assetInputs) || assetInputs.length === 0) {
+        return [];
+    }
+    const uploaded = [];
+    for (const asset of assetInputs) {
+        const fileName = String(asset?.fileName || asset?.sourcePath || 'asset.bin');
+        const content = asset?.content instanceof ArrayBuffer
+            ? asset.content
+            : (asset?.content instanceof Uint8Array ? asset.content : new Uint8Array(asset?.content || []));
+        const hashHex = await computeAssetContentHashHex(content);
+        const relativePath = buildServerAssetRelativePath(hashHex, fileName);
+        if (existingAssetPaths instanceof Set && existingAssetPaths.has(relativePath)) {
+            console.debug('[ProjectSync] uploadServerProjectAssets:file:skip-known', {
+                user,
+                projectId,
+                sourcePath: asset?.sourcePath || '',
+                targetPath: relativePath,
+                bytes: content.byteLength,
+            });
+            uploaded.push({
+                sourcePath: asset.sourcePath,
+                targetPath: relativePath,
+                hash: hashHex,
+                skipped: true,
+            });
+            continue;
+        }
+        console.debug('[ProjectSync] uploadServerProjectAssets:file:start', {
+            user,
+            projectId,
+            sourcePath: asset?.sourcePath || '',
+            targetPath: relativePath,
+            bytes: content.byteLength,
+        });
+        await projectApi.writeAsset({
+            user,
+            projectId,
+            relativePath,
+            content,
+        });
+        console.debug('[ProjectSync] uploadServerProjectAssets:file:complete', {
+            user,
+            projectId,
+            sourcePath: asset?.sourcePath || '',
+            targetPath: relativePath,
+            bytes: content.byteLength,
+        });
+        uploaded.push({
+            sourcePath: asset.sourcePath,
+            targetPath: relativePath,
+            hash: hashHex,
+            skipped: false,
+        });
+    }
+    return uploaded;
+}
+
+async function uploadServerAgentHistoryAssets({ user, projectId, assetPayloads = [], existingAssetPaths = new Set() } = {}) {
+    if (!user || !projectId || !Array.isArray(assetPayloads) || assetPayloads.length === 0) {
+        return [];
+    }
+    const uploaded = [];
+    for (const asset of assetPayloads) {
+        const relativePath = String(asset?.path || '').trim();
+        const content = asset?.content instanceof Uint8Array
+            ? asset.content
+            : (asset?.content instanceof ArrayBuffer ? new Uint8Array(asset.content) : null);
+        if (!relativePath || !content || content.byteLength <= 0) {
+            continue;
+        }
+        if (existingAssetPaths instanceof Set && existingAssetPaths.has(relativePath)) {
+            console.debug('[ProjectSync] uploadServerAgentHistoryAssets:file:skip-known', {
+                user,
+                projectId,
+                targetPath: relativePath,
+                bytes: content.byteLength,
+            });
+            uploaded.push({
+                path: relativePath,
+                bytes: content.byteLength,
+                skipped: true,
+            });
+            continue;
+        }
+        console.debug('[ProjectSync] uploadServerAgentHistoryAssets:file:start', {
+            user,
+            projectId,
+            targetPath: relativePath,
+            bytes: content.byteLength,
+        });
+        const result = await projectApi.writeAsset({
+            user,
+            projectId,
+            relativePath,
+            content,
+        });
+        console.debug('[ProjectSync] uploadServerAgentHistoryAssets:file:complete', {
+            user,
+            projectId,
+            targetPath: result?.path || relativePath,
+            bytes: Number(result?.bytes || content.byteLength),
+            skipped: Boolean(result?.skipped),
+        });
+        uploaded.push({
+            path: result?.path || relativePath,
+            bytes: Number(result?.bytes || content.byteLength),
+            skipped: Boolean(result?.skipped),
+        });
+    }
+    return uploaded;
+}
+
+function buildServerProjectSceneSnapshot(manifest, assetWrites = []) {
+    if (!manifest || !Array.isArray(manifest.assets) || !Array.isArray(assetWrites) || assetWrites.length === 0) {
+        return manifest;
+    }
+    const nextManifest = JSON.parse(JSON.stringify(manifest));
+    nextManifest.assets = nextManifest.assets.map((asset) => {
+        const matched = assetWrites.find((item) => String(item.sourcePath || '') === String(asset.path || ''));
+        if (!matched?.targetPath) {
+            return asset;
+        }
+        return {
+            ...asset,
+            path: matched.targetPath,
         };
+    });
+    return nextManifest;
+}
 
-        showLoading(true, t('loading.writingSceneJson'), 95);
-        const sceneHandle = await folderHandle.getFileHandle('scene.json', { create: true });
-        const sceneWritable = await sceneHandle.createWritable();
-        await sceneWritable.write(JSON.stringify(manifest, null, 2));
-        await sceneWritable.close();
+function restoreServerProjectModelSourcePaths(sceneAssets = []) {
+    const models = app.getModels?.() || [];
+    if (!Array.isArray(sceneAssets) || sceneAssets.length === 0 || models.length === 0) {
+        return;
+    }
 
+    const unusedAssets = [...sceneAssets];
+    models.forEach((model) => {
+        const currentSourcePath = String(model?.sourcePath || '');
+        let assetIndex = unusedAssets.findIndex((asset) => String(asset?.path || '') === currentSourcePath);
+        if (assetIndex < 0) {
+            assetIndex = unusedAssets.findIndex((asset) => String(asset?.name || '') === String(model?.name || ''));
+        }
+        if (assetIndex < 0) {
+            return;
+        }
+        const matchedAsset = unusedAssets.splice(assetIndex, 1)[0];
+        if (typeof matchedAsset?.path === 'string' && /^assets\//i.test(matchedAsset.path)) {
+            model.sourcePath = matchedAsset.path;
+        }
+    });
+}
+
+function buildServerSceneAssetUrls(rawScene, user, projectId) {
+    if (!rawScene || !Array.isArray(rawScene.assets)) {
+        return rawScene;
+    }
+    const scene = JSON.parse(JSON.stringify(rawScene));
+    scene.assets = scene.assets.map((asset) => {
+        const relativePath = String(asset?.path || '');
+        if (!/^assets\//i.test(relativePath)) {
+            return asset;
+        }
+        return {
+            ...asset,
+            path: projectApi.getAssetUrl(user, projectId, relativePath),
+            extras: {
+                ...(asset?.extras || {}),
+                visionaryRelativePath: relativePath,
+            },
+        };
+    });
+    return scene;
+}
+
+async function saveWorkspaceToCurrentWorkspace(options = {}) {
+    const { requestWorkspaceIfNeeded = false, silent = false, includeAssetPayloads = true } = options;
+    if (!app) return false;
+
+    if (workspaceSaveInFlight) {
+        workspaceSaveQueued = true;
+        return workspaceSaveInFlight;
+    }
+
+    if (!sceneFs.isWorkspaceWritable()) {
+        if (!requestWorkspaceIfNeeded) {
+            return false;
+        }
+        await ensureWritableWorkspaceSelected();
+    }
+
+    clearWorkspaceAutosaveTimer();
+    syncWorkspaceStateFromSceneFS({
+        saving: true,
+        error: null,
+    });
+
+    workspaceSaveInFlight = (async () => {
+        try {
+            const forceFullAssetMigration = Boolean(state.forceFullWorkspaceAssetMigration);
+            console.debug('[WorkspaceSave] saveWorkspaceToCurrentWorkspace:start', {
+                includeAssetPayloads,
+                forceFullAssetMigration,
+                silent,
+            });
+            const { manifest, assetInputs, skipped } = await buildSceneWorkspaceSnapshot({
+                includeAssetPayloads,
+                allowWorkspaceMaterializedAssetReuse: !forceFullAssetMigration,
+            });
+            const saveResult = await sceneFs.saveWorkspaceSnapshot(manifest, { assets: assetInputs });
+            await persistAgentConversationsNow();
+            applyWorkspaceAssetWritesToLoadedModels(saveResult?.assetWrites || []);
+            state.forceFullWorkspaceAssetMigration = false;
+            showLoading(false);
+            const latestWorkspaceInfo = syncWorkspaceStateFromSceneFS({
+                name: sceneFs.getWorkspaceInfo().name,
+                writable: sceneFs.getWorkspaceInfo().writable,
+                mode: 'local',
+                dirty: false,
+                saving: false,
+                lastSavedAt: Date.now(),
+                error: null,
+                syncStatus: 'clean',
+            });
+            if (!silent) {
+                showInfo(t('messages.sceneSavedToWorkspace', {
+                    name: latestWorkspaceInfo.name || 'workspace',
+                    count: manifest.assets.length,
+                    skipped: skipped ? t('messages.sceneSavedSkippedAssets', { count: skipped }) : '',
+                }));
+            }
+            console.debug('[WorkspaceSave] saveWorkspaceToCurrentWorkspace:complete', {
+                assetCount: manifest.assets.length,
+                stagedAssetCount: assetInputs.length,
+                skippedModels: skipped || 0,
+            });
+            return true;
+        } catch (error) {
+            showLoading(false);
+            console.debug('[WorkspaceSave] saveWorkspaceToCurrentWorkspace:error', {
+                error: error?.message || String(error),
+            });
+            syncWorkspaceStateFromSceneFS({
+                mode: 'local',
+                dirty: true,
+                saving: false,
+                error: error?.message || String(error),
+                syncStatus: state.workspace?.writable ? 'dirty' : 'error',
+            });
+            if (!silent || !isWorkspaceSelectionCancelledError(error)) {
+                throw error;
+            }
+            return false;
+        } finally {
+            workspaceSaveInFlight = null;
+            if (workspaceSaveQueued) {
+                workspaceSaveQueued = false;
+                scheduleWorkspaceAutosave();
+            }
+        }
+    })();
+
+    return workspaceSaveInFlight;
+}
+
+async function saveServerProjectToCurrentProject(options = {}) {
+    const { silent = false } = options;
+    if (!isServerProjectSessionActive()) {
+        return false;
+    }
+
+    if (serverProjectAutosaveInFlight) {
+        serverProjectAutosaveQueued = true;
+        return serverProjectAutosaveInFlight;
+    }
+
+    clearWorkspaceAutosaveTimer();
+    state.workspace = {
+        ...state.workspace,
+        saving: true,
+        agentSaving: true,
+        error: null,
+        agentError: null,
+        syncStatus: 'saving',
+    };
+    updateWorkspaceStatusIndicator();
+
+    serverProjectAutosaveInFlight = (async () => {
+        try {
+            const forceFullAssetMigration = Boolean(state.forceFullServerAssetMigration);
+            console.debug('[ProjectSync] saveServerProjectToCurrentProject:start', {
+                forceFullAssetMigration,
+                user: state.projectSession.user,
+                projectId: state.projectSession.activeProjectId,
+                silent,
+            });
+            const { manifest, assetInputs } = await buildSceneWorkspaceSnapshot({
+                includeAssetPayloads: true,
+                showProgress: false,
+                allowWorkspaceMaterializedAssetReuse: false,
+                allowServerMaterializedAssetReuse: !forceFullAssetMigration,
+            });
+            const agentExport = await buildPersistableAgentConversationExport({
+                includeAssets: true,
+                includeAssetPayloads: true,
+            });
+            const assetWrites = await uploadServerProjectAssets({
+                user: state.projectSession.user,
+                projectId: state.projectSession.activeProjectId,
+                assetInputs,
+                existingAssetPaths: state.projectSession.activeProjectSceneAssetPaths,
+            });
+            await uploadServerAgentHistoryAssets({
+                user: state.projectSession.user,
+                projectId: state.projectSession.activeProjectId,
+                assetPayloads: agentExport.assetPayloads,
+                existingAssetPaths: state.projectSession.activeProjectAgentAssetPaths,
+            });
+            const nextScene = buildServerProjectSceneSnapshot(manifest, assetWrites);
+            await projectApi.saveScene({
+                user: state.projectSession.user,
+                projectId: state.projectSession.activeProjectId,
+                scene: nextScene,
+            });
+            console.debug('[ProjectSync] saveServerProjectToCurrentProject:file:complete', {
+                file: 'scene.json',
+                user: state.projectSession.user,
+                projectId: state.projectSession.activeProjectId,
+                assetCount: manifest.assets.length,
+            });
+            await projectApi.saveAgentHistory({
+                user: state.projectSession.user,
+                projectId: state.projectSession.activeProjectId,
+                agentHistory: agentExport.snapshot,
+            });
+            updateActiveServerProjectAssetCaches({
+                scene: nextScene,
+                agentHistory: agentExport.snapshot,
+            });
+            console.debug('[ProjectSync] saveServerProjectToCurrentProject:file:complete', {
+                file: 'agent_history.json',
+                user: state.projectSession.user,
+                projectId: state.projectSession.activeProjectId,
+            });
+            applyWorkspaceAssetWritesToLoadedModels(assetWrites);
+            state.forceFullServerAssetMigration = false;
+            state.workspace = {
+                ...state.workspace,
+                dirty: false,
+                saving: false,
+                agentDirty: false,
+                agentSaving: false,
+                error: null,
+                agentError: null,
+                lastSavedAt: Date.now(),
+                agentLastSavedAt: Date.now(),
+                syncStatus: 'clean',
+            };
+            updateWorkspaceStatusIndicator();
+            if (!silent) {
+                showInfo(t('projectSession.projectSynced', {
+                    name: state.projectSession.activeProjectName || state.projectSession.activeProjectId,
+                }));
+            }
+            console.debug('[ProjectSync] saveServerProjectToCurrentProject:complete', {
+                user: state.projectSession.user,
+                projectId: state.projectSession.activeProjectId,
+                uploadedAssetCount: assetWrites.length,
+                uploadedAgentAssetCount: Array.isArray(agentExport.assetPayloads) ? agentExport.assetPayloads.length : 0,
+            });
+            return true;
+        } catch (error) {
+            console.debug('[ProjectSync] saveServerProjectToCurrentProject:error', {
+                user: state.projectSession.user,
+                projectId: state.projectSession.activeProjectId,
+                error: error?.message || String(error),
+            });
+            state.workspace = {
+                ...state.workspace,
+                dirty: true,
+                saving: false,
+                agentDirty: true,
+                agentSaving: false,
+                error: error?.message || String(error),
+                agentError: error?.message || String(error),
+                syncStatus: 'error',
+            };
+            updateWorkspaceStatusIndicator();
+            if (!silent) {
+                showError(error?.message || String(error));
+            }
+            return false;
+        } finally {
+            serverProjectAutosaveInFlight = null;
+            if (serverProjectAutosaveQueued) {
+                serverProjectAutosaveQueued = false;
+                scheduleWorkspaceAutosave();
+            }
+        }
+    })();
+
+    return serverProjectAutosaveInFlight;
+}
+
+/**
+ * 导出项目（一次性写入本地文件夹，不绑定当前同步目录）
+ */
+async function saveScene() {
+    if (!app) {
+        showError(t('messages.editorNotInitializedExportProject'));
+        return;
+    }
+
+    try {
+        const exportRoot = await window.showDirectoryPicker({
+            mode: 'readwrite',
+        });
+        const exportSceneFs = new SceneFS();
+        exportSceneFs.attachWorkspace(exportRoot, 'readwrite');
+        showLoading(true, t('projectSession.exportingProject'), 30);
+        console.debug('[ProjectExport] saveScene:start', {
+            exportRoot: exportRoot.name || '',
+        });
+        const { manifest, assetInputs } = await buildSceneWorkspaceSnapshot({
+            includeAssetPayloads: true,
+            showProgress: true,
+            allowWorkspaceMaterializedAssetReuse: false,
+        });
+        const agentExport = await buildPersistableAgentConversationExport({
+            includeAssets: true,
+            includeAssetPayloads: true,
+        });
+        await exportSceneFs.saveWorkspaceSnapshot(manifest, { assets: assetInputs });
+        for (const asset of agentExport.assetPayloads || []) {
+            console.debug('[ProjectExport] saveScene:file:start', {
+                file: asset.path,
+                bytes: asset.content?.byteLength ?? 0,
+            });
+            await exportSceneFs.writeBinaryToRoot(asset.path, asset.content);
+            console.debug('[ProjectExport] saveScene:file:complete', {
+                file: asset.path,
+                bytes: asset.content?.byteLength ?? 0,
+            });
+        }
+        console.debug('[ProjectExport] saveScene:file:start', {
+            file: 'agent_history.json',
+        });
+        await exportSceneFs.writeJsonToRoot('agent_history.json', agentExport.snapshot);
+        console.debug('[ProjectExport] saveScene:file:complete', {
+            file: 'agent_history.json',
+        });
         showLoading(false);
-        showInfo(`场景已保存到文件夹 "${folderHandle.name}"：${assets.length} 个资源${skipped ? `，跳过 ${skipped} 个无源模型` : ''}`);
+        showInfo(t('projectSession.projectExported', {
+            name: exportRoot.name || t('projectSession.folderFallback'),
+        }));
+        console.debug('[ProjectExport] saveScene:complete', {
+            exportRoot: exportRoot.name || '',
+            assetCount: manifest.assets.length,
+            agentAssetCount: Array.isArray(agentExport.assetPayloads) ? agentExport.assetPayloads.length : 0,
+        });
     } catch (error) {
         showLoading(false);
-        if (error?.name === 'AbortError') {
-            showInfo('已取消保存场景');
+        console.debug('[ProjectExport] saveScene:error', {
+            error: error?.message || String(error),
+        });
+        if (isWorkspaceSelectionCancelledError(error)) {
+            showInfo(t('projectSession.exportCancelled'));
             return;
         }
         console.error(`[Editor ${state.VERSION}] saveScene failed:`, error);
-        showError(`保存场景失败: ${error?.message || String(error)}`);
+        showError(`${t('projectSession.exportFailed')}: ${error?.message || String(error)}`);
     }
+}
+
+async function openSceneWorkspace() {
+    if (!app) {
+        showError(t('messages.editorNotInitializedLoadScene'));
+        return null;
+    }
+    return pickLocalSceneFolder({ silentCancel: true });
 }
 
 /**
@@ -5332,17 +8263,15 @@ async function saveScene() {
  */
 async function loadScene() {
     if (!app) {
-        showError('编辑器尚未初始化，无法加载场景');
-        return;
-    }
-
-    if (typeof window.showDirectoryPicker !== 'function') {
-        showError('当前浏览器不支持文件夹读取（File System Access API）');
+        showError(t('messages.editorNotInitializedLoadScene'));
         return;
     }
 
     try {
-        const folderHandle = await window.showDirectoryPicker({ mode: 'read' });
+        const folderHandle = await openSceneWorkspace();
+        if (!folderHandle) {
+            return;
+        }
         const sceneHandle = await folderHandle.getFileHandle('scene.json');
         const sceneFile = await sceneHandle.getFile();
         const raw = JSON.parse(await sceneFile.text());
@@ -5353,11 +8282,11 @@ async function loadScene() {
         const demoSceneActive = isDemoSceneFolder(folderHandle?.name);
 
         if (!Array.isArray(assets) || assets.length === 0) {
-            throw new Error('scene.json 中没有可加载的 assets/scenes 模型条目');
+            throw new Error(t('messages.emptySceneAssets'));
         }
 
         if (app.getModels().length > 0) {
-            const ok = confirm('加载场景会先清空当前模型，是否继续？');
+            const ok = confirm(t('messages.loadSceneClearConfirm'));
             if (!ok) return;
         }
 
@@ -5365,6 +8294,7 @@ async function loadScene() {
         resetDemoSceneState();
         stopTimelinePlayback(false);
         state.keyframes = [];
+        state.cameraFovKeyframes = [];
         state.currentKeyframeIndex = -1;
         state.selectedFrame = 0;
         state.selectedCameraSequenceFrame = null;
@@ -5372,18 +8302,19 @@ async function loadScene() {
         updateTimelineUI();
         syncCameraSequenceVisualization();
         closeEditor();
+        applyCameraPreviewWorkspacePreset(null, false);
 
         const envBgHex = toHexFromBgColor(raw?.env?.bgColor);
         if (raw?.env?.skyPresetId && raw.env.skyPresetId !== 'custom') {
             applySkyPreset(raw.env.skyPresetId);
         } else if (envBgHex) {
-            applySceneBackgroundHex(envBgHex, 'custom');
+            applySceneBackgroundHex(envBgHex, 'custom', false);
         }
         if (Number.isFinite(raw?.env?.depthRangeScale)) {
             applySceneDepthRangeScale(raw.env.depthRangeScale, true);
         }
         if (Number.isFinite(raw?.env?.cameraFov)) {
-            applySceneCameraFov(raw.env.cameraFov, true);
+            applySceneCameraFov(raw.env.cameraFov, true, false);
         }
         if (raw?.env?.cameraPose) {
             app.setCameraPose?.(raw.env.cameraPose);
@@ -5405,6 +8336,9 @@ async function loadScene() {
         if (typeof raw?.env?.cameraPreviewAspectId === 'string') {
             applyCameraPreviewAspect(raw.env.cameraPreviewAspectId, true);
         }
+        if (raw?.env?.cameraPreviewPreset && typeof raw.env.cameraPreviewPreset === 'object') {
+            applyCameraPreviewWorkspacePreset(raw.env.cameraPreviewPreset, false);
+        }
 
         let loaded = 0;
         let failed = 0;
@@ -5421,18 +8355,18 @@ async function loadScene() {
                     file = await readFileByRelativePath(folderHandle, sourcePath);
                 } else if (isHttpUrl(sourcePath)) {
                     const response = await fetch(sourcePath);
-                    if (!response.ok) throw new Error(`URL 资源加载失败: ${response.status}`);
+                    if (!response.ok) throw new Error(t('messages.urlAssetLoadFailed', { status: response.status }));
                     const blob = await response.blob();
                     const fileName = sanitizeFileName(asset.name || extractFileName(sourcePath));
                     file = new File([blob], fileName, { type: blob.type || '' });
                 } else if (isHttpUrl(asset?.extras?.urlFallback)) {
                     const response = await fetch(asset.extras.urlFallback);
-                    if (!response.ok) throw new Error(`Fallback URL 资源加载失败: ${response.status}`);
+                    if (!response.ok) throw new Error(t('messages.fallbackUrlAssetLoadFailed', { status: response.status }));
                     const blob = await response.blob();
                     const fileName = sanitizeFileName(asset.name || extractFileName(asset.extras.urlFallback));
                     file = new File([blob], fileName, { type: blob.type || '' });
                 } else {
-                    throw new Error(`资产缺少可读取路径: ${asset?.name || `#${i + 1}`}`);
+                    throw new Error(t('messages.missingAssetPath', { name: asset?.name || `#${i + 1}` }));
                 }
 
                 const targetName = sanitizeFileName(asset.name || file.name || extractFileName(sourcePath));
@@ -5442,7 +8376,7 @@ async function loadScene() {
 
                 const loadedModel = await app.loadModel(fileForLoad, { sourcePath: sourcePath || targetName });
                 if (!loadedModel) {
-                    throw new Error(`加载模型失败: ${targetName}`);
+                    throw new Error(t('messages.loadModelFailed', { name: targetName }));
                 }
                 applyPreviewModeToAllModels(state.exportMode);
 
@@ -5495,13 +8429,38 @@ async function loadScene() {
             if (Number.isFinite(timeline.durationSec)) {
                 state.timelineDurationSec = Math.max(TIMELINE_MIN_DURATION_SEC, Number(timeline.durationSec));
             }
-            if (typeof timeline.interpolationMode === 'string') {
-                setCameraInterpolationMode(timeline.interpolationMode, true);
+            if (
+                timeline.positionInterpolationStrength !== undefined
+                || timeline.rotationInterpolationStrength !== undefined
+                || timeline.timingInterpolationStrength !== undefined
+                ||
+                timeline.positionInterpolationMode
+                || timeline.rotationInterpolationMode
+                || timeline.timingInterpolationMode
+                || timeline.catmullTension !== undefined
+                || timeline.easeStrength !== undefined
+            ) {
+                applyCameraInterpolationSettings({
+                    positionStrength: timeline.positionInterpolationStrength,
+                    rotationStrength: timeline.rotationInterpolationStrength,
+                    timingStrength: timeline.timingInterpolationStrength,
+                    positionMode: timeline.positionInterpolationMode,
+                    rotationMode: timeline.rotationInterpolationMode,
+                    timingMode: timeline.timingInterpolationMode,
+                    catmullTension: timeline.catmullTension,
+                    easeStrength: timeline.easeStrength,
+                }, { syncVisualization: false });
+            } else if (typeof timeline.interpolationMode === 'string') {
+                applyCameraInterpolationSettings(
+                    resolveCameraInterpolationStateFromLegacy(timeline.interpolationMode, timeline.interpolationParam),
+                    { syncVisualization: false }
+                );
             } else {
-                setCameraInterpolationMode(CAMERA_INTERPOLATION_MODE_LINEAR, true);
-            }
-            if (Number.isFinite(Number(timeline.interpolationParam))) {
-                setCameraInterpolationParam(Number(timeline.interpolationParam), true);
+                applyCameraInterpolationSettings({
+                    positionMode: CAMERA_POSITION_INTERPOLATION_LINEAR,
+                    rotationMode: CAMERA_ROTATION_INTERPOLATION_SLERP,
+                    timingMode: CAMERA_TIMING_INTERPOLATION_LINEAR,
+                }, { syncVisualization: false });
             }
             if (Number.isFinite(timeline.playbackSpeed)) {
                 state.timelinePlaybackSpeed = Number(timeline.playbackSpeed);
@@ -5544,24 +8503,58 @@ async function loadScene() {
                                     z: Number(camera.rotation.z) || 0,
                                     w: Number(camera.rotation.w) || 1,
                                 },
-                                fovDegrees: Number(camera.fovDegrees || state.sceneCameraFov || 45),
                             },
                         };
                     })
                     .filter(Boolean)
                     .sort((a, b) => a.frame - b.frame)
                 : [];
+            const loadedTimelineFovKeyframes = Array.isArray(timeline.fovKeyframes)
+                ? timeline.fovKeyframes
+                    .map((item) => {
+                        const time = Number(item?.time);
+                        const frameRaw = Number(item?.frame);
+                        const frame = Number.isFinite(frameRaw)
+                            ? Math.round(frameRaw)
+                            : timeToFrame(Number.isFinite(time) ? time : 0);
+                        const fovDegrees = clampSceneFov(item?.fovDegrees);
+                        if (fovDegrees === null) return null;
+                        return {
+                            frame,
+                            time: frameToTime(frame),
+                            fovDegrees,
+                        };
+                    })
+                    .filter(Boolean)
+                    .sort((a, b) => a.frame - b.frame)
+                : loadedTimelineKeyframes
+                    .map((item) => {
+                        const fovDegrees = clampSceneFov(item?.camera?.fovDegrees);
+                        if (fovDegrees === null) return null;
+                        return {
+                            frame: Number(item.frame) || 0,
+                            time: Number(item.time) || 0,
+                            fovDegrees,
+                        };
+                    })
+                    .filter(Boolean)
+                    .sort((a, b) => a.frame - b.frame);
 
             state.selectedCameraSequenceFrame = null;
             const selectedFrame = Number.isFinite(Number(timeline.selectedFrame))
                 ? Number(timeline.selectedFrame)
                 : timeToFrame(Number(timeline.currentTime) || 0);
             state.keyframes = demoSceneActive ? [] : loadedTimelineKeyframes;
+            state.cameraFovKeyframes = demoSceneActive ? [] : loadedTimelineFovKeyframes;
             setTimelineFrame(demoSceneActive ? 0 : selectedFrame, { applyPose: true, syncSlider: true });
             updateTimelineUI();
             syncCameraSequenceVisualization();
         } else {
-            setCameraInterpolationMode(CAMERA_INTERPOLATION_MODE_LINEAR, true);
+            applyCameraInterpolationSettings({
+                positionMode: CAMERA_POSITION_INTERPOLATION_LINEAR,
+                rotationMode: CAMERA_ROTATION_INTERPOLATION_SLERP,
+                timingMode: CAMERA_TIMING_INTERPOLATION_LINEAR,
+            }, { syncVisualization: false });
         }
 
         if (demoSceneActive) {
@@ -5572,31 +8565,361 @@ async function loadScene() {
             }));
         }
 
+        const agentHistory = await readFileByRelativePath(folderHandle, 'agent_history.json')
+            .then((file) => file.text())
+            .then((text) => JSON.parse(text))
+            .catch(() => null);
+        if (agentHistory) {
+            const hydratedAgentHistory = await hydrateAgentConversationLocalWorkspaceAssets(agentHistory, folderHandle);
+            hydrateAgentConversationSnapshot(hydratedAgentHistory);
+        } else {
+            resetAgentConversation();
+        }
+
         showLoading(false);
+        syncWorkspaceStateFromSceneFS({
+            mode: 'local',
+            dirty: false,
+            saving: false,
+            error: null,
+            syncStatus: 'clean',
+        });
+        if (!hasConfiguredWorkspaceTarget()) {
+            openWorkspaceTargetModal('load-scene-after-load');
+        }
         showInfo(
             demoSceneActive
-                ? `场景加载完成（${folderHandle.name} Demo）：成功 ${loaded}，失败 ${failed}`
-                : `场景加载完成（${folderHandle.name}）：成功 ${loaded}，失败 ${failed}`
+                ? t('messages.demoSceneLoaded', { name: folderHandle.name, loaded, failed })
+                : t('messages.sceneLoaded', { name: folderHandle.name, loaded, failed })
         );
     } catch (error) {
         showLoading(false);
-        if (error?.name === 'AbortError') {
-            showInfo('已取消加载场景');
+        syncWorkspaceStateFromSceneFS({
+            mode: 'local',
+            saving: false,
+            error: error?.message || String(error),
+            syncStatus: 'error',
+        });
+        console.error(`[Editor ${state.VERSION}] loadScene failed:`, error);
+        showError(t('messages.loadSceneFailed', { message: error?.message || String(error) }));
+    }
+}
+
+async function loadSceneFromSnapshot(raw, options = {}) {
+    if (!app) {
+        throw new Error(t('messages.editorNotInitialized'));
+    }
+
+    if (app.getModels().length > 0 && !options.skipConfirm) {
+        const ok = confirm(t('messages.openProjectReplaceConfirm'));
+        if (!ok) {
+            return false;
+        }
+    }
+
+    app.clearAllModels();
+    resetDemoSceneState();
+    stopTimelinePlayback(false);
+    state.keyframes = [];
+    state.cameraFovKeyframes = [];
+    state.currentKeyframeIndex = -1;
+    state.selectedFrame = 0;
+    state.selectedCameraSequenceFrame = null;
+    state.currentTime = 0;
+    updateTimelineUI();
+    syncCameraSequenceVisualization();
+    closeEditor();
+    applyCameraPreviewWorkspacePreset(null, false);
+    const loadResult = await sceneFs.loadScene(app, { sceneData: raw });
+    updateModelList();
+    updateTimelineUI();
+    syncCameraSequenceVisualization();
+    return {
+        loaded: true,
+        loadResult,
+    };
+}
+
+async function openServerProject(projectId) {
+    if (!state.projectSession?.authenticated || !state.projectSession.user) {
+        throw new Error(t('projectSession.loginRequired'));
+    }
+    showLoading(true, t('projectSession.loadingProject'), 30);
+    try {
+        const [project, rawScene, agentHistory] = await Promise.all([
+            projectApi.getProject(state.projectSession.user, projectId),
+            projectApi.loadScene(state.projectSession.user, projectId),
+            projectApi.loadAgentHistory(state.projectSession.user, projectId).catch(() => null),
+        ]);
+        const scene = buildServerSceneAssetUrls(rawScene, state.projectSession.user, projectId);
+        const loaded = await loadSceneFromSnapshot(scene);
+        if (!loaded) {
+            showLoading(false);
             return;
         }
-        console.error(`[Editor ${state.VERSION}] loadScene failed:`, error);
-        showError(`加载场景失败: ${error?.message || String(error)}`);
+        const hasPersistedAssets = Array.isArray(rawScene?.assets) && rawScene.assets.length > 0;
+        const totalAssetCount = Number(loaded?.loadResult?.totalAssetCount || 0);
+        const loadedAssetCount = Number(loaded?.loadResult?.loadedAssetCount || 0);
+        if (hasPersistedAssets && totalAssetCount > 0 && loadedAssetCount <= 0) {
+            throw new Error(t('projectSession.openProjectFailedEmpty'));
+        }
+        restoreServerProjectModelSourcePaths(Array.isArray(rawScene?.assets) ? rawScene.assets : []);
+        if (agentHistory) {
+            hydrateAgentConversationSnapshot(hydrateAgentConversationAssetUrls(
+                agentHistory,
+                (relativePath) => projectApi.getAssetUrl(state.projectSession.user, projectId, relativePath),
+            ));
+        }
+        updateActiveServerProjectAssetCaches({
+            scene: rawScene,
+            agentHistory,
+        });
+        state.projectSession.activeProjectId = project?.id || projectId;
+        state.projectSession.activeProjectName = project?.name || projectId;
+        markWorkspaceTargetMigrationRequired('server');
+        state.workspace = {
+            ...state.workspace,
+            name: state.projectSession.activeProjectName,
+            writable: true,
+            mode: 'server',
+            dirty: false,
+            saving: false,
+            error: null,
+            lastSavedAt: Date.now(),
+            syncStatus: 'clean',
+        };
+        closePostLoginProjectModal();
+        closeProjectBrowserModal();
+        syncProjectSessionButton();
+        updateWorkspaceStatusIndicator();
+        showLoading(false);
+        showInfo(t('projectSession.openedProject', {
+            name: state.projectSession.activeProjectName,
+        }));
+    } catch (error) {
+        showLoading(false);
+        showError(error?.message || String(error));
     }
+}
+
+async function createServerProjectFromCurrentScene(options = {}) {
+    if (!state.projectSession?.authenticated || !state.projectSession.user) {
+        showError(t('projectSession.loginRequired'));
+        return false;
+    }
+    const {
+        nameInput = dom.projectSessionNewProjectName,
+        closeModal = true,
+        reopenModalOnError = closeModal ? 'post-login' : 'project-browser-saveas',
+    } = options;
+    const errorElement = nameInput === dom.projectBrowserSaveAsName
+        ? dom.projectBrowserSaveAsNameError
+        : dom.projectSessionNewProjectNameError;
+    clearProjectNameConflictState(nameInput, errorElement);
+    const projectName = String(nameInput?.value || '').trim() || getProjectSessionDefaultProjectName();
+    if (reopenModalOnError === 'post-login') {
+        closePostLoginProjectModal();
+    }
+    showLoading(true, t('projectSession.savingProject'), 40, { passive: true });
+    try {
+        console.debug('[ProjectSession] createServerProjectFromCurrentScene:start', {
+            user: state.projectSession.user,
+            projectName,
+        });
+        const { manifest, assetInputs } = await buildSceneWorkspaceSnapshot({
+            includeAssetPayloads: true,
+            showProgress: false,
+            allowWorkspaceMaterializedAssetReuse: false,
+            allowServerMaterializedAssetReuse: true,
+        });
+        const agentExport = await buildPersistableAgentConversationExport({
+            includeAssets: true,
+            includeAssetPayloads: true,
+        });
+        const draftProject = await projectApi.createProject({
+            user: state.projectSession.user,
+            name: projectName,
+            scene: manifest,
+            agentHistory: agentExport.snapshot,
+        });
+        const assetWrites = await uploadServerProjectAssets({
+            user: state.projectSession.user,
+            projectId: draftProject?.id,
+            assetInputs,
+            existingAssetPaths: state.projectSession.activeProjectSceneAssetPaths,
+        });
+        await uploadServerAgentHistoryAssets({
+            user: state.projectSession.user,
+            projectId: draftProject?.id,
+            assetPayloads: agentExport.assetPayloads,
+            existingAssetPaths: state.projectSession.activeProjectAgentAssetPaths,
+        });
+        const scene = buildServerProjectSceneSnapshot(manifest, assetWrites);
+        const project = await projectApi.saveScene({
+            user: state.projectSession.user,
+            projectId: draftProject?.id,
+            scene,
+        });
+        console.debug('[ProjectSession] createServerProjectFromCurrentScene:file:complete', {
+            file: 'scene.json',
+            user: state.projectSession.user,
+            projectId: draftProject?.id,
+            assetCount: manifest.assets.length,
+        });
+        await projectApi.saveAgentHistory({
+            user: state.projectSession.user,
+            projectId: draftProject?.id,
+            agentHistory: agentExport.snapshot,
+        });
+        updateActiveServerProjectAssetCaches({
+            scene,
+            agentHistory: agentExport.snapshot,
+        });
+        console.debug('[ProjectSession] createServerProjectFromCurrentScene:file:complete', {
+            file: 'agent_history.json',
+            user: state.projectSession.user,
+            projectId: draftProject?.id,
+        });
+        state.projectSession.activeProjectId = project?.id || '';
+        state.projectSession.activeProjectName = project?.name || projectName;
+        applyWorkspaceAssetWritesToLoadedModels(assetWrites);
+        state.forceFullServerAssetMigration = false;
+        state.workspace = {
+            ...state.workspace,
+            name: state.projectSession.activeProjectName,
+            writable: true,
+            mode: 'server',
+            dirty: false,
+            saving: false,
+            error: null,
+            lastSavedAt: Date.now(),
+            syncStatus: 'clean',
+        };
+        setPendingWorkspaceTargetAction(null);
+        await refreshProjectSessionProjects();
+        if (closeModal) {
+            closePostLoginProjectModal();
+            closeProjectBrowserModal();
+        }
+        updateWorkspaceStatusIndicator();
+        showLoading(false);
+        showInfo(t('messages.projectSavedAsCurrent', { name: state.projectSession.activeProjectName }));
+        console.debug('[ProjectSession] createServerProjectFromCurrentScene:complete', {
+            user: state.projectSession.user,
+            projectId: state.projectSession.activeProjectId,
+            projectName: state.projectSession.activeProjectName,
+        });
+        return true;
+    } catch (error) {
+        showLoading(false);
+        console.debug('[ProjectSession] createServerProjectFromCurrentScene:error', {
+            user: state.projectSession.user,
+            projectName,
+            error: error?.message || String(error),
+        });
+        if (reopenModalOnError === 'post-login') {
+            openPostLoginProjectModal();
+            if (dom.projectSessionNewProjectName) {
+                dom.projectSessionNewProjectName.value = projectName;
+            }
+        } else if (reopenModalOnError === 'project-browser-saveas' && dom.projectBrowserSaveAsName) {
+            dom.projectBrowserSaveAsName.value = projectName;
+        }
+        const reopenedInput = reopenModalOnError === 'project-browser-saveas'
+            ? dom.projectBrowserSaveAsName
+            : dom.projectSessionNewProjectName;
+        const reopenedErrorElement = reopenModalOnError === 'project-browser-saveas'
+            ? dom.projectBrowserSaveAsNameError
+            : dom.projectSessionNewProjectNameError;
+        if (reopenedInput) {
+            reopenedInput.value = projectName;
+        }
+        if (isDuplicateProjectNameError(error)) {
+            setProjectNameConflictState(reopenedInput, reopenedErrorElement);
+            return false;
+        }
+        showError(error?.message || String(error));
+        return false;
+    }
+}
+
+async function deleteAdminProject(user, projectId) {
+    if (!user || !projectId) return;
+    const ok = confirm(t('messages.confirmDeleteProject', { user, projectId }));
+    if (!ok) return;
+
+    showLoading(true, t('messages.deletingProject'), 60);
+    try {
+        await projectApi.adminDeleteProject(user, projectId);
+        if (state.projectSession.activeProjectId === projectId && state.projectSession.activeProjectName) {
+            state.projectSession.activeProjectId = '';
+            state.projectSession.activeProjectName = '';
+            clearActiveServerProjectAssetCaches();
+        }
+        await refreshAdminSelectedUserProjects();
+        showLoading(false);
+        showInfo(t('messages.projectDeleted'));
+    } catch (error) {
+        showLoading(false);
+        showError(error?.message || String(error));
+    }
+}
+
+async function deleteAdminUser(user) {
+    if (!user) return;
+    const ok = confirm(t('messages.confirmDeleteUser', { user }));
+    if (!ok) return;
+
+    showLoading(true, t('messages.deletingUser'), 60);
+    try {
+        await projectApi.deleteUser(user);
+        if (state.projectSession.adminSelectedUser === user) {
+            state.projectSession.adminSelectedUser = '';
+            state.projectSession.projects = [];
+        }
+        await refreshAdminUsers();
+        showLoading(false);
+        showInfo(t('messages.userDeleted'));
+    } catch (error) {
+        showLoading(false);
+        showError(error?.message || String(error));
+    }
+}
+
+function logoutProjectSession() {
+    clearActiveServerProjectAssetCaches();
+    setPendingWorkspaceTargetAction(null);
+    state.forceFullWorkspaceAssetMigration = false;
+    state.forceFullServerAssetMigration = false;
+    state.projectSession = {
+        ...createProjectSessionState(),
+    };
+    localStorage.removeItem(PROJECT_SESSION_USER_STORAGE_KEY);
+    state.workspace = {
+        ...state.workspace,
+        mode: 'local',
+        name: state.workspace?.name || null,
+        writable: Boolean(sceneFs.isWorkspaceWritable?.()),
+        syncStatus: 'no-workspace',
+    };
+    closeLoginModal();
+    closePostLoginProjectModal();
+    closeProjectBrowserModal();
+    closeWorkspaceTargetModal();
+    closeAdminProjectModal();
+    syncProjectSessionButton();
+    updateWorkspaceStatusIndicator();
 }
 
 /**
  * 清空场景
  */
 function clearScene() {
-    if (confirm('确定要清空所有模型吗？')) {
+    if (confirm(t('messages.clearSceneConfirm'))) {
         stopTimelinePlayback(false);
         resetDemoSceneState();
         state.keyframes = [];
+        state.cameraFovKeyframes = [];
         state.currentKeyframeIndex = -1;
         state.selectedFrame = 0;
         state.selectedCameraSequenceFrame = null;
@@ -5605,7 +8928,8 @@ function clearScene() {
         syncCameraSequenceVisualization();
         app.clearAllModels();
         closeEditor();
-        showInfo('场景已清空');
+        markWorkspaceDirty('clear-scene');
+        showInfo(t('messages.sceneCleared'));
     }
 }
 
@@ -5622,7 +8946,7 @@ function syncCameraSequenceVisualization() {
     const keyframes = (Array.isArray(state.keyframes) ? state.keyframes : []).map((item) => ({
         frame: Math.round(Number(item.frame) || 0),
         time: Number(item.time) || 0,
-        camera: item.camera,
+        camera: applyTimelineFovToPose(item.camera, Number(item.time) || 0),
     }));
     const trajectory = buildSampledCameraTrajectory();
     const highlightedFrame = Number.isFinite(Number(state.selectedCameraSequenceFrame))
@@ -5635,10 +8959,14 @@ function updateKeyframeCameraPose(frame, pose) {
     const safeFrame = Math.round(Number(frame));
     if (!Number.isFinite(safeFrame) || !pose) return false;
     const index = state.keyframes.findIndex((keyframe) => Number(keyframe.frame) === safeFrame);
+    const normalizedPose = {
+        position: { ...pose.position },
+        rotation: { ...pose.rotation },
+    };
     const keyframe = {
         frame: safeFrame,
         time: frameToTime(safeFrame),
-        camera: pose,
+        camera: normalizedPose,
     };
     if (index < 0) {
         state.keyframes.push(keyframe);
@@ -5646,7 +8974,7 @@ function updateKeyframeCameraPose(frame, pose) {
     } else {
         state.keyframes[index] = {
             ...state.keyframes[index],
-            camera: pose,
+            camera: normalizedPose,
         };
     }
     state.currentKeyframeIndex = findKeyframeIndexByFrame(state.selectedFrame);
@@ -5656,81 +8984,248 @@ function updateKeyframeCameraPose(frame, pose) {
     return true;
 }
 
-function normalizeCameraInterpolationMode(mode) {
-    if (mode === CAMERA_INTERPOLATION_MODE_SQUAD) return CAMERA_INTERPOLATION_MODE_SQUAD;
-    if (mode === CAMERA_INTERPOLATION_MODE_CATMULL) return CAMERA_INTERPOLATION_MODE_CATMULL;
-    if (mode === CAMERA_INTERPOLATION_MODE_EASE) return CAMERA_INTERPOLATION_MODE_EASE;
-    return CAMERA_INTERPOLATION_MODE_LINEAR;
+function normalizeLegacyCameraInterpolationMode(mode) {
+    if (mode === LEGACY_CAMERA_INTERPOLATION_MODE_SQUAD) return LEGACY_CAMERA_INTERPOLATION_MODE_SQUAD;
+    if (mode === LEGACY_CAMERA_INTERPOLATION_MODE_CATMULL) return LEGACY_CAMERA_INTERPOLATION_MODE_CATMULL;
+    if (mode === LEGACY_CAMERA_INTERPOLATION_MODE_EASE) return LEGACY_CAMERA_INTERPOLATION_MODE_EASE;
+    return LEGACY_CAMERA_INTERPOLATION_MODE_LINEAR;
 }
 
-function getCameraInterpolationConfig(mode = state.cameraInterpolationMode) {
-    return CAMERA_INTERPOLATION_CONFIGS[normalizeCameraInterpolationMode(mode)] || CAMERA_INTERPOLATION_CONFIGS[CAMERA_INTERPOLATION_MODE_LINEAR];
+function normalizeCameraPositionInterpolationMode(mode) {
+    return mode === CAMERA_POSITION_INTERPOLATION_CATMULL
+        ? CAMERA_POSITION_INTERPOLATION_CATMULL
+        : CAMERA_POSITION_INTERPOLATION_LINEAR;
 }
 
-function clampCameraInterpolationParam(value, mode = state.cameraInterpolationMode) {
-    const config = getCameraInterpolationConfig(mode);
+function normalizeCameraRotationInterpolationMode(mode) {
+    return mode === CAMERA_ROTATION_INTERPOLATION_SQUAD
+        ? CAMERA_ROTATION_INTERPOLATION_SQUAD
+        : CAMERA_ROTATION_INTERPOLATION_SLERP;
+}
+
+function normalizeCameraTimingInterpolationMode(mode) {
+    return mode === CAMERA_TIMING_INTERPOLATION_EASE
+        ? CAMERA_TIMING_INTERPOLATION_EASE
+        : CAMERA_TIMING_INTERPOLATION_LINEAR;
+}
+
+function clampCameraCatmullTension(value) {
+    const config = CAMERA_POSITION_INTERPOLATION_CONFIGS[CAMERA_POSITION_INTERPOLATION_CATMULL];
+    const fallback = Number(config.defaultParam ?? 1);
     const n = Number(value);
-    const fallback = Number(config.defaultParam ?? 0.5);
     const raw = Number.isFinite(n) ? n : fallback;
     return Math.max(config.min ?? 0, Math.min(config.max ?? 1, raw));
 }
 
-function syncCameraInterpolationModeControl() {
-    if (dom.timelineCameraInterpolation) {
-        dom.timelineCameraInterpolation.value = normalizeCameraInterpolationMode(state.cameraInterpolationMode);
+function clampCameraRotationStrength(value) {
+    const config = CAMERA_ROTATION_INTERPOLATION_STRENGTH_CONFIG;
+    const fallback = Number(config.defaultParam ?? 0);
+    const n = Number(value);
+    const raw = Number.isFinite(n) ? n : fallback;
+    return Math.max(config.min ?? 0, Math.min(config.max ?? 1, raw));
+}
+
+function clampCameraEaseStrength(value) {
+    const config = CAMERA_TIMING_INTERPOLATION_CONFIGS[CAMERA_TIMING_INTERPOLATION_EASE];
+    const fallback = Number(config.defaultParam ?? 0);
+    const n = Number(value);
+    const raw = Number.isFinite(n) ? n : fallback;
+    return Math.max(config.min ?? 0, Math.min(config.max ?? 1, raw));
+}
+
+function resolveCameraPositionInterpolationModeFromTension(value = state.cameraCatmullTension) {
+    return clampCameraCatmullTension(value) >= 1
+        ? CAMERA_POSITION_INTERPOLATION_LINEAR
+        : CAMERA_POSITION_INTERPOLATION_CATMULL;
+}
+
+function resolveCameraRotationInterpolationModeFromStrength(value = state.cameraRotationStrength) {
+    return clampCameraRotationStrength(value) > 0
+        ? CAMERA_ROTATION_INTERPOLATION_SQUAD
+        : CAMERA_ROTATION_INTERPOLATION_SLERP;
+}
+
+function resolveCameraTimingInterpolationModeFromStrength(value = state.cameraEaseStrength) {
+    return Math.abs(clampCameraEaseStrength(value)) > 1e-6
+        ? CAMERA_TIMING_INTERPOLATION_EASE
+        : CAMERA_TIMING_INTERPOLATION_LINEAR;
+}
+
+function resolveCameraInterpolationStateFromLegacy(mode, param = 0.5) {
+    const normalized = normalizeLegacyCameraInterpolationMode(mode);
+    const settings = {
+        positionStrength: 1,
+        rotationStrength: 0,
+        timingStrength: 0,
+    };
+    if (normalized === LEGACY_CAMERA_INTERPOLATION_MODE_CATMULL) {
+        settings.positionStrength = clampCameraCatmullTension(param);
+    } else if (normalized === LEGACY_CAMERA_INTERPOLATION_MODE_SQUAD) {
+        settings.rotationStrength = 1;
+    } else if (normalized === LEGACY_CAMERA_INTERPOLATION_MODE_EASE) {
+        settings.timingStrength = clampCameraEaseStrength(param);
     }
-    const config = getCameraInterpolationConfig();
-    const param = clampCameraInterpolationParam(state.cameraInterpolationParam, state.cameraInterpolationMode);
-    state.cameraInterpolationParam = param;
-    dom.timelineInterpolationParamControl?.classList.toggle('hidden', !config.tunable);
-    if (dom.timelineInterpolationParamLabel) {
-        dom.timelineInterpolationParamLabel.textContent = config.paramLabel || '参数';
+    return settings;
+}
+
+function buildLegacyCameraInterpolationSnapshot() {
+    const positionMode = resolveCameraPositionInterpolationModeFromTension(state.cameraCatmullTension);
+    const rotationMode = resolveCameraRotationInterpolationModeFromStrength(state.cameraRotationStrength);
+    const timingMode = resolveCameraTimingInterpolationModeFromStrength(state.cameraEaseStrength);
+    if (
+        positionMode === CAMERA_POSITION_INTERPOLATION_CATMULL
+        && rotationMode === CAMERA_ROTATION_INTERPOLATION_SLERP
+        && timingMode === CAMERA_TIMING_INTERPOLATION_LINEAR
+    ) {
+        return {
+            mode: LEGACY_CAMERA_INTERPOLATION_MODE_CATMULL,
+            param: Number(state.cameraCatmullTension),
+        };
     }
-    if (dom.timelineInterpolationParam) {
-        dom.timelineInterpolationParam.min = String(config.min ?? 0);
-        dom.timelineInterpolationParam.max = String(config.max ?? 1);
-        dom.timelineInterpolationParam.step = String(config.step ?? 0.01);
-        dom.timelineInterpolationParam.value = String(param);
+    if (
+        positionMode === CAMERA_POSITION_INTERPOLATION_LINEAR
+        && rotationMode === CAMERA_ROTATION_INTERPOLATION_SQUAD
+        && timingMode === CAMERA_TIMING_INTERPOLATION_LINEAR
+    ) {
+        return {
+            mode: LEGACY_CAMERA_INTERPOLATION_MODE_SQUAD,
+            param: 0.5,
+        };
     }
-    if (dom.timelineInterpolationParamValue) {
-        const formatter = typeof config.format === 'function' ? config.format : (value) => Number(value).toFixed(2);
-        dom.timelineInterpolationParamValue.textContent = formatter(param);
+    if (
+        positionMode === CAMERA_POSITION_INTERPOLATION_LINEAR
+        && rotationMode === CAMERA_ROTATION_INTERPOLATION_SLERP
+        && timingMode === CAMERA_TIMING_INTERPOLATION_EASE
+    ) {
+        return {
+            mode: LEGACY_CAMERA_INTERPOLATION_MODE_EASE,
+            param: Number(state.cameraEaseStrength),
+        };
+    }
+    return {
+        mode: LEGACY_CAMERA_INTERPOLATION_MODE_LINEAR,
+        param: 0.5,
+    };
+}
+
+function persistCameraInterpolationSettings() {
+    localStorage.setItem(CAMERA_POSITION_INTERPOLATION_STORAGE_KEY, resolveCameraPositionInterpolationModeFromTension(state.cameraCatmullTension));
+    localStorage.setItem(CAMERA_ROTATION_INTERPOLATION_STORAGE_KEY, resolveCameraRotationInterpolationModeFromStrength(state.cameraRotationStrength));
+    localStorage.setItem(CAMERA_TIMING_INTERPOLATION_STORAGE_KEY, resolveCameraTimingInterpolationModeFromStrength(state.cameraEaseStrength));
+    localStorage.setItem(CAMERA_POSITION_INTERPOLATION_STRENGTH_STORAGE_KEY, String(state.cameraCatmullTension));
+    localStorage.setItem(CAMERA_CATMULL_TENSION_STORAGE_KEY, String(state.cameraCatmullTension));
+    localStorage.setItem(CAMERA_ROTATION_STRENGTH_STORAGE_KEY, String(state.cameraRotationStrength));
+    localStorage.setItem(CAMERA_EASE_STRENGTH_STORAGE_KEY, String(state.cameraEaseStrength));
+    const legacy = buildLegacyCameraInterpolationSnapshot();
+    localStorage.setItem(LEGACY_CAMERA_INTERPOLATION_MODE_STORAGE_KEY, legacy.mode);
+    localStorage.setItem(LEGACY_CAMERA_INTERPOLATION_PARAM_STORAGE_KEY, String(legacy.param));
+}
+
+function syncCameraInterpolationControls() {
+    state.cameraCatmullTension = clampCameraCatmullTension(state.cameraCatmullTension);
+    state.cameraRotationStrength = clampCameraRotationStrength(state.cameraRotationStrength);
+    state.cameraEaseStrength = clampCameraEaseStrength(state.cameraEaseStrength);
+    state.cameraPositionInterpolation = resolveCameraPositionInterpolationModeFromTension(state.cameraCatmullTension);
+    state.cameraRotationInterpolation = resolveCameraRotationInterpolationModeFromStrength(state.cameraRotationStrength);
+    state.cameraTimingInterpolation = resolveCameraTimingInterpolationModeFromStrength(state.cameraEaseStrength);
+
+    const catmullConfig = CAMERA_POSITION_INTERPOLATION_CONFIGS[CAMERA_POSITION_INTERPOLATION_CATMULL];
+    const rotationConfig = CAMERA_ROTATION_INTERPOLATION_STRENGTH_CONFIG;
+    const easeConfig = CAMERA_TIMING_INTERPOLATION_CONFIGS[CAMERA_TIMING_INTERPOLATION_EASE];
+    if (dom.timelineCatmullParam) {
+        dom.timelineCatmullParam.min = String(catmullConfig.min ?? 0);
+        dom.timelineCatmullParam.max = String(catmullConfig.max ?? 1);
+        dom.timelineCatmullParam.step = String(catmullConfig.step ?? 0.01);
+        dom.timelineCatmullParam.value = String(state.cameraCatmullTension);
+    }
+    if (dom.timelineRotationParam) {
+        dom.timelineRotationParam.min = String(rotationConfig.min ?? 0);
+        dom.timelineRotationParam.max = String(rotationConfig.max ?? 1);
+        dom.timelineRotationParam.step = String(rotationConfig.step ?? 0.01);
+        dom.timelineRotationParam.value = String(state.cameraRotationStrength);
+    }
+    if (dom.timelineEaseParam) {
+        dom.timelineEaseParam.min = String(easeConfig.min ?? 0);
+        dom.timelineEaseParam.max = String(easeConfig.max ?? 1);
+        dom.timelineEaseParam.step = String(easeConfig.step ?? 0.01);
+        dom.timelineEaseParam.value = String(state.cameraEaseStrength);
     }
 }
 
-function setCameraInterpolationMode(mode, silent = false) {
-    const previousMode = normalizeCameraInterpolationMode(state.cameraInterpolationMode);
-    const normalized = normalizeCameraInterpolationMode(mode);
-    state.cameraInterpolationMode = normalized;
-    const config = getCameraInterpolationConfig(normalized);
-    if (normalized !== previousMode && config.tunable) {
-        state.cameraInterpolationParam = Number(config.defaultParam ?? 0.5);
-    } else {
-        state.cameraInterpolationParam = clampCameraInterpolationParam(
-            state.cameraInterpolationParam,
-            normalized
-        );
+function applyCameraInterpolationSettings(settings = {}, {
+    persist = false,
+    syncVisualization = true,
+} = {}) {
+    if (settings.positionStrength !== undefined) {
+        state.cameraCatmullTension = clampCameraCatmullTension(settings.positionStrength);
+    } else if (settings.positionMode !== undefined) {
+        state.cameraCatmullTension = normalizeCameraPositionInterpolationMode(settings.positionMode) === CAMERA_POSITION_INTERPOLATION_LINEAR
+            ? 1
+            : clampCameraCatmullTension(settings.catmullTension ?? 0);
+    } else if (settings.catmullTension !== undefined) {
+        state.cameraCatmullTension = clampCameraCatmullTension(settings.catmullTension);
     }
-    if (!Number.isFinite(Number(state.cameraInterpolationParam))) {
-        state.cameraInterpolationParam = Number(config.defaultParam ?? 0.5);
+    if (settings.rotationStrength !== undefined) {
+        state.cameraRotationStrength = clampCameraRotationStrength(settings.rotationStrength);
+    } else if (settings.rotationMode !== undefined) {
+        state.cameraRotationStrength = normalizeCameraRotationInterpolationMode(settings.rotationMode) === CAMERA_ROTATION_INTERPOLATION_SQUAD
+            ? 1
+            : 0;
     }
-    syncCameraInterpolationModeControl();
-    localStorage.setItem(CAMERA_INTERPOLATION_MODE_STORAGE_KEY, normalized);
-    localStorage.setItem(CAMERA_INTERPOLATION_PARAM_STORAGE_KEY, String(state.cameraInterpolationParam));
+    if (settings.timingStrength !== undefined) {
+        state.cameraEaseStrength = clampCameraEaseStrength(settings.timingStrength);
+    } else if (settings.timingMode !== undefined) {
+        state.cameraEaseStrength = normalizeCameraTimingInterpolationMode(settings.timingMode) === CAMERA_TIMING_INTERPOLATION_EASE
+            ? clampCameraEaseStrength(settings.easeStrength ?? 1)
+            : 0;
+    } else if (settings.easeStrength !== undefined) {
+        state.cameraEaseStrength = clampCameraEaseStrength(settings.easeStrength);
+    }
+    syncCameraInterpolationControls();
+    if (persist) {
+        persistCameraInterpolationSettings();
+    }
+    if (syncVisualization) {
+        syncCameraSequenceVisualization();
+    }
+}
+
+function setCameraPositionInterpolationStrength(value, silent = false) {
+    state.cameraCatmullTension = clampCameraCatmullTension(value);
+    syncCameraInterpolationControls();
+    persistCameraInterpolationSettings();
     syncCameraSequenceVisualization();
     if (!silent) {
-        showInfo(`相机插值: ${config.label || normalized}`);
+        showInfo(t('messages.parameterSet', {
+            label: t('timeline.positionInterpolation'),
+            value: state.cameraCatmullTension.toFixed(2),
+        }));
     }
 }
 
-function setCameraInterpolationParam(value, silent = false) {
-    const normalized = clampCameraInterpolationParam(value, state.cameraInterpolationMode);
-    state.cameraInterpolationParam = normalized;
-    syncCameraInterpolationModeControl();
-    localStorage.setItem(CAMERA_INTERPOLATION_PARAM_STORAGE_KEY, String(normalized));
+function setCameraRotationStrength(value, silent = false) {
+    state.cameraRotationStrength = clampCameraRotationStrength(value);
+    syncCameraInterpolationControls();
+    persistCameraInterpolationSettings();
     syncCameraSequenceVisualization();
-    if (!silent && getCameraInterpolationConfig().tunable) {
-        showInfo(`${getCameraInterpolationConfig().paramLabel || '参数'}: ${normalized.toFixed(2)}`);
+    if (!silent) {
+        showInfo(t('messages.parameterSet', {
+            label: t('timeline.rotationInterpolation'),
+            value: state.cameraRotationStrength.toFixed(2),
+        }));
+    }
+}
+
+function setCameraTimingInterpolationStrength(value, silent = false) {
+    state.cameraEaseStrength = clampCameraEaseStrength(value);
+    syncCameraInterpolationControls();
+    persistCameraInterpolationSettings();
+    syncCameraSequenceVisualization();
+    if (!silent) {
+        showInfo(t('messages.parameterSet', {
+            label: t('timeline.timingInterpolation'),
+            value: state.cameraEaseStrength.toFixed(2),
+        }));
     }
 }
 
@@ -5930,9 +9425,14 @@ function captureCurrentCameraPose() {
 
 function syncTimelineDrivenCameraPreviewPose() {
     if (!app?.setCameraPreviewPose) return;
-    const pose = state.keyframes.length > 0
-        ? interpolateCameraPoseAt(state.currentTime)
-        : captureCurrentCameraPose();
+    let pose = null;
+    if (state.keyframes.length > 0) {
+        pose = interpolateCameraPoseAt(state.currentTime);
+    } else if (state.cameraFovKeyframes.length > 0) {
+        pose = applyTimelineFovToPose(captureCurrentCameraPose(), state.currentTime);
+    } else {
+        pose = captureCurrentCameraPose();
+    }
     app.setCameraPreviewPose?.(pose || null);
 }
 
@@ -5943,6 +9443,9 @@ function setTimelineFrame(frame, options = {}) {
     state.currentKeyframeIndex = findKeyframeIndexByFrame(safeFrame);
 
     syncTimelineDrivenCameraPreviewPose();
+    if (options.syncGizmo !== false) {
+        syncTimelineFrameToCameraGizmo(safeFrame);
+    }
 
     if (app && typeof app.setGlobalTimelineTime === 'function') {
         app.setGlobalTimelineTime(state.currentTime);
@@ -5957,6 +9460,7 @@ function setTimelineFrame(frame, options = {}) {
     if (options.lightweightUi) {
         updateTimeDisplay();
         updateTimelineCursorOnly();
+        syncTimelineCameraFovInputs();
     } else {
         updateTimelineUI();
     }
@@ -5965,7 +9469,7 @@ function setTimelineFrame(frame, options = {}) {
 function setTimelineFps(nextFpsRaw) {
     const nextFps = Number(nextFpsRaw);
     if (!Number.isFinite(nextFps) || nextFps <= 0) {
-        showError('FPS 格式错误');
+        showError(t('messages.invalidFps'));
         return;
     }
 
@@ -5988,6 +9492,16 @@ function setTimelineFps(nextFpsRaw) {
     }
 
     state.keyframes = Array.from(dedup.values()).sort((a, b) => a.frame - b.frame);
+    const fovDedup = new Map();
+    for (const keyframe of state.cameraFovKeyframes) {
+        const frame = clampTimelineFrame(Math.round((Number(keyframe.time) || 0) * nextFps));
+        fovDedup.set(frame, {
+            ...keyframe,
+            frame,
+            time: frameToTime(frame),
+        });
+    }
+    state.cameraFovKeyframes = Array.from(fovDedup.values()).sort((a, b) => a.frame - b.frame);
     if (dom.timelineFps) {
         dom.timelineFps.value = String(nextFps);
     }
@@ -6073,7 +9587,8 @@ function endKeyframeMarkerDrag() {
         const frame = clampTimelineFrame(drag.keyframe.frame);
         state.keyframes.sort((a, b) => a.frame - b.frame);
         setTimelineFrame(frame, { applyPose: false, syncSlider: true });
-        showInfo(`关键帧已调整: ${frameToTime(frame).toFixed(3)}s`);
+        activateTimelineCameraKeyframeSelection(frame, { silent: true });
+        showInfo(t('messages.keyframeAdjusted', { time: frameToTime(frame).toFixed(3) }));
         setTimeout(() => {
             suppressMarkerClickOnce = false;
         }, 0);
@@ -6096,6 +9611,7 @@ function onKeyframeMarkerDragMove(event) {
     keyframeMarkerDrag.moved = true;
     suppressMarkerClickOnce = true;
     setTimelineFrame(nextFrame, { applyPose: false, syncSlider: true });
+    activateTimelineCameraKeyframeSelection(nextFrame, { silent: true });
     syncCameraSequenceVisualization();
 
     if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
@@ -6126,7 +9642,9 @@ function beginKeyframeMarkerDrag(event, marker) {
         stopTimelinePlayback(false);
     }
 
-    setTimelineFrame(clampTimelineFrame(keyframe.frame), { applyPose: false, syncSlider: true });
+    const safeFrame = clampTimelineFrame(keyframe.frame);
+    setTimelineFrame(safeFrame, { applyPose: false, syncSlider: true });
+    activateTimelineCameraKeyframeSelection(safeFrame, { silent: true });
     document.body.classList.add('value-dragging');
     window.addEventListener('mousemove', onKeyframeMarkerDragMove);
     window.addEventListener('mouseup', endKeyframeMarkerDrag);
@@ -6160,7 +9678,7 @@ function buildModelTrackLoopMarkers(model, startSec, endSec) {
         if (Math.abs(markerSec - clipDuration) <= epsilon) continue;
         const ratio = Math.min(1, Math.max(0, markerSec / clipDuration));
         markers.push(
-            `<span class="model-track-loop-marker" style="left:${(ratio * 100).toFixed(4)}%;" title="${state.uiLanguage === 'en' ? `Loop ends ${markerSec.toFixed(3)}s` : `循环结束 ${markerSec.toFixed(3)}s`}"></span>`
+            `<span class="model-track-loop-marker" style="left:${(ratio * 100).toFixed(4)}%;" title="${escapeHtml(t('messages.modelTrackLoopEnds', { time: markerSec.toFixed(3) }))}"></span>`
         );
     }
 
@@ -6181,7 +9699,7 @@ function buildModelTrackOverflowIndicator(model, startSec, endSec) {
         return '';
     }
 
-    return `<span class="model-track-overflow-indicator" title="${escapeHtml(state.uiLanguage === 'en' ? 'Model animation duration exceeds the current clip length' : '模型动画播放时长超过当前 clip 时长')}">&gt;</span>`;
+    return `<span class="model-track-overflow-indicator" title="${escapeHtml(t('messages.modelAnimationOverflow'))}">&gt;</span>`;
 }
 
 function getModelTrackLoopMarkerDebugInfo() {
@@ -6387,7 +9905,7 @@ function endModelTrackDrag(e) {
     document.body.classList.remove('value-dragging');
     
     if (activeModelTrackDrag.moved) {
-        showInfo('模型动画片段已更新');
+        showInfo(t('messages.modelAnimationClipUpdated'));
     }
     
     activeModelTrackDrag = null;
@@ -6402,7 +9920,7 @@ function endModelTrackDrag(e) {
 function renderTimelineTrack() {
     if (!dom.timelineTrack) return;
     const totalFrames = getTimelineTotalFrames();
-    const hasKeyframes = state.keyframes.length > 0;
+    const hasKeyframes = state.keyframes.length > 0 || state.cameraFovKeyframes.length > 0;
     const html = [];
 
     if (!hasKeyframes) {
@@ -6422,6 +9940,16 @@ function renderTimelineTrack() {
         );
     }
 
+    for (let i = 0; i < state.cameraFovKeyframes.length; i++) {
+        const keyframe = state.cameraFovKeyframes[i];
+        const frame = clampTimelineFrame(keyframe.frame);
+        const ratio = frame / totalFrames;
+        const selectedClass = frame === state.selectedFrame ? 'selected' : '';
+        html.push(
+            `<span class="timeline-fov-marker ${selectedClass}" data-frame="${frame}" style="left:${timelineMappedLeftStyle(ratio)}" title="FOV ${Number(keyframe.fovDegrees || getFallbackTimelineCameraFov()).toFixed(3)}°">×</span>`
+        );
+    }
+
     dom.timelineTrack.innerHTML = html.join('');
     dom.timelineTrack.querySelectorAll('.timeline-keyframe-marker').forEach((marker) => {
         marker.addEventListener('mousedown', (e) => {
@@ -6436,7 +9964,8 @@ function renderTimelineTrack() {
             }
             const frame = Number(marker.dataset.frame);
             setTimelineFrame(frame, { applyPose: true, syncSlider: true });
-            syncManualTimelineCameraSelection(frame);
+            activateTimelineCameraKeyframeSelection(frame);
+            syncCameraSequenceVisualization();
         });
     });
 }
@@ -6466,9 +9995,14 @@ function updateTimelineCursorOnly() {
         const frame = Number(marker.dataset.frame);
         marker.classList.toggle('selected', frame === state.selectedFrame);
     });
+    dom.timelineTrack?.querySelectorAll('.timeline-fov-marker').forEach((marker) => {
+        const frame = Number(marker.dataset.frame);
+        marker.classList.toggle('selected', frame === state.selectedFrame);
+    });
 
     if (dom.btnRemoveKeyframe) {
-        dom.btnRemoveKeyframe.disabled = findKeyframeIndexByFrame(state.selectedFrame) < 0;
+        dom.btnRemoveKeyframe.disabled = findKeyframeIndexByFrame(state.selectedFrame) < 0
+            && findCameraFovKeyframeIndexByFrame(state.selectedFrame) < 0;
     }
 }
 
@@ -6483,13 +10017,15 @@ function updateTimelineUI() {
     }
 
     if (dom.btnRemoveKeyframe) {
-        dom.btnRemoveKeyframe.disabled = findKeyframeIndexByFrame(state.selectedFrame) < 0;
+        dom.btnRemoveKeyframe.disabled = findKeyframeIndexByFrame(state.selectedFrame) < 0
+            && findCameraFovKeyframeIndexByFrame(state.selectedFrame) < 0;
     }
 
     renderTimelineRuler();
     renderTimelineTrack();
     renderModelTracks();
     updateTimeDisplay();
+    syncTimelineCameraFovInputs();
 }
 
 /**
@@ -6498,7 +10034,7 @@ function updateTimelineUI() {
 function addKeyframe() {
     const pose = captureCurrentCameraPose();
     if (!pose) {
-        showError('无法读取当前相机位姿');
+        showError(t('messages.cameraPoseReadFailed'));
         return;
     }
 
@@ -6506,17 +10042,20 @@ function addKeyframe() {
     const keyframe = {
         frame,
         time: frameToTime(frame),
-        camera: pose,
+        camera: {
+            position: { ...pose.position },
+            rotation: { ...pose.rotation },
+        },
     };
 
     const existingIndex = findKeyframeIndexByFrame(frame);
     if (existingIndex >= 0) {
         state.keyframes[existingIndex] = keyframe;
-        showInfo(`关键帧已覆盖: ${keyframe.time.toFixed(3)}s`);
+        showInfo(t('messages.keyframeOverwritten', { time: keyframe.time.toFixed(3) }));
     } else {
         state.keyframes.push(keyframe);
         state.keyframes.sort((a, b) => a.frame - b.frame);
-        showInfo(`关键帧已新增: ${keyframe.time.toFixed(3)}s`);
+        showInfo(t('messages.keyframeAdded', { time: keyframe.time.toFixed(3) }));
     }
 
     state.currentKeyframeIndex = findKeyframeIndexByFrame(frame);
@@ -6544,9 +10083,23 @@ function addKeyframeFromShortcut() {
  */
 function removeKeyframe() {
     const frame = clampTimelineFrame(state.selectedFrame);
+    const fovIndex = findCameraFovKeyframeIndexByFrame(frame);
+    if (fovIndex >= 0) {
+        const removedFov = state.cameraFovKeyframes.splice(fovIndex, 1)[0];
+        updateTimelineUI();
+        syncTimelineDrivenCameraPreviewPose();
+        syncCameraSequenceVisualization();
+        if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
+            updateExportTimelineHint('video');
+        }
+        showInfo(t('messages.fovKeyframeDeleted', {
+            time: (Number(removedFov?.time) || frameToTime(frame)).toFixed(3),
+        }));
+        return;
+    }
     const index = findKeyframeIndexByFrame(frame);
     if (index < 0) {
-        showInfo(`当前时间戳无关键帧: ${frameToTime(frame).toFixed(3)}s`);
+        showInfo(t('messages.noKeyframeAtCurrentTime', { time: frameToTime(frame).toFixed(3) }));
         return;
     }
 
@@ -6557,21 +10110,38 @@ function removeKeyframe() {
     if (pendingExportType === 'video' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
         updateExportTimelineHint('video');
     }
-    showInfo(`关键帧已删除: ${removed.time.toFixed(3)}s`);
+    showInfo(t('messages.keyframeDeleted', { time: removed.time.toFixed(3) }));
 }
 
 function buildCameraSequenceExportPayload() {
+    const legacyInterpolation = buildLegacyCameraInterpolationSnapshot();
     return {
-        version: 1,
+        version: 2,
         timelineFps: Number(state.timelineFps || 24),
         timelineDurationSec: Number(state.timelineDurationSec || 10),
         timelinePlaybackSpeed: Number(state.timelinePlaybackSpeed || 1),
-        interpolationMode: normalizeCameraInterpolationMode(state.cameraInterpolationMode),
-        interpolationParam: Number(state.cameraInterpolationParam || 0.5),
+        interpolationMode: legacyInterpolation.mode,
+        interpolationParam: Number(legacyInterpolation.param || 0.5),
+        positionInterpolationMode: resolveCameraPositionInterpolationModeFromTension(state.cameraCatmullTension),
+        rotationInterpolationMode: resolveCameraRotationInterpolationModeFromStrength(state.cameraRotationStrength),
+        timingInterpolationMode: resolveCameraTimingInterpolationModeFromStrength(state.cameraEaseStrength),
+        positionInterpolationStrength: Number(state.cameraCatmullTension ?? 1),
+        rotationInterpolationStrength: Number(state.cameraRotationStrength ?? 0),
+        timingInterpolationStrength: Number(state.cameraEaseStrength ?? 0),
+        catmullTension: Number(state.cameraCatmullTension ?? 1),
+        easeStrength: Number(state.cameraEaseStrength ?? 0),
         keyframes: (Array.isArray(state.keyframes) ? state.keyframes : []).map((keyframe) => ({
             frame: Math.round(Number(keyframe.frame) || 0),
             time: Number(keyframe.time) || 0,
-            camera: keyframe.camera,
+            camera: {
+                position: { ...keyframe.camera?.position },
+                rotation: { ...keyframe.camera?.rotation },
+            },
+        })),
+        fovKeyframes: (Array.isArray(state.cameraFovKeyframes) ? state.cameraFovKeyframes : []).map((keyframe) => ({
+            frame: Math.round(Number(keyframe.frame) || 0),
+            time: Number(keyframe.time) || 0,
+            fovDegrees: Number(keyframe.fovDegrees || getFallbackTimelineCameraFov()),
         })),
     };
 }
@@ -6587,22 +10157,26 @@ function exportCameraSequence() {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    showInfo(`相机序列已导出: ${payload.keyframes.length} 个关键帧`);
+    showInfo(t('messages.cameraSequenceExported', {
+        poseCount: payload.keyframes.length,
+        fovCount: payload.fovKeyframes.length,
+    }));
 }
 
 function clearCameraSequence() {
-    if (!confirm('确定要清空当前相机序列吗？')) return;
+    if (!confirm(t('messages.clearCameraSequenceConfirm'))) return;
     stopTimelinePlayback(false);
     if (state.demoScene?.active) {
         state.demoScene.keyframeRevealQueue = [];
         state.demoScene.nextKeyframeIndex = 0;
     }
     state.keyframes = [];
+    state.cameraFovKeyframes = [];
     state.currentKeyframeIndex = -1;
     setTimelineFrame(0, { applyPose: false, syncSlider: true });
     updateTimelineUI();
     syncCameraSequenceVisualization();
-    showInfo('相机序列已清空');
+    showInfo(t('messages.cameraSequenceCleared'));
 }
 
 async function importCameraSequenceFromFile(file) {
@@ -6610,7 +10184,7 @@ async function importCameraSequenceFromFile(file) {
     try {
         const raw = JSON.parse(await file.text());
         if (!Array.isArray(raw?.keyframes)) {
-            throw new Error('缺少 keyframes 数组');
+            throw new Error(t('messages.missingKeyframesArray'));
         }
 
         if (Number.isFinite(raw.timelineFps)) {
@@ -6620,11 +10194,29 @@ async function importCameraSequenceFromFile(file) {
             state.timelinePlaybackSpeed = Number(raw.timelinePlaybackSpeed) || 1;
             if (dom.timelineSpeed) dom.timelineSpeed.value = String(state.timelinePlaybackSpeed);
         }
-        if (raw.interpolationMode) {
-            setCameraInterpolationMode(raw.interpolationMode, true);
-        }
-        if (Number.isFinite(raw.interpolationParam)) {
-            setCameraInterpolationParam(raw.interpolationParam, true);
+        if (
+            raw.positionInterpolationStrength !== undefined
+            || raw.rotationInterpolationStrength !== undefined
+            || raw.timingInterpolationStrength !== undefined
+            ||
+            raw.positionInterpolationMode
+            || raw.rotationInterpolationMode
+            || raw.timingInterpolationMode
+            || raw.catmullTension !== undefined
+            || raw.easeStrength !== undefined
+        ) {
+            applyCameraInterpolationSettings({
+                positionStrength: raw.positionInterpolationStrength,
+                rotationStrength: raw.rotationInterpolationStrength,
+                timingStrength: raw.timingInterpolationStrength,
+                positionMode: raw.positionInterpolationMode,
+                rotationMode: raw.rotationInterpolationMode,
+                timingMode: raw.timingInterpolationMode,
+                catmullTension: raw.catmullTension,
+                easeStrength: raw.easeStrength,
+            });
+        } else if (raw.interpolationMode) {
+            applyCameraInterpolationSettings(resolveCameraInterpolationStateFromLegacy(raw.interpolationMode, raw.interpolationParam));
         }
         if (Number.isFinite(raw.timelineDurationSec)) {
             state.timelineDurationSec = Math.max(TIMELINE_MIN_DURATION_SEC, Number(raw.timelineDurationSec));
@@ -6646,15 +10238,48 @@ async function importCameraSequenceFromFile(file) {
             })
             .filter(Boolean)
             .sort((a, b) => a.frame - b.frame);
+        state.cameraFovKeyframes = Array.isArray(raw?.fovKeyframes)
+            ? raw.fovKeyframes
+                .map((item) => {
+                    const time = Number(item?.time);
+                    const frameRaw = Number(item?.frame);
+                    const frame = Number.isFinite(frameRaw)
+                        ? Math.round(frameRaw)
+                        : timeToFrame(Number.isFinite(time) ? time : 0);
+                    const fovDegrees = clampSceneFov(item?.fovDegrees);
+                    if (fovDegrees === null) return null;
+                    return {
+                        frame: clampTimelineFrame(frame),
+                        time: Number.isFinite(time) ? time : frameToTime(frame),
+                        fovDegrees,
+                    };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.frame - b.frame)
+            : state.keyframes
+                .map((item) => {
+                    const fovDegrees = clampSceneFov(item?.camera?.fovDegrees);
+                    if (fovDegrees === null) return null;
+                    return {
+                        frame: Number(item.frame) || 0,
+                        time: Number(item.time) || 0,
+                        fovDegrees,
+                    };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.frame - b.frame);
 
         state.currentKeyframeIndex = -1;
         setTimelineFrame(0, { applyPose: false, syncSlider: true });
         updateTimelineUI();
         syncCameraSequenceVisualization();
-        showInfo(`相机序列已导入: ${state.keyframes.length} 个关键帧`);
+        showInfo(t('messages.cameraSequenceImported', {
+            poseCount: state.keyframes.length,
+            fovCount: state.cameraFovKeyframes.length,
+        }));
     } catch (error) {
         console.error(`[Editor ${state.VERSION}] importCameraSequence failed:`, error);
-        showError(`导入相机序列失败: ${error?.message || String(error)}`);
+        showError(t('messages.cameraSequenceImportFailed', { message: error?.message || String(error) }));
     }
 }
 
@@ -6666,7 +10291,7 @@ function updatePlayButtonUI() {
     if (state.isPlaying) {
         dom.btnPlayCamera.classList.add('active');
         dom.btnPlayCamera.classList.add('is-playing');
-        const pauseLabel = state.uiLanguage === 'en' ? 'Pause camera animation' : '暂停相机动画';
+        const pauseLabel = t('timeline.pauseCamera');
         dom.btnPlayCamera.setAttribute('title', pauseLabel);
         dom.btnPlayCamera.setAttribute('aria-label', pauseLabel);
     } else {
@@ -6741,7 +10366,6 @@ function interpolateCameraPoseLinear(a, b, t) {
             z: a.camera.position.z + (b.camera.position.z - a.camera.position.z) * t,
         },
         rotation: rot,
-        fovDegrees: a.camera.fovDegrees + (b.camera.fovDegrees - a.camera.fovDegrees) * t,
     };
 }
 
@@ -6795,6 +10419,14 @@ function lerpNumber(a, b, t) {
     return a + (b - a) * t;
 }
 
+function lerpVec3(a, b, t) {
+    return {
+        x: lerpNumber(a.x, b.x, t),
+        y: lerpNumber(a.y, b.y, t),
+        z: lerpNumber(a.z, b.z, t),
+    };
+}
+
 function easeInOutCubic(t) {
     if (t <= 0) return 0;
     if (t >= 1) return 1;
@@ -6803,11 +10435,18 @@ function easeInOutCubic(t) {
         : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-function remapInterpolationTime(t, strength = state.cameraInterpolationParam) {
+function remapInterpolationTime(t, strength = state.cameraEaseStrength) {
     const clampedT = Math.max(0, Math.min(1, Number(t) || 0));
-    const clampedStrength = Math.max(0, Math.min(1, Number(strength) || 0));
+    const clampedStrength = Math.max(-1, Math.min(1, Number(strength) || 0));
+    const strengthMagnitude = Math.abs(clampedStrength);
     const eased = easeInOutCubic(clampedT);
-    return lerpNumber(clampedT, eased, clampedStrength);
+    if (clampedStrength >= 0) {
+        return lerpNumber(clampedT, eased, strengthMagnitude);
+    }
+    const fastNearKeyframes = clampedT < 0.5
+        ? 0.5 * (1 - Math.pow(1 - (clampedT * 2), 3))
+        : 0.5 + (0.5 * Math.pow((clampedT * 2) - 1, 3));
+    return lerpNumber(clampedT, fastNearKeyframes, strengthMagnitude);
 }
 
 function buildVirtualBoundaryKeyframe(anchor, neighbor) {
@@ -6824,7 +10463,7 @@ function buildVirtualBoundaryKeyframe(anchor, neighbor) {
     };
 }
 
-function interpolateCameraPositionCatmull(keyframes, index, t, tension = state.cameraInterpolationParam) {
+function interpolateCameraPositionCatmull(keyframes, index, t, tension = state.cameraCatmullTension) {
     const current = keyframes[index];
     const next = keyframes[index + 1];
     if (!current || !next) return null;
@@ -6873,72 +10512,57 @@ function interpolateCameraPositionCatmull(keyframes, index, t, tension = state.c
     return position;
 }
 
-function interpolateCameraPoseSquad(keyframes, index, t) {
+function interpolateCameraPositionByMode(keyframes, index, t, mode = state.cameraPositionInterpolation) {
     const a = keyframes[index];
     const b = keyframes[index + 1];
     if (!a || !b) return null;
-    if (!Array.isArray(keyframes) || keyframes.length < 3) {
-        return interpolateCameraPoseLinear(a, b, t);
+    const linearity = clampCameraCatmullTension(state.cameraCatmullTension);
+    const linear = {
+        x: lerpNumber(a.camera.position.x, b.camera.position.x, t),
+        y: lerpNumber(a.camera.position.y, b.camera.position.y, t),
+        z: lerpNumber(a.camera.position.z, b.camera.position.z, t),
+    };
+    if (normalizeCameraPositionInterpolationMode(mode) === CAMERA_POSITION_INTERPOLATION_LINEAR || linearity >= 1) {
+        return linear;
     }
+    const smooth = interpolateCameraPositionCatmull(keyframes, index, t, 0);
+    if (!smooth) {
+        return linear;
+    }
+    return lerpVec3(smooth, linear, linearity);
+}
 
+function interpolateCameraRotationByMode(keyframes, index, t, mode = state.cameraRotationInterpolation) {
+    const a = keyframes[index];
+    const b = keyframes[index + 1];
+    if (!a || !b) return null;
+    const squadStrength = clampCameraRotationStrength(state.cameraRotationStrength);
+    const slerp = slerpQuaternion(a.camera.rotation, b.camera.rotation, t);
+    if (normalizeCameraRotationInterpolationMode(mode) === CAMERA_ROTATION_INTERPOLATION_SLERP || squadStrength <= 0) {
+        return slerp;
+    }
+    if (!Array.isArray(keyframes) || keyframes.length < 3) {
+        return slerp;
+    }
     const prev = keyframes[index - 1]?.camera?.rotation || a.camera.rotation;
     const next = keyframes[index + 2]?.camera?.rotation || b.camera.rotation;
-    const rot = interpolateQuaternionSquad(prev, a.camera.rotation, b.camera.rotation, next, t);
-    if (![rot.x, rot.y, rot.z, rot.w].every(Number.isFinite)) {
-        return interpolateCameraPoseLinear(a, b, t);
-    }
-
-    return {
-        position: {
-            x: a.camera.position.x + (b.camera.position.x - a.camera.position.x) * t,
-            y: a.camera.position.y + (b.camera.position.y - a.camera.position.y) * t,
-            z: a.camera.position.z + (b.camera.position.z - a.camera.position.z) * t,
-        },
-        rotation: rot,
-        fovDegrees: a.camera.fovDegrees + (b.camera.fovDegrees - a.camera.fovDegrees) * t,
-    };
-}
-
-function interpolateCameraPoseCatmull(keyframes, index, t) {
-    const a = keyframes[index];
-    const b = keyframes[index + 1];
-    if (!a || !b) return null;
-    const position = interpolateCameraPositionCatmull(keyframes, index, t, state.cameraInterpolationParam);
-    if (!position || ![position.x, position.y, position.z].every(Number.isFinite)) {
-        return interpolateCameraPoseLinear(a, b, t);
-    }
-    return {
-        position,
-        rotation: slerpQuaternion(a.camera.rotation, b.camera.rotation, t),
-        fovDegrees: lerpNumber(a.camera.fovDegrees, b.camera.fovDegrees, t),
-    };
-}
-
-function interpolateCameraPoseEase(a, b, t) {
-    const easedT = remapInterpolationTime(t, state.cameraInterpolationParam);
-    const rot = slerpQuaternion(a.camera.rotation, b.camera.rotation, easedT);
-    return {
-        position: {
-            x: lerpNumber(a.camera.position.x, b.camera.position.x, easedT),
-            y: lerpNumber(a.camera.position.y, b.camera.position.y, easedT),
-            z: lerpNumber(a.camera.position.z, b.camera.position.z, easedT),
-        },
-        rotation: rot,
-        fovDegrees: lerpNumber(a.camera.fovDegrees, b.camera.fovDegrees, easedT),
-    };
+    const squad = interpolateQuaternionSquad(prev, a.camera.rotation, b.camera.rotation, next, t);
+    return slerpQuaternion(slerp, squad, squadStrength);
 }
 
 function interpolateCameraPoseAt(timeSec) {
     if (state.keyframes.length === 0) return null;
     const keyframes = state.keyframes;
-    const mode = normalizeCameraInterpolationMode(state.cameraInterpolationMode);
+    const positionMode = resolveCameraPositionInterpolationModeFromTension(state.cameraCatmullTension);
+    const rotationMode = resolveCameraRotationInterpolationModeFromStrength(state.cameraRotationStrength);
+    const timingMode = resolveCameraTimingInterpolationModeFromStrength(state.cameraEaseStrength);
 
     if (timeSec <= keyframes[0].time) {
-        return keyframes[0].camera;
+        return applyTimelineFovToPose(keyframes[0].camera, timeSec);
     }
     const last = keyframes[keyframes.length - 1];
     if (timeSec >= last.time) {
-        return last.camera;
+        return applyTimelineFovToPose(last.camera, timeSec);
     }
 
     for (let i = 0; i < keyframes.length - 1; i++) {
@@ -6948,23 +10572,30 @@ function interpolateCameraPoseAt(timeSec) {
 
         const span = Math.max(1e-6, b.time - a.time);
         const t = (timeSec - a.time) / span;
-        if (mode === CAMERA_INTERPOLATION_MODE_SQUAD) {
-            return interpolateCameraPoseSquad(keyframes, i, t) || interpolateCameraPoseLinear(a, b, t);
+        const timedT = timingMode === CAMERA_TIMING_INTERPOLATION_EASE
+            ? remapInterpolationTime(t, state.cameraEaseStrength)
+            : t;
+        const position = interpolateCameraPositionByMode(keyframes, i, timedT, positionMode);
+        const rotation = interpolateCameraRotationByMode(keyframes, i, timedT, rotationMode);
+        if (
+            !position
+            || !rotation
+            || ![position.x, position.y, position.z, rotation.x, rotation.y, rotation.z, rotation.w].every(Number.isFinite)
+        ) {
+            return applyTimelineFovToPose(interpolateCameraPoseLinear(a, b, timedT), timeSec);
         }
-        if (mode === CAMERA_INTERPOLATION_MODE_CATMULL) {
-            return interpolateCameraPoseCatmull(keyframes, i, t) || interpolateCameraPoseLinear(a, b, t);
-        }
-        if (mode === CAMERA_INTERPOLATION_MODE_EASE) {
-            return interpolateCameraPoseEase(a, b, t);
-        }
-        return interpolateCameraPoseLinear(a, b, t);
+        return applyTimelineFovToPose({
+            position,
+            rotation,
+        }, timeSec);
     }
 
-    return last.camera;
+    return applyTimelineFovToPose(last.camera, timeSec);
 }
 
 function stopTimelinePlayback(resetToStart = false) {
     state.isPlaying = false;
+    syncCameraSequenceInteractionEnabled();
     if (timelinePlaybackRaf) {
         cancelAnimationFrame(timelinePlaybackRaf);
         timelinePlaybackRaf = 0;
@@ -6989,6 +10620,7 @@ function tickTimelinePlayback(timestamp) {
     const duration = frameToTime(getTimelineTotalFrames());
     const nextTime = state.currentTime + dt;
     if (nextTime >= duration) {
+        const finalFrame = getTimelineTotalFrames();
         if (state.isLooping) {
             if (state.selectedFrame !== 0) {
                 setTimelineFrame(0, { applyPose: true, syncSlider: true, lightweightUi: true });
@@ -6997,7 +10629,8 @@ function tickTimelinePlayback(timestamp) {
                 updateTimeDisplay();
             }
         } else {
-            stopTimelinePlayback(true);
+            setTimelineFrame(finalFrame, { applyPose: true, syncSlider: true, lightweightUi: true });
+            stopTimelinePlayback(false);
             return;
         }
     } else {
@@ -7019,15 +10652,20 @@ function tickTimelinePlayback(timestamp) {
 function playCameraAnimation() {
     if (state.isPlaying) {
         stopTimelinePlayback(false);
-        showInfo('相机动画: 暂停');
+        showInfo(t('messages.cameraAnimationPaused'));
         return;
     }
 
+    setCameraPreviewOpen(true);
+    if (state.selectedFrame >= getTimelineTotalFrames()) {
+        setTimelineFrame(0, { applyPose: true, syncSlider: true });
+    }
     state.isPlaying = true;
+    syncCameraSequenceInteractionEnabled();
     timelinePlaybackLastTime = performance.now();
     updatePlayButtonUI();
     timelinePlaybackRaf = requestAnimationFrame(tickTimelinePlayback);
-    showInfo('相机动画: 播放');
+    showInfo(t('messages.cameraAnimationPlaying'));
 }
 
 /**
@@ -7044,7 +10682,7 @@ function toggleCameraLoop() {
             btn.classList.remove('active');
         }
     }
-    showInfo(`相机动画循环: ${state.isLooping ? '开启' : '关闭'}`);
+    showInfo(t('messages.cameraAnimationLoopState', { state: state.isLooping ? t('common.active') : t('common.inactive') }));
 }
 
 /**
@@ -7080,15 +10718,32 @@ function initTimelineUI() {
         }
         dom.timelineFps.value = String(state.timelineFps);
     }
-    const savedInterpolationMode = localStorage.getItem(CAMERA_INTERPOLATION_MODE_STORAGE_KEY);
-    const savedInterpolationParam = localStorage.getItem(CAMERA_INTERPOLATION_PARAM_STORAGE_KEY);
+    const savedPositionInterpolationMode = localStorage.getItem(CAMERA_POSITION_INTERPOLATION_STORAGE_KEY);
+    const savedRotationInterpolationMode = localStorage.getItem(CAMERA_ROTATION_INTERPOLATION_STORAGE_KEY);
+    const savedTimingInterpolationMode = localStorage.getItem(CAMERA_TIMING_INTERPOLATION_STORAGE_KEY);
+    const savedPositionStrength = localStorage.getItem(CAMERA_POSITION_INTERPOLATION_STRENGTH_STORAGE_KEY);
+    const savedCatmullTension = localStorage.getItem(CAMERA_CATMULL_TENSION_STORAGE_KEY);
+    const savedRotationStrength = localStorage.getItem(CAMERA_ROTATION_STRENGTH_STORAGE_KEY);
+    const savedEaseStrength = localStorage.getItem(CAMERA_EASE_STRENGTH_STORAGE_KEY);
+    const savedLegacyInterpolationMode = localStorage.getItem(LEGACY_CAMERA_INTERPOLATION_MODE_STORAGE_KEY);
+    const savedLegacyInterpolationParam = localStorage.getItem(LEGACY_CAMERA_INTERPOLATION_PARAM_STORAGE_KEY);
     const savedCameraDisplayScale = localStorage.getItem(CAMERA_DISPLAY_SCALE_STORAGE_KEY);
     const savedCameraPreviewAspectId = localStorage.getItem(CAMERA_PREVIEW_ASPECT_STORAGE_KEY);
-    if (savedInterpolationMode) {
-        state.cameraInterpolationMode = normalizeCameraInterpolationMode(savedInterpolationMode);
-    }
-    if (savedInterpolationParam !== null) {
-        state.cameraInterpolationParam = clampCameraInterpolationParam(savedInterpolationParam, state.cameraInterpolationMode);
+    if (savedPositionInterpolationMode || savedRotationInterpolationMode || savedTimingInterpolationMode || savedPositionStrength !== null || savedCatmullTension !== null || savedRotationStrength !== null || savedEaseStrength !== null) {
+        applyCameraInterpolationSettings({
+            positionStrength: savedPositionStrength,
+            rotationStrength: savedRotationStrength,
+            timingStrength: savedEaseStrength,
+            positionMode: savedPositionInterpolationMode,
+            rotationMode: savedRotationInterpolationMode,
+            timingMode: savedTimingInterpolationMode,
+            catmullTension: savedCatmullTension,
+        }, { syncVisualization: false });
+    } else if (savedLegacyInterpolationMode || savedLegacyInterpolationParam !== null) {
+        applyCameraInterpolationSettings(
+            resolveCameraInterpolationStateFromLegacy(savedLegacyInterpolationMode, savedLegacyInterpolationParam),
+            { syncVisualization: false }
+        );
     }
     if (savedCameraDisplayScale !== null) {
         state.cameraSequenceDisplayScale = clampCameraSequenceDisplayScale(savedCameraDisplayScale);
@@ -7096,7 +10751,7 @@ function initTimelineUI() {
     if (savedCameraPreviewAspectId !== null) {
         state.cameraPreviewAspectId = normalizeCameraPreviewAspectId(savedCameraPreviewAspectId);
     }
-    syncCameraInterpolationModeControl();
+    syncCameraInterpolationControls();
     applyCameraPreviewAspect(state.cameraPreviewAspectId, true);
     setCameraSequenceDisplayScale(state.cameraSequenceDisplayScale, true);
     setTimelineFrame(0, { applyPose: false, syncSlider: true });
@@ -7113,14 +10768,27 @@ function setCameraPreset(preset) {
             btn.classList.add('active');
         }
     });
-    showInfo(`相机预设: ${preset}`);
+    showInfo(t('messages.cameraPresetSet', { preset }));
 }
 
 function isEditingText() {
     const active = document.activeElement;
     if (!active) return false;
-    const tag = active.tagName;
-    return tag === 'INPUT' || tag === 'TEXTAREA' || active.isContentEditable;
+    if (active.isContentEditable) return true;
+    if (active instanceof HTMLTextAreaElement) return true;
+    if (active instanceof HTMLInputElement) {
+        const type = String(active.type || '').toLowerCase();
+        return (
+            type === 'text' ||
+            type === 'search' ||
+            type === 'url' ||
+            type === 'tel' ||
+            type === 'password' ||
+            type === 'email' ||
+            type === 'number'
+        );
+    }
+    return false;
 }
 
 function handleGlobalShortcuts(e) {
@@ -7175,7 +10843,7 @@ function handleGlobalShortcuts(e) {
         const ok = app.focusModel(state.selectedModelId);
         if (ok) {
             const model = app.getModel(state.selectedModelId);
-            if (model) showInfo(`聚焦模型: ${model.name}`);
+            if (model) showInfo(t('messages.focusModel', { name: model.name }));
         }
         return;
     }
@@ -7185,7 +10853,7 @@ function handleGlobalShortcuts(e) {
         e.preventDefault();
         const ok = app.uprightCamera();
         if (ok) {
-            showInfo('相机回正');
+            showInfo(t('messages.cameraUpright'));
         }
     }
 }
@@ -7200,6 +10868,110 @@ function initEventListeners() {
     dom.btnToggleAgentWorkbench?.addEventListener('click', () => setAgentWorkbenchCollapsed(!state.agentWorkbenchCollapsed));
     dom.agentWorkbenchResizer?.addEventListener('mousedown', beginAgentWorkbenchResize);
     dom.agentWorkflowTabs?.addEventListener('click', handleAgentWorkflowClick);
+    dom.btnUserSession?.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        await openProjectSessionPopover();
+    });
+    dom.btnLoginModalClose?.addEventListener('click', closeLoginModal);
+    dom.btnProjectSessionClose?.addEventListener('click', closePostLoginProjectModal);
+    dom.btnProjectSessionLoginCancel?.addEventListener('click', closeLoginModal);
+    dom.btnWorkspaceTargetClose?.addEventListener('click', closeWorkspaceTargetModal);
+    dom.btnWorkspaceTargetCancel?.addEventListener('click', closeWorkspaceTargetModal);
+    dom.btnWorkspaceTargetServer?.addEventListener('click', async () => {
+        const reason = dom.workspaceTargetModal?.dataset.reason || 'status';
+        await handleWorkspaceTargetServerSelection({ reason });
+    });
+    dom.btnWorkspaceTargetLocal?.addEventListener('click', async () => {
+        const reason = dom.workspaceTargetModal?.dataset.reason || 'status';
+        await handleWorkspaceTargetLocalSelection({ reason });
+    });
+    dom.btnProjectSessionLogin?.addEventListener('click', async () => {
+        const user = String(dom.projectSessionUsernameInput?.value || '').trim();
+        if (!user) {
+            showError(t('projectSession.enterUsername'));
+            return;
+        }
+        setProjectSessionUser(user);
+        closeLoginModal();
+        if (state.projectSession.isAdmin) {
+            openAdminProjectModal();
+            return;
+        }
+        if (state.pendingWorkspaceTargetAction?.type === 'create-server-project-from-loaded-scene') {
+            openPostLoginProjectModal();
+            return;
+        }
+        if (hasCurrentSceneDraftToSave()) {
+            openPostLoginProjectModal();
+            return;
+        }
+        syncProjectSessionButton();
+        updateWorkspaceStatusIndicator();
+        showInfo(t('projectSession.loggedInAs', { user }));
+    });
+    dom.btnProjectSessionCreateProject?.addEventListener('click', () => {
+        void createServerProjectFromCurrentScene();
+    });
+    dom.projectSessionNewProjectName?.addEventListener('input', () => {
+        clearProjectNameConflictState(dom.projectSessionNewProjectName, dom.projectSessionNewProjectNameError);
+    });
+    dom.btnProjectSessionDiscard?.addEventListener('click', () => {
+        setPendingWorkspaceTargetAction(null);
+        closePostLoginProjectModal();
+        showInfo(t('projectSession.keptWithoutCreating'));
+    });
+    dom.projectBrowserProjectGrid?.addEventListener('click', (event) => {
+        const button = event.target.closest?.('[data-project-open]');
+        if (!(button instanceof HTMLElement)) return;
+        const projectId = String(button.dataset.projectOpen || '').trim();
+        if (!projectId) return;
+        void openServerProject(projectId);
+    });
+    dom.btnProjectBrowserClose?.addEventListener('click', closeProjectBrowserModal);
+    dom.btnProjectBrowserSaveAs?.addEventListener('click', openProjectBrowserSaveAsPanel);
+    dom.projectBrowserSaveAsName?.addEventListener('input', () => {
+        clearProjectNameConflictState(dom.projectBrowserSaveAsName, dom.projectBrowserSaveAsNameError);
+    });
+    dom.btnProjectBrowserSaveAsCancel?.addEventListener('click', closeProjectBrowserSaveAsPanel);
+    dom.btnProjectBrowserSaveAsConfirm?.addEventListener('click', async () => {
+        const saved = await createServerProjectFromCurrentScene({
+            nameInput: dom.projectBrowserSaveAsName,
+            closeModal: false,
+        });
+        if (saved) {
+            closeProjectBrowserSaveAsPanel();
+        }
+    });
+    dom.btnProjectBrowserLogout?.addEventListener('click', () => {
+        logoutProjectSession();
+    });
+    dom.btnAdminProjectClose?.addEventListener('click', closeAdminProjectModal);
+    dom.btnAdminProjectLogout?.addEventListener('click', () => {
+        logoutProjectSession();
+    });
+    dom.adminUserList?.addEventListener('click', (event) => {
+        const deleteButton = event.target.closest?.('[data-admin-user-delete]');
+        if (deleteButton instanceof HTMLElement) {
+            event.stopPropagation();
+            void deleteAdminUser(String(deleteButton.dataset.adminUserDelete || '').trim());
+            return;
+        }
+        const card = event.target.closest?.('[data-admin-user-select]');
+        if (!(card instanceof HTMLElement)) return;
+        const user = String(card.dataset.adminUserSelect || '').trim();
+        if (!user) return;
+        state.projectSession.adminSelectedUser = user;
+        renderAdminUserList();
+        void refreshAdminSelectedUserProjects();
+    });
+    dom.adminProjectGrid?.addEventListener('click', (event) => {
+        const deleteButton = event.target.closest?.('[data-admin-project-delete]');
+        if (!(deleteButton instanceof HTMLElement)) return;
+        const projectId = String(deleteButton.dataset.adminProjectDelete || '').trim();
+        if (!projectId || !state.projectSession.adminSelectedUser) return;
+        void deleteAdminProject(state.projectSession.adminSelectedUser, projectId);
+    });
     dom.agentMessageScroll?.addEventListener('scroll', syncAgentMessageScrollbar);
     dom.agentMessageScrollbar?.addEventListener('mousedown', beginAgentMessageScrollbarDrag);
     dom.agentComposerInput?.addEventListener('keydown', handleAgentComposerKeydown);
@@ -7242,6 +11014,10 @@ function initEventListeners() {
     dom.btnClearScreen?.addEventListener('mouseleave', () => setClearScreenPreview(false));
     dom.btnClearScreen?.addEventListener('focus', () => setClearScreenPreview(true));
     dom.btnClearScreen?.addEventListener('blur', () => setClearScreenPreview(false));
+    dom.workspaceStatusIndicator?.addEventListener('click', async (e) => {
+        e.preventDefault();
+        openWorkspaceTargetModal('status');
+    });
     dom.btnExportFlyout?.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -7302,11 +11078,46 @@ function initEventListeners() {
             closeExportModal();
         }
     });
+    dom.loginModal?.addEventListener('click', (e) => {
+        if (e.target === dom.loginModal) {
+            closeLoginModal();
+        }
+    });
+    dom.postLoginProjectModal?.addEventListener('click', (e) => {
+        if (e.target === dom.postLoginProjectModal) {
+            closePostLoginProjectModal();
+        }
+    });
+    dom.projectBrowserModal?.addEventListener('click', (e) => {
+        if (e.target === dom.projectBrowserModal) {
+            closeProjectBrowserModal();
+        }
+    });
+    dom.adminProjectModal?.addEventListener('click', (e) => {
+        if (e.target === dom.adminProjectModal) {
+            closeAdminProjectModal();
+        }
+    });
     dom.helpTipsClose?.addEventListener('click', closeHelpTipsModal);
     dom.helpTipsConfirm?.addEventListener('click', closeHelpTipsModal);
     dom.helpTipsModal?.addEventListener('click', (e) => {
         if (e.target === dom.helpTipsModal) {
             closeHelpTipsModal();
+        }
+    });
+    dom.exportAspectRatio?.addEventListener('change', () => {
+        if (pendingExportType === 'video') {
+            buildExportResolutionOptions(getSelectedExportAspectOption());
+        }
+    });
+    dom.exportVideoSpeed?.addEventListener('change', () => {
+        if (pendingExportType === 'video') {
+            updateExportTimelineHint('video');
+        }
+    });
+    dom.exportVideoFps?.addEventListener('change', () => {
+        if (pendingExportType === 'video') {
+            updateExportTimelineHint('video');
         }
     });
 
@@ -7318,13 +11129,14 @@ function initEventListeners() {
     dom.btnGizmoScale?.addEventListener('click', () => setViewportGizmoMode('scale'));
     dom.btnToggleSceneSettings?.addEventListener('click', () => setSceneSettingsOpen(!state.sceneSettingsOpen));
     dom.btnSceneSettingsClose?.addEventListener('click', () => setSceneSettingsOpen(false));
-    dom.btnToggleCameraPreview?.addEventListener('click', () => setCameraPreviewOpen(!state.cameraPreviewOpen));
-    dom.btnCameraPreviewClose?.addEventListener('click', () => setCameraPreviewOpen(false));
+    dom.btnToggleCameraPreview?.addEventListener('click', () => setCameraPreviewOpen(!state.cameraPreviewOpen, { markDirty: true }));
+    dom.btnCameraPreviewClose?.addEventListener('click', () => setCameraPreviewOpen(false, { markDirty: true }));
     dom.btnToggleCameraSettings?.addEventListener('click', () => setCameraSettingsOpen(!state.cameraSettingsOpen));
     dom.btnCameraSettingsClose?.addEventListener('click', () => setCameraSettingsOpen(false));
     dom.cameraPreviewPanel?.addEventListener('pointerdown', () => focusFloatingPanel('cameraPreview'));
     dom.cameraSettingsPanel?.addEventListener('pointerdown', () => focusFloatingPanel('cameraSettings'));
     dom.cameraPreviewPanel?.addEventListener('mousedown', beginCameraPreviewPanelDrag);
+    dom.cameraPreviewResizeHandle?.addEventListener('mousedown', beginCameraPreviewPanelResize);
     dom.cameraPreviewAspectRatio?.addEventListener('change', (e) => {
         applyCameraPreviewAspect(e.target.value);
     });
@@ -7381,7 +11193,7 @@ function initEventListeners() {
         if (mode !== 'fps' && state.cameraSequenceDragEnabled) {
             setCameraSequenceDragEnabled(false, true);
         }
-        showInfo(`相机模式: ${mode}`);
+        showInfo(t('messages.cameraModeSet', { mode }));
     });
 
     // 时间轴
@@ -7398,14 +11210,23 @@ function initEventListeners() {
     dom.btnToggleCameraSequenceDrag?.addEventListener('click', () => {
         setCameraSequenceDragEnabled(!state.cameraSequenceDragEnabled);
     });
-    dom.timelineCameraInterpolation?.addEventListener('change', (e) => {
-        setCameraInterpolationMode(e.target.value);
+    dom.timelineRotationParam?.addEventListener('input', (e) => {
+        setCameraRotationStrength(e.target.value, true);
     });
-    dom.timelineInterpolationParam?.addEventListener('input', (e) => {
-        setCameraInterpolationParam(e.target.value, true);
+    dom.timelineRotationParam?.addEventListener('change', (e) => {
+        setCameraRotationStrength(e.target.value);
     });
-    dom.timelineInterpolationParam?.addEventListener('change', (e) => {
-        setCameraInterpolationParam(e.target.value);
+    dom.timelineCatmullParam?.addEventListener('input', (e) => {
+        setCameraPositionInterpolationStrength(e.target.value, true);
+    });
+    dom.timelineCatmullParam?.addEventListener('change', (e) => {
+        setCameraPositionInterpolationStrength(e.target.value);
+    });
+    dom.timelineEaseParam?.addEventListener('input', (e) => {
+        setCameraTimingInterpolationStrength(e.target.value, true);
+    });
+    dom.timelineEaseParam?.addEventListener('change', (e) => {
+        setCameraTimingInterpolationStrength(e.target.value);
     });
     dom.cameraDisplayScale?.addEventListener('input', (e) => {
         setCameraSequenceDisplayScale(e.target.value, true);
@@ -7413,12 +11234,34 @@ function initEventListeners() {
     dom.cameraDisplayScale?.addEventListener('change', (e) => {
         setCameraSequenceDisplayScale(e.target.value);
     });
+    dom.cameraDisplayScaleValue?.addEventListener('input', (e) => {
+        setCameraSequenceDisplayScale(e.target.value, true);
+    });
+    dom.cameraDisplayScaleValue?.addEventListener('change', (e) => {
+        setCameraSequenceDisplayScale(e.target.value);
+    });
+    dom.cameraDisplayScaleValue?.addEventListener('blur', commitCameraSequenceDisplayScaleFromInput);
+    dom.cameraDisplayScaleValue?.addEventListener('keydown', handleCameraSequenceDisplayScaleInputKeydown);
+    dom.timelineCameraFovRange?.addEventListener('input', (e) => {
+        applyTimelineCameraFov(e.target.value, true);
+    });
+    dom.timelineCameraFovRange?.addEventListener('change', (e) => {
+        applyTimelineCameraFov(e.target.value);
+    });
+    dom.timelineCameraFovNumber?.addEventListener('input', (e) => {
+        applyTimelineCameraFov(e.target.value, true);
+    });
+    dom.timelineCameraFovNumber?.addEventListener('change', (e) => {
+        applyTimelineCameraFov(e.target.value);
+    });
+    dom.timelineCameraFovNumber?.addEventListener('blur', commitTimelineCameraFovFromInput);
+    dom.timelineCameraFovNumber?.addEventListener('keydown', handleTimelineCameraFovInputKeydown);
     dom.timelineFps?.addEventListener('change', (e) => {
         setTimelineFps(e.target.value);
     });
     dom.timelineSpeed?.addEventListener('change', (e) => {
         state.timelinePlaybackSpeed = Number(e.target.value) || 1.0;
-        showInfo(`全局播放倍速: ${state.timelinePlaybackSpeed}x`);
+        showInfo(t('messages.playbackSpeedSet', { speed: state.timelinePlaybackSpeed }));
     });
     dom.timelineRuler?.addEventListener('click', handleTimelinePointerSelection);
     dom.timelineTrack?.addEventListener('click', handleTimelinePointerSelection);
@@ -7439,7 +11282,7 @@ function initEventListeners() {
         if (dom.agentComposerDock?.contains(e.target) && queueAgentComposerImages(e.dataTransfer?.files) > 0) {
             e.preventDefault();
             clearAgentComposerDropTarget();
-            showInfo('图片已加入输入区');
+            showInfo(t('messages.imageAddedToComposer'));
             return;
         }
         e.preventDefault();
@@ -7469,7 +11312,7 @@ function initEventListeners() {
     document.addEventListener('keydown', handleGlobalShortcuts);
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && state.cameraPreviewOpen) {
-            setCameraPreviewOpen(false);
+            setCameraPreviewOpen(false, { markDirty: false, silent: true });
             return;
         }
         if (e.key === 'Escape' && state.cameraSettingsOpen) {
@@ -7486,6 +11329,27 @@ function initEventListeners() {
         }
         if (e.key === 'Escape' && dom.exportModal && !dom.exportModal.classList.contains('hidden')) {
             closeExportModal();
+            return;
+        }
+        if (e.key === 'Escape' && dom.loginModal && !dom.loginModal.classList.contains('hidden')) {
+            closeLoginModal();
+            return;
+        }
+        if (e.key === 'Escape' && dom.postLoginProjectModal && !dom.postLoginProjectModal.classList.contains('hidden')) {
+            closePostLoginProjectModal();
+            return;
+        }
+        if (e.key === 'Escape' && dom.projectBrowserModal && !dom.projectBrowserModal.classList.contains('hidden')) {
+            if (dom.projectBrowserSaveAsPanel && !dom.projectBrowserSaveAsPanel.classList.contains('hidden')) {
+                closeProjectBrowserSaveAsPanel();
+                return;
+            }
+            closeProjectBrowserModal();
+            return;
+        }
+        if (e.key === 'Escape' && dom.adminProjectModal && !dom.adminProjectModal.classList.contains('hidden')) {
+            closeAdminProjectModal();
+            return;
         }
     });
     document.addEventListener('pointerdown', (e) => {
@@ -7495,8 +11359,11 @@ function initEventListeners() {
     });
     document.addEventListener('mousemove', moveCameraPreviewPanel);
     document.addEventListener('mouseup', endCameraPreviewPanelDrag);
+    document.addEventListener('mousemove', moveCameraPreviewPanelResize);
+    document.addEventListener('mouseup', endCameraPreviewPanelResize);
     window.addEventListener('resize', () => {
         if (state.cameraPreviewOpen) {
+            applyCameraPreviewPanelSize();
             positionCameraPreviewPanel();
         }
         if (state.cameraSettingsOpen) {
@@ -7521,6 +11388,15 @@ async function init() {
     }
     initLanguage();
     initTheme();
+    const savedUser = localStorage.getItem(PROJECT_SESSION_USER_STORAGE_KEY) || '';
+    if (savedUser) {
+        setProjectSessionUser(savedUser);
+    } else {
+        syncProjectSessionButton();
+    }
+    updateWorkspaceStatusIndicator();
+    window.addEventListener('online', updateWorkspaceStatusIndicator);
+    window.addEventListener('offline', updateWorkspaceStatusIndicator);
     initializeAgentWorkbench();
     syncClearScreenState();
     initializeCameraPreviewControls();
@@ -7529,7 +11405,7 @@ async function init() {
 
     // 检查关键 DOM 元素是否存在
     if (!dom.canvas) {
-        showError('Canvas element not found');
+        showError(t('messages.canvasNotFound'));
         return;
     }
     console.log(`[Editor ${state.VERSION}] Canvas found`);
@@ -7549,14 +11425,14 @@ async function init() {
         console.log(`[Editor ${state.VERSION}] EditorApp loaded`);
     } catch (error) {
         console.error(`[Editor ${state.VERSION}] Failed to load EditorApp:`, error);
-        showError('Failed to load EditorApp module: ' + error.message);
+        showError(t('messages.editorAppModuleLoadFailed', { message: error.message }));
         return;
     }
 
     // 初始化编辑器应用
     const success = await app.init();
     if (!success) {
-        showError('Failed to initialize editor');
+        showError(t('messages.editorInitFailed'));
         return;
     }
     await app.attachCameraPreviewCanvas?.(dom.cameraPreviewCanvas || null);
@@ -7593,7 +11469,7 @@ async function init() {
         if (maxEnd > state.timelineDurationSec && Number.isFinite(maxEnd)) {
             state.timelineDurationSec = maxEnd;
             if (typeof updateTimelineUI === 'function') updateTimelineUI();
-            showInfo(`时间轴已自动适配到 ${maxEnd.toFixed(1)}s`);
+            showInfo(t('messages.timelineAutoFit', { duration: maxEnd.toFixed(1) }));
         }
         
         if (typeof renderModelTracks === 'function') renderModelTracks();
@@ -7601,6 +11477,7 @@ async function init() {
     app.onViewportGizmoTransform?.((id, model) => {
         if (id !== state.selectedModelId) return;
         updateEditorValues(model);
+        markWorkspaceDirty('viewport-gizmo-transform');
     });
     app.onSelectedModel?.((id) => {
         if (syncingSelectedModelSelection) return;
@@ -7629,8 +11506,10 @@ async function init() {
             state.viewportGizmoMode,
             resolveViewportSelectionKind({
                 cameraSequenceDragEnabled: state.cameraSequenceDragEnabled,
-                selectedCameraSequenceFrame: state.selectedCameraSequenceFrame,
+                hasTimelineCamera: hasTimelineCameraPose(),
+                cameraGizmoTargetFrame: state.selectedCameraSequenceFrame,
                 selectedModelId: state.selectedModelId,
+                playbackActive: state.isPlaying,
             })
         );
         if (normalizedMode !== state.viewportGizmoMode) {
@@ -7647,6 +11526,7 @@ async function init() {
         if (!updateKeyframeCameraPose(frame, pose)) return;
         updateTimelineUI();
         syncCameraSequenceVisualization();
+        markWorkspaceDirty('camera-sequence-transform');
     });
 
     registerAgentSessionActionHandlers({

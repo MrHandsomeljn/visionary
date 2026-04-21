@@ -1,11 +1,131 @@
-import { defineConfig, PluginOption } from 'vite';
+import { defineConfig, loadEnv, PluginOption, ViteDevServer } from 'vite';
+import fs from 'fs';
 import path from 'path';
+import { spawn } from 'node:child_process';
+import basicSsl from '@vitejs/plugin-basic-ssl'
+import {
+  buildRouterEditorUrl,
+  formatRouterLogLine,
+  parseRouterIpOutput,
+  resolvePythonCommand,
+  shouldEnableRouterLink,
+} from './scripts/router-dev-link-utils.mjs';
+import { createProjectApiPlugin } from './src/server/project-api.ts';
 
 const srcDir = path.resolve(__dirname, 'src').replace(/\\/g, '/');
 const chunkSizeLimitInBytes = 5 * 1024 * 1024;
 const chunkSizeBypassMatchers = [/onnxruntime-web/, /visionary-core\.umd/];
+const routerIpScript = path.resolve(__dirname, 'scripts/get-router-ip.py');
 
 const sanitizeChunkName = (name: string) => name.replace(/[^a-zA-Z0-9]/g, '-');
+
+function resolveServerPort(server: ViteDevServer): string {
+  const resolvedNetworkUrl = server.resolvedUrls?.network[0];
+  if (resolvedNetworkUrl) {
+    return new URL(resolvedNetworkUrl).port || '3000';
+  }
+  const configuredPort = server.config.server.port;
+  return String(configuredPort || 3000);
+}
+
+function printRouterLink(server: ViteDevServer, env: Record<string, string>) {
+  if (!shouldEnableRouterLink(env)) {
+    return;
+  }
+
+  const python = resolvePythonCommand();
+  if (!python) {
+    server.config.logger.info(formatRouterLogLine('unavailable (python not found)'));
+    return;
+  }
+
+  const protocol = server.config.server.https ? 'https' : 'http';
+  const port = resolveServerPort(server);
+  const child = spawn(python, [routerIpScript], {
+    cwd: __dirname,
+    env: {
+      ...process.env,
+      ...env,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: false,
+  });
+
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => {
+    stdout += String(chunk);
+  });
+  child.stderr.on('data', (chunk) => {
+    stderr += String(chunk);
+  });
+  child.on('error', (error) => {
+    server.config.logger.info(formatRouterLogLine(`unavailable (${error.name})`));
+  });
+  child.on('close', () => {
+    const parsed = parseRouterIpOutput(stdout || stderr);
+    if (parsed.ok) {
+      server.config.logger.info(
+        formatRouterLogLine(
+          buildRouterEditorUrl({
+            host: parsed.ip,
+            port,
+            protocol,
+          })
+        )
+      );
+      return;
+    }
+    server.config.logger.info(formatRouterLogLine(`unavailable (${parsed.reason})`));
+  });
+}
+
+const routerDevLinkPlugin = (env: Record<string, string>): PluginOption => ({
+  name: 'router-dev-link',
+  apply: 'serve',
+  configureServer(server) {
+    let printed = false;
+    const printOnce = () => {
+      if (printed) {
+        return;
+      }
+      printed = true;
+      printRouterLink(server, env);
+    };
+
+    if (server.httpServer) {
+      server.httpServer.once('listening', printOnce);
+    }
+  },
+});
+
+function resolveDevHttpsOptions(env: Record<string, string>) {
+  const enabled = env.VISIONARY_DEV_HTTPS === '1' || env.VISIONARY_DEV_HTTPS === 'true';
+  if (!enabled) {
+    return undefined;
+  }
+
+  const certFile = env.VISIONARY_DEV_CERT_FILE || 'certs/dev-server-cert.pem';
+  const keyFile = env.VISIONARY_DEV_KEY_FILE || 'certs/dev-server-key.pem';
+  const certPath = path.resolve(__dirname, certFile);
+  const keyPath = path.resolve(__dirname, keyFile);
+
+  if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+    throw new Error(
+      [
+        'VISIONARY_DEV_HTTPS is enabled, but the local HTTPS certificate files were not found.',
+        `Expected cert: ${certPath}`,
+        `Expected key: ${keyPath}`,
+        'Generate and trust a local certificate first, or disable VISIONARY_DEV_HTTPS.',
+      ].join('\n')
+    );
+  }
+
+  return {
+    cert: fs.readFileSync(certPath),
+    key: fs.readFileSync(keyPath),
+  };
+}
 
 const enforceChunkSizeLimit = (): PluginOption => ({
   name: 'enforce-chunk-size-limit',
@@ -28,15 +148,28 @@ const enforceChunkSizeLimit = (): PluginOption => ({
   }
 });
 
-export default defineConfig({
-  server: {
-    port: 3000,
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  const isHttps =
+    env.VISIONARY_DEV_HTTPS === '1' ||
+    env.VISIONARY_DEV_HTTPS === 'true' ||
+    mode === 'development';
+  const devHttps = resolveDevHttpsOptions(env);
+
+  return {
+    server: {
+      host: '0.0.0.0',
+      port: 3000,
+      https: isHttps ? (devHttps ?? {}) : undefined,
+      headers: {
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Cross-Origin-Embedder-Policy': 'require-corp',
+      },
     },
-  },
-  build: {
+    preview: {
+      host: '0.0.0.0',
+    },
+    build: {
     outDir: 'dist',
     emptyOutDir: true,
     chunkSizeWarningLimit: 5120,
@@ -104,12 +237,13 @@ export default defineConfig({
       ]
     }
   },
-  plugins: [enforceChunkSizeLimit()],
-  publicDir: 'public',
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
+    plugins: [enforceChunkSizeLimit(), basicSsl(), routerDevLinkPlugin(env), createProjectApiPlugin()],
+    publicDir: 'public',
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, './src'),
+      },
     },
-  },
-  assetsInclude: ['**/*.wgsl', '**/*.ply'],
+    assetsInclude: ['**/*.wgsl', '**/*.ply'],
+  };
 });

@@ -1201,10 +1201,9 @@ export class RecordingCamera {
 
             const backend = (this.renderer as any).backend;
             const device = backend?.device as GPUDevice;
-            // if (device && device.queue) {
-            //     await device.queue.onSubmittedWorkDone();
-            //     console.log('onSubmittedWorkDone');
-            // }
+            if (device && device.queue) {
+                await device.queue.onSubmittedWorkDone();
+            }
 
             // 将渲染结果绘制到新的Canvas上并返回
             const exportCanvas = document.createElement('canvas');
@@ -1217,9 +1216,6 @@ export class RecordingCamera {
 
             const sourceCanvas = renderer.domElement;
             exportCtx.drawImage(sourceCanvas, 0, 0, width, height);
-            if (device && device.queue) {
-                await device.queue.onSubmittedWorkDone();
-            }
             return exportCanvas;
 
         } catch (error) {

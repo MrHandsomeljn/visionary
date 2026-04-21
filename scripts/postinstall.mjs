@@ -22,3 +22,11 @@ try {
   console.warn("postinstall: fix_onnx failed (ignored):", err?.message || err);
 }
 
+const httpsCheckScript = path.join(rootDir, "scripts", "check-dev-https.mjs");
+if (existsSync(httpsCheckScript)) {
+  try {
+    await import(httpsCheckScript);
+  } catch (err) {
+    console.warn("postinstall: dev https check failed (ignored):", err?.message || err);
+  }
+}
