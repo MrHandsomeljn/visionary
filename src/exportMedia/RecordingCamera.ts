@@ -1205,7 +1205,6 @@ export class RecordingCamera {
                 await device.queue.onSubmittedWorkDone();
             }
 
-            // 将渲染结果绘制到新的Canvas上并返回
             const exportCanvas = document.createElement('canvas');
             exportCanvas.width = width;
             exportCanvas.height = height;

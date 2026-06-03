@@ -18,9 +18,11 @@ export interface RecordingOptions {
     fps?: number;
     enableSSAA?: boolean; // 是否开启超分采样 (Super Sampling Anti-Aliasing)
     resolution?: { width: number; height: number }; // 输出分辨率
+    maxInFlightFrames?: number;
 }
 
 export class RecordingManager {
+    private static readonly DEFAULT_MAX_IN_FLIGHT_FRAMES = 2;
     private isRecording: boolean = false;
     private muxer: Mp4Muxer.Muxer<Mp4Muxer.ArrayBufferTarget> | null = null;
     private videoEncoder: VideoEncoder | null = null;
@@ -34,6 +36,7 @@ export class RecordingManager {
     private fps: number = 30;
 
     private useSSAA: boolean = false;
+    private maxInFlightFrames: number = RecordingManager.DEFAULT_MAX_IN_FLIGHT_FRAMES;
     // 存储缩放用的画布和上下文
     private downscaleCanvas: OffscreenCanvas | null = null;
     private downscaleCtx: OffscreenCanvasRenderingContext2D | null = null;
@@ -43,6 +46,13 @@ export class RecordingManager {
         
         // 1. 记录开关状态
         this.useSSAA = !!options.enableSSAA;
+        this.maxInFlightFrames = Math.max(
+            1,
+            Math.min(
+                8,
+                Math.round(Number(options.maxInFlightFrames || RecordingManager.DEFAULT_MAX_IN_FLIGHT_FRAMES))
+            )
+        );
 
         this.recordingCamera = options.recordingCamera;
         this.scene = options.scene;
@@ -183,6 +193,43 @@ export class RecordingManager {
         });
     }
 
+    private async waitForEncoderBackpressure(): Promise<void> {
+        const encoder = this.videoEncoder;
+        if (!encoder) return;
+
+        while (this.isRecording && encoder.encodeQueueSize >= this.maxInFlightFrames) {
+            await new Promise<void>((resolve) => {
+                const encoderWithDequeue = encoder as VideoEncoder & {
+                    ondequeue?: ((event: Event) => void) | null;
+                };
+                let settled = false;
+                const settle = () => {
+                    if (settled) return;
+                    settled = true;
+                    resolve();
+                };
+
+                if ('ondequeue' in encoderWithDequeue) {
+                    const previousHandler = encoderWithDequeue.ondequeue;
+                    encoderWithDequeue.ondequeue = (event: Event) => {
+                        encoderWithDequeue.ondequeue = previousHandler ?? null;
+                        previousHandler?.call(encoderWithDequeue, event);
+                        settle();
+                    };
+                    setTimeout(() => {
+                        if (encoderWithDequeue.ondequeue !== previousHandler) {
+                            encoderWithDequeue.ondequeue = previousHandler ?? null;
+                        }
+                        settle();
+                    }, 0);
+                    return;
+                }
+
+                setTimeout(settle, 0);
+            });
+        }
+    }
+
     async renderFrame(): Promise<void> {
         const { scene, recordingCamera, videoEncoder, captureCanvas, isRecording } = this;
         if (!isRecording || !recordingCamera || !scene || !videoEncoder || !captureCanvas) return;
@@ -237,9 +284,11 @@ export class RecordingManager {
             
             frame.close();
             this.currentFrameIndex++;
+            await this.waitForEncoderBackpressure();
 
         } catch (error) {
             console.error('渲染/编码帧失败:', error);
+            throw error;
         }
     }
 
@@ -275,5 +324,16 @@ export class RecordingManager {
     isRecordingActive(): boolean { return this.isRecording; }
     getStopPromise() { return null; }
     getCompletedBlob() { return null; }
-    cancelRecording() { this.isRecording = false; }
+    cancelRecording() {
+        this.isRecording = false;
+        if (this.videoEncoder) {
+            try {
+                this.videoEncoder.close();
+            } catch {
+                // The encoder may already be closed by stopRecording or an error callback.
+            }
+        }
+        this.videoEncoder = null;
+        this.muxer = null;
+    }
 }

@@ -24,6 +24,7 @@ export interface RecordingEnhancementOptions {
     captureCanvas?: HTMLCanvasElement;
     // 接收 RecordCamera.renderToCanvas 传入的 inputCanvas 参数
     frameProcessor?: (inputCanvas: HTMLCanvasElement) => Promise<void>; 
+    maxInFlightFrames?: number;
 }
 
 export async function exportVideoWithRecordingCamera(
@@ -73,6 +74,7 @@ export async function exportVideoWithRecordingCamera(
         }),
         ...(enhancements?.captureCanvas ? { captureCanvas: enhancements.captureCanvas } : {}),
         ...(enhancements?.frameProcessor ? { frameProcessor: enhancements.frameProcessor } : {}),
+        maxInFlightFrames: enhancements?.maxInFlightFrames,
         enableSSAA: false, // 是否启用超分辨率
     };
     
@@ -94,16 +96,6 @@ export async function exportVideoWithRecordingCamera(
             
             console.log(`[VideoExport] 时间轴模式：总帧数=${totalFrames}, 最后一个关键帧=${lastKeyframeIndex}, 导出帧数=${endFrame} (0到${endFrame - 1})`);
             
-            // ✅ 根据帧率计算每帧的时间间隔
-            const frameRate = timelineController.getFrameRate();
-            const frameTimeMs = 1000 / frameRate; // 每帧的毫秒数（例如 30fps = 33.3ms）
-            
-            // ✅ 计算等待时间：使用帧时间的 30-50%，确保帧完整渲染但不过度等待
-            // 因为渲染本身需要时间，我们只需要等待一小部分来确保异步操作完成
-            const waitTimeMs = Math.max(5, Math.min(20, frameTimeMs * 0.4)); // 至少 5ms，最多 20ms，或帧时间的 40%
-            
-            console.log(`[VideoExport] 帧率同步：帧率=${frameRate} FPS, 每帧时间=${frameTimeMs.toFixed(2)}ms, 等待时间=${waitTimeMs.toFixed(2)}ms`);
-            
             for (let frameIndex = 0; frameIndex < endFrame; frameIndex++) {
                 // 检查是否还在录制中（回调可能已经停止了录制）
                 if (!manager.isRecordingActive()) {
@@ -111,19 +103,9 @@ export async function exportVideoWithRecordingCamera(
                     break;
                 }
                 
-                try {
-                    // ✅ 等待 setFrameIndex 完成（包括所有回调）
-                    // 这会触发场景更新和帧渲染
-                    await timelineController.setFrameIndex(frameIndex);
-                    console.log('frameIndex done', frameIndex);
-                    // ✅ 根据帧率动态等待，确保场景更新和渲染回调完全完成
-                    // 这对于确保帧完整性和流畅度非常重要
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                    
-                } catch (error) {
-                    console.error(`时间轴模式：设置帧索引 ${frameIndex} 失败:`, error);
-                    // 继续下一帧，不中断整个导出过程
-                }
+                // setFrameIndex awaits registered callbacks, including RecordingManager.renderFrame().
+                // Frame readiness is therefore based on actual render/capture/encode work, not a fixed sleep.
+                await timelineController.setFrameIndex(frameIndex);
                 
                 // 再次检查（回调可能在 setFrameIndex 后立即停止了录制）
                 if (!manager.isRecordingActive()) {
@@ -131,12 +113,8 @@ export async function exportVideoWithRecordingCamera(
                 }
             }
             
-            // 如果还没有停止，等待一下确保最后的帧已渲染
-            // 然后检查是否还需要手动停止
             if (manager.isRecordingActive()) {
-                console.log("[VideoExport] 帧循环结束，但 RecordingManager 仍在运行，等待补帧");
-                const frameTime = 1000 / timelineController.getFrameRate();
-                // await new Promise(resolve => setTimeout(resolve, frameTime * 2)); // 等待2帧的时间
+                console.log("[VideoExport] 帧循环结束，准备停止录制并等待编码队列完成");
             }
         } else if (mode === 'realtime') {
             // 真实时间模式：等待录制完成

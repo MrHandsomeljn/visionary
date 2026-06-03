@@ -76,15 +76,20 @@ test('video timeline export drives recording camera from timeline pose and updat
     assert.match(source, /const pose = interpolateCameraPoseAt\(sourceTimeSec\)/);
     assert.match(source, /options\.onProgress\?\.\(\(\(safeFrame \+ 1\) \/ totalFrames\) \* 100\)/);
     assert.match(source, /function setExportProgress\(percent, visible = pendingExportType === 'video'\)/);
-    assert.match(source, /showLoading\(true, t\('loading\.renderingVideo'\), percent, \{ passive: true \}\)/);
+    assert.match(source, /showLoading\(true, t\('loading\.renderingVideo'\), displayPercent, \{ passive: true \}\)/);
 });
 
 test('export render mode labels are modal-specific RGB depth normal translations', () => {
+    const html = readFileSync(new URL('../public/editor.html', import.meta.url), 'utf8');
     const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
 
+    assert.match(html, /data-i18n="sceneSettings\.renderModes\.color">彩色图/);
     assert.match(source, /exportRenderModes:\s*\{[\s\S]*rgb: '彩色图'[\s\S]*depth: '深度图'[\s\S]*normal: '法向图'/);
     assert.match(source, /exportRenderModes:\s*\{[\s\S]*rgb: 'RGB'[\s\S]*depth: 'Depth'[\s\S]*normal: 'Normal'/);
     assert.match(source, /color: t\('modal\.exportRenderModes\.rgb'\)/);
+    assert.match(source, /setElementText\(dom\.modeColor\?\.querySelector\('\.menu-btn-text'\), t\('modal\.exportRenderModes\.rgb'\)\)/);
+    assert.match(source, /setElementText\(dom\.modeDepth\?\.querySelector\('\.menu-btn-text'\), t\('modal\.exportRenderModes\.depth'\)\)/);
+    assert.match(source, /setElementText\(dom\.modeNormal\?\.querySelector\('\.menu-btn-text'\), t\('modal\.exportRenderModes\.normal'\)\)/);
     assert.match(source, /if \(exportModeOptions\[0\]\) exportModeOptions\[0\]\.textContent = t\('modal\.exportRenderModes\.rgb'\)/);
 });
 
@@ -97,4 +102,42 @@ test('video frame capture waits for WebGPU before copying and does not resize th
     assert.doesNotMatch(recordingManager, /options\.mainRenderer\.setSize\(renderWidth, renderHeight, false\)/);
     assert.doesNotMatch(recordingManager, /const renderer = options\.mainRenderer;[\s\S]*renderer\.setSize\(renderWidth, renderHeight, false\)/);
     assert.match(recordingManager, /options\.recordingCamera\.renderer\.setSize\(renderWidth, renderHeight, false\)/);
+});
+
+test('timeline video export waits on render callbacks instead of fixed per-frame sleeps', () => {
+    const exportVideo = readFileSync(new URL('../src/exportMedia/exportVideo.ts', import.meta.url), 'utf8');
+    const timelineModeMatch = exportVideo.match(/if \(mode === 'timeline' && timelineController\) \{([\s\S]*?)\n\s*\} else if \(mode === 'realtime'\)/);
+
+    assert.ok(timelineModeMatch, 'expected timeline export branch');
+    const timelineModeBody = timelineModeMatch[1];
+
+    assert.match(timelineModeBody, /await timelineController\.setFrameIndex\(frameIndex\)/);
+    assert.doesNotMatch(timelineModeBody, /setTimeout\(resolve,\s*100\)/);
+    assert.doesNotMatch(timelineModeBody, /waitTimeMs/);
+    assert.doesNotMatch(timelineModeBody, /继续下一帧/);
+    assert.doesNotMatch(timelineModeBody, /console\.log\('frameIndex done'/);
+});
+
+test('recording manager has bounded encoder backpressure and fails frame errors loudly', () => {
+    const recordingManager = readFileSync(new URL('../src/exportMedia/RecordingManager.ts', import.meta.url), 'utf8');
+
+    assert.match(recordingManager, /maxInFlightFrames\?: number/);
+    assert.match(recordingManager, /DEFAULT_MAX_IN_FLIGHT_FRAMES = 2/);
+    assert.match(recordingManager, /private maxInFlightFrames: number = RecordingManager\.DEFAULT_MAX_IN_FLIGHT_FRAMES/);
+    assert.match(recordingManager, /private async waitForEncoderBackpressure\(\): Promise<void>/);
+    assert.match(recordingManager, /encoder\.encodeQueueSize >= this\.maxInFlightFrames/);
+    assert.match(recordingManager, /await this\.waitForEncoderBackpressure\(\);/);
+    assert.match(recordingManager, /const timestamp = \(this\.currentFrameIndex \* 1000000\) \/ this\.fps/);
+    assert.match(recordingManager, /videoEncoder\.encode\(frame, \{ keyFrame \}\);[\s\S]*frame\.close\(\);[\s\S]*this\.currentFrameIndex\+\+/);
+    assert.match(recordingManager, /catch \(error\) \{[\s\S]*console\.error\('渲染\/编码帧失败:', error\);[\s\S]*throw error;[\s\S]*\}/);
+});
+
+test('export progress bar and loading overlay use the same rounded percent', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(source, /const displayPercent = Math\.round\(safePercent\)/);
+    assert.match(source, /dom\.exportProgressFill\.style\.width = `\$\{displayPercent\}%`/);
+    assert.match(source, /t\('modal\.exportProgressValue', \{ percent: displayPercent \}\)/);
+    assert.match(source, /return displayPercent;/);
+    assert.match(source, /const displayPercent = setExportProgress\(percent, true\);\s*showLoading\(true, t\('loading\.renderingVideo'\), displayPercent, \{ passive: true \}\)/);
 });
