@@ -345,10 +345,12 @@ body.agent-workbench-resizing #agent-workbench {
 }
 
 #agent-workbench.is-collapsed .agent-workflow-tab {
+    flex: 0 0 var(--agent-workflow-tab-width);
     width: var(--agent-workflow-tab-width);
     min-width: var(--agent-workflow-tab-width);
     max-width: var(--agent-workflow-tab-width);
-    height: 48px;
+    height: var(--agent-workflow-tab-width);
+    aspect-ratio: 1 / 1;
 }
 
 #agent-workbench.is-collapsed .agent-workflow-label {

@@ -133,7 +133,7 @@ test('agent workflow tabs keep a fixed width and resize mode disables expensive 
     );
     assert.match(
         css,
-        /#agent-workbench\.is-collapsed \.agent-workflow-tab\s*\{[\s\S]*width:\s*var\(--agent-workflow-tab-width\);[\s\S]*height:\s*48px;[\s\S]*\}/
+        /#agent-workbench\.is-collapsed \.agent-workflow-tab\s*\{[\s\S]*flex:\s*0 0 var\(--agent-workflow-tab-width\);[\s\S]*width:\s*var\(--agent-workflow-tab-width\);[\s\S]*height:\s*var\(--agent-workflow-tab-width\);[\s\S]*aspect-ratio:\s*1 \/ 1;[\s\S]*\}/
     );
     assert.match(
         css,
