@@ -1,5 +1,5 @@
 /**
- * Visionary Editor UI Controller 0.1.8
+ * Visionary Editor UI Controller 0.1.9
  * Handles UI interactions and connects to EditorApp
  */
 
@@ -52,6 +52,7 @@ import { ProjectApiClient } from '../src/editor/project-api-client.js';
 
 // DOM 元素引用
 const dom = {
+    bootLoadingOverlay: document.getElementById('bootLoadingOverlay'),
     app: document.getElementById('app'),
     editorShell: document.getElementById('editor-shell'),
     editorStage: document.getElementById('editor-stage'),
@@ -184,8 +185,11 @@ const dom = {
     timelineRotationInterpolationLabel: document.getElementById('timelineRotationInterpolationLabel'),
     timelineTimingInterpolationLabel: document.getElementById('timelineTimingInterpolationLabel'),
     timelineCatmullParam: document.getElementById('timelineCatmullParam'),
+    timelineCatmullParamValue: document.getElementById('timelineCatmullParamValue'),
     timelineRotationParam: document.getElementById('timelineRotationParam'),
+    timelineRotationParamValue: document.getElementById('timelineRotationParamValue'),
     timelineEaseParam: document.getElementById('timelineEaseParam'),
+    timelineEaseParamValue: document.getElementById('timelineEaseParamValue'),
     cameraDisplayScale: document.getElementById('cameraDisplayScale'),
     cameraDisplayScaleValue: document.getElementById('cameraDisplayScaleValue'),
     timelineCameraFovRange: document.getElementById('timelineCameraFovRange'),
@@ -308,9 +312,13 @@ function createProjectSessionState() {
     };
 }
 
+const DEFAULT_CAMERA_POSITION_TENSION = 0;
+const DEFAULT_CAMERA_ROTATION_STRENGTH = 1;
+const DEFAULT_CAMERA_TIMING_STRENGTH = 0;
+
 // 应用状态
 const state = {
-    VERSION: '0.1.8',
+    VERSION: '0.1.9',
     exportMode: 'color', // 'color' | 'depth' | 'normal'
     selectedModelId: null,
     cameraSequenceVisible: true,
@@ -330,9 +338,9 @@ const state = {
     cameraPositionInterpolation: 'linear',
     cameraRotationInterpolation: 'slerp',
     cameraTimingInterpolation: 'linear',
-    cameraCatmullTension: 1,
-    cameraRotationStrength: 0,
-    cameraEaseStrength: 0,
+    cameraCatmullTension: DEFAULT_CAMERA_POSITION_TENSION,
+    cameraRotationStrength: DEFAULT_CAMERA_ROTATION_STRENGTH,
+    cameraEaseStrength: DEFAULT_CAMERA_TIMING_STRENGTH,
     cameraSequenceDisplayScale: 1.0,
     timelineDurationSec: 10,
     sceneBackgroundHex: '#707070',
@@ -404,6 +412,7 @@ let workspaceSaveInFlight = null;
 let workspaceSaveQueued = false;
 let serverProjectAutosaveInFlight = null;
 let serverProjectAutosaveQueued = false;
+let modelRenameState = null;
 let lastCanvasViewportSync = null;
 const projectApi = new ProjectApiClient();
 const agentSessionActionHandlers = {
@@ -424,6 +433,7 @@ const AGENT_WORKBENCH_COLLAPSED_WIDTH = 64;
 const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_left_sidebar_width_v4';
 const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_right_sidebar_width';
 const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
+const TIMELINE_PLAYBACK_SPEED_DEFAULT = 1.0;
 const TIMELINE_MIN_DURATION_SEC = 10;
 const TIMELINE_SLIDER_THUMB_PX = 16;
 const EXPORT_FALLBACK_FPS = 24;
@@ -467,7 +477,7 @@ const CAMERA_POSITION_INTERPOLATION_CONFIGS = {
         min: 0,
         max: 1,
         step: 0.01,
-        defaultParam: 1,
+        defaultParam: DEFAULT_CAMERA_POSITION_TENSION,
         format: (value) => value.toFixed(2),
     },
 };
@@ -483,7 +493,7 @@ const CAMERA_ROTATION_INTERPOLATION_STRENGTH_CONFIG = {
     min: 0,
     max: 1,
     step: 0.01,
-    defaultParam: 0,
+    defaultParam: DEFAULT_CAMERA_ROTATION_STRENGTH,
     format: (value) => value.toFixed(2),
 };
 const CAMERA_TIMING_INTERPOLATION_CONFIGS = {
@@ -531,7 +541,7 @@ const EXPORT_PRESET_RESOLUTIONS = [
 const UI_TEXT = {
     zh: {
         editor: {
-            title: 'Visionary Editor 0.1.8',
+            title: 'Visionary Editor 0.1.9',
         },
         loading: {
             default: '加载中...',
@@ -656,6 +666,8 @@ const UI_TEXT = {
             exportCancelled: '已取消导出项目',
             exportFailed: '导出项目失败',
             folderFallback: '文件夹',
+            logoutDirtyConfirm: '当前服务器项目有未同步更改。点击“确定”会先同步再退出；点击“取消”会直接放弃更改并退出登录。',
+            logoutDirtySyncFailed: '同步未完成，已取消退出登录',
         },
         theme: {
             switchToLight: '切换到白天',
@@ -787,6 +799,7 @@ const UI_TEXT = {
             scale: '缩放',
             speed: '速率',
             pointCount: '{count} 点',
+            renameModel: '重命名模型',
             toggleVisibility: '切换可见性',
             deleteModel: '删除',
             resizeModelList: '调整模型列表宽度',
@@ -802,7 +815,7 @@ const UI_TEXT = {
             aspect: '比例',
             fov: 'FOV',
             renderModes: {
-                color: '图片',
+                color: '彩色图',
                 depth: '深度图',
                 normal: '法向图',
             },
@@ -848,9 +861,12 @@ const UI_TEXT = {
             size: '大小',
             fov: 'FOV',
             interpolation: '插值',
-            positionInterpolation: '位置插值',
-            rotationInterpolation: '旋转插值',
-            timingInterpolation: '时间节奏',
+            positionInterpolation: '位置平滑',
+            rotationInterpolation: '旋转平滑',
+            timingInterpolation: '帧间节奏',
+            positionInterpolationShort: '位置平滑',
+            rotationInterpolationShort: '旋转平滑',
+            timingInterpolationShort: '帧间节奏',
             parameter: '参数',
             keyframes: '关键帧',
             cameraSequence: '相机序列',
@@ -946,6 +962,7 @@ const UI_TEXT = {
             invalidFov: 'FOV 格式错误',
             timelineFovSet: '时间轴 FOV: {value}°',
             fovSet: 'FOV: {value}°',
+            invalidParameter: '{label} 参数格式错误',
             setFovFailed: '设置 FOV 失败',
             invalidBackgroundColor: '背景色格式错误，请使用 #RRGGBB',
             setBackgroundFailed: '设置背景色失败',
@@ -963,6 +980,12 @@ const UI_TEXT = {
             modelVisibility: '模型可见性: {state}',
             modelSelectionCleared: '已取消选中模型',
             selectedModel: '选中模型: {name}',
+            invalidRenameEmpty: '文件名不能为空',
+            invalidRenameReserved: '文件名不合法，请更换名称',
+            modelRenamed: '模型已重命名: {name}',
+            modelRenameConflict: '模型重命名冲突: {name} 已存在',
+            modelRenameRejected: '模型重命名未生效',
+            modelRenameFailed: '模型重命名失败: {message}',
             modelUpdated: '模型已更新',
             transformReset: '变换已重置',
             noModelSelected: '未选中模型',
@@ -1042,7 +1065,7 @@ const UI_TEXT = {
     },
     en: {
         editor: {
-            title: 'Visionary Editor 0.1.8',
+            title: 'Visionary Editor 0.1.9',
         },
         loading: {
             default: 'Loading...',
@@ -1167,6 +1190,8 @@ const UI_TEXT = {
             exportCancelled: 'Project export cancelled',
             exportFailed: 'Project export failed',
             folderFallback: 'folder',
+            logoutDirtyConfirm: 'The current server project has unsynced changes. Choose OK to sync before logout, or Cancel to discard changes and log out.',
+            logoutDirtySyncFailed: 'Sync did not complete. Logout was cancelled.',
         },
         theme: {
             switchToLight: 'Switch to light mode',
@@ -1298,6 +1323,7 @@ const UI_TEXT = {
             scale: 'Scale',
             speed: 'Speed',
             pointCount: '{count} pts',
+            renameModel: 'Rename model',
             toggleVisibility: 'Toggle visibility',
             deleteModel: 'Delete',
             resizeModelList: 'Resize model list',
@@ -1313,7 +1339,7 @@ const UI_TEXT = {
             aspect: 'Aspect',
             fov: 'FOV',
             renderModes: {
-                color: 'Color',
+                color: 'RGB',
                 depth: 'Depth',
                 normal: 'Normal',
             },
@@ -1359,9 +1385,12 @@ const UI_TEXT = {
             size: 'Size',
             fov: 'FOV',
             interpolation: 'Interpolation',
-            positionInterpolation: 'Position interpolation',
-            rotationInterpolation: 'Rotation interpolation',
-            timingInterpolation: 'Timing',
+            positionInterpolation: 'Position smoothness',
+            rotationInterpolation: 'Rotation smoothness',
+            timingInterpolation: 'Frame tempo',
+            positionInterpolationShort: 'Pos Smooth',
+            rotationInterpolationShort: 'Rot Smooth',
+            timingInterpolationShort: 'Frame Tempo',
             parameter: 'Parameter',
             keyframes: 'Keyframes',
             cameraSequence: 'Camera sequence',
@@ -1457,6 +1486,7 @@ const UI_TEXT = {
             invalidFov: 'Invalid FOV',
             timelineFovSet: 'Timeline FOV: {value}°',
             fovSet: 'FOV: {value}°',
+            invalidParameter: 'Invalid value for {label}',
             setFovFailed: 'Failed to set FOV',
             invalidBackgroundColor: 'Invalid background color. Use #RRGGBB',
             setBackgroundFailed: 'Failed to set background color',
@@ -1474,6 +1504,12 @@ const UI_TEXT = {
             modelVisibility: 'Model visibility: {state}',
             modelSelectionCleared: 'Model selection cleared',
             selectedModel: 'Selected model: {name}',
+            invalidRenameEmpty: 'File name cannot be empty',
+            invalidRenameReserved: 'Invalid file name. Choose another name',
+            modelRenamed: 'Model renamed: {name}',
+            modelRenameConflict: 'Model rename conflict: {name} already exists',
+            modelRenameRejected: 'Model rename was rejected',
+            modelRenameFailed: 'Model rename failed: {message}',
             modelUpdated: 'Model updated',
             transformReset: 'Transform reset',
             noModelSelected: 'No model selected',
@@ -2324,6 +2360,9 @@ function updateLocalizedStaticUi() {
     document.documentElement.lang = state.uiLanguage === 'en' ? 'en' : 'zh-CN';
     applyDeclarativeI18n();
 
+    if (dom.bootLoadingOverlay) {
+        setElementText(dom.bootLoadingOverlay.querySelector('.loading-text'), t('canvas.loading'));
+    }
     if (dom.loadingOverlay && dom.loadingOverlay.classList.contains('hidden')) {
         setElementText(dom.loadingOverlay.querySelector('.loading-text'), t('canvas.loading'));
     }
@@ -2360,9 +2399,9 @@ function updateLocalizedStaticUi() {
     setElementText(sceneSettingLabels[2], t('sceneSettings.mode'));
     setElementText(sceneSettingLabels[3], t('sceneSettings.depthScale'));
     setElementText(sceneSettingLabels[4], t('sceneSettings.fov'));
-    setElementText(dom.modeColor?.querySelector('.menu-btn-text'), t('sceneSettings.renderModes.color'));
-    setElementText(dom.modeDepth?.querySelector('.menu-btn-text'), t('sceneSettings.renderModes.depth'));
-    setElementText(dom.modeNormal?.querySelector('.menu-btn-text'), t('sceneSettings.renderModes.normal'));
+    setElementText(dom.modeColor?.querySelector('.menu-btn-text'), t('modal.exportRenderModes.rgb'));
+    setElementText(dom.modeDepth?.querySelector('.menu-btn-text'), t('modal.exportRenderModes.depth'));
+    setElementText(dom.modeNormal?.querySelector('.menu-btn-text'), t('modal.exportRenderModes.normal'));
     dom.sceneDepthScaleNumber?.setAttribute('aria-label', t('sceneSettings.depthScale'));
 
     const floatingGroups = dom.rightSidebar?.querySelectorAll('.floating-tool-group') || [];
@@ -2392,9 +2431,9 @@ function updateLocalizedStaticUi() {
     setElementText(cameraSettingLabels[0], t('timeline.track'));
     setElementText(cameraSettingLabels[1], t('timeline.size'));
     setElementText(cameraSettingLabels[2], t('timeline.fov'));
-    setElementText(dom.timelinePositionInterpolationLabel, t('timeline.positionInterpolation'));
-    setElementText(dom.timelineRotationInterpolationLabel, t('timeline.rotationInterpolation'));
-    setElementText(dom.timelineTimingInterpolationLabel, t('timeline.timingInterpolation'));
+    setElementText(dom.timelinePositionInterpolationLabel, t('timeline.positionInterpolationShort'));
+    setElementText(dom.timelineRotationInterpolationLabel, t('timeline.rotationInterpolationShort'));
+    setElementText(dom.timelineTimingInterpolationLabel, t('timeline.timingInterpolationShort'));
     setElementText(dom.btnToggleCameraSequenceDrag?.querySelector('.btn-text'), t('timeline.drag'));
     setButtonTooltip(dom.btnToggleCameraSequenceDrag, t('timeline.dragHint'), t('timeline.dragHint'));
     dom.btnToggleCameraSequence?.setAttribute('title', t('timeline.toggleSequenceVisibility'));
@@ -4984,7 +5023,9 @@ function syncTimelineCameraFovInputs() {
     const currentFov = getTimelineCameraFovAtTime(Number(state.currentTime) || 0);
     const fixed = Number(currentFov || getFallbackTimelineCameraFov()).toFixed(3);
     if (dom.timelineCameraFovRange) dom.timelineCameraFovRange.value = fixed;
-    if (dom.timelineCameraFovNumber) dom.timelineCameraFovNumber.value = fixed;
+    if (dom.timelineCameraFovNumber && document.activeElement !== dom.timelineCameraFovNumber) {
+        dom.timelineCameraFovNumber.value = fixed;
+    }
 }
 
 function applyTimelineCameraFov(value, silent = false, markDirty = true) {
@@ -5035,9 +5076,22 @@ function applyTimelineCameraFov(value, silent = false, markDirty = true) {
     return true;
 }
 
+function updateTimelineCameraFovFromInput() {
+    if (!dom.timelineCameraFovNumber) return;
+    const parsed = extractNumericValue(dom.timelineCameraFovNumber.value);
+    if (parsed === null) return;
+    applyTimelineCameraFov(parsed, true);
+}
+
 function commitTimelineCameraFovFromInput() {
     if (!dom.timelineCameraFovNumber) return;
-    applyTimelineCameraFov(dom.timelineCameraFovNumber.value, false);
+    const parsed = extractNumericValue(dom.timelineCameraFovNumber.value);
+    if (parsed === null) {
+        dom.timelineCameraFovNumber.value = Number(getTimelineCameraFovAtTime(Number(state.currentTime) || 0) || getFallbackTimelineCameraFov()).toFixed(3);
+        return;
+    }
+    applyTimelineCameraFov(parsed, false);
+    dom.timelineCameraFovNumber.value = Number(getTimelineCameraFovAtTime(Number(state.currentTime) || 0) || getFallbackTimelineCameraFov()).toFixed(3);
 }
 
 function handleTimelineCameraFovInputKeydown(e) {
@@ -5045,7 +5099,20 @@ function handleTimelineCameraFovInputKeydown(e) {
     if (e.key === 'Enter') {
         commitTimelineCameraFovFromInput();
         dom.timelineCameraFovNumber.blur();
+        return;
     }
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+
+    e.preventDefault();
+    const direction = e.key === 'ArrowUp' ? 1 : -1;
+    const nextValue = nudgeNumericInputValue(
+        dom.timelineCameraFovNumber.value,
+        0.001,
+        Number(getTimelineCameraFovAtTime(Number(state.currentTime) || 0) || getFallbackTimelineCameraFov()),
+        direction
+    );
+    dom.timelineCameraFovNumber.value = nextValue.toFixed(3);
+    applyTimelineCameraFov(nextValue, true);
 }
 
 function syncSceneFovInputs() {
@@ -6109,6 +6176,12 @@ function showLoading(show, text = t('loading.default'), progress = 0, options = 
     }
 }
 
+function setBootLoadingVisible(visible) {
+    if (!dom.bootLoadingOverlay) return;
+    dom.bootLoadingOverlay.classList.toggle('hidden', !visible);
+    dom.bootLoadingOverlay.setAttribute('aria-busy', visible ? 'true' : 'false');
+}
+
 /**
  * 显示错误信息
  */
@@ -6183,7 +6256,7 @@ function syncCameraSequenceDisplayScaleControl() {
     if (dom.cameraDisplayScale) {
         dom.cameraDisplayScale.value = state.cameraSequenceDisplayScale.toFixed(2);
     }
-    if (dom.cameraDisplayScaleValue) {
+    if (dom.cameraDisplayScaleValue && document.activeElement !== dom.cameraDisplayScaleValue) {
         dom.cameraDisplayScaleValue.value = state.cameraSequenceDisplayScale.toFixed(2);
     }
 }
@@ -6205,9 +6278,22 @@ function setCameraSequenceDisplayScale(value, silent = false) {
     return true;
 }
 
+function updateCameraSequenceDisplayScaleFromInput() {
+    if (!dom.cameraDisplayScaleValue) return;
+    const parsed = extractNumericValue(dom.cameraDisplayScaleValue.value);
+    if (parsed === null) return;
+    setCameraSequenceDisplayScale(parsed, true);
+}
+
 function commitCameraSequenceDisplayScaleFromInput() {
     if (!dom.cameraDisplayScaleValue) return;
-    setCameraSequenceDisplayScale(dom.cameraDisplayScaleValue.value, false);
+    const parsed = extractNumericValue(dom.cameraDisplayScaleValue.value);
+    if (parsed === null) {
+        dom.cameraDisplayScaleValue.value = Number(state.cameraSequenceDisplayScale || CAMERA_DISPLAY_SCALE_DEFAULT).toFixed(2);
+        return;
+    }
+    setCameraSequenceDisplayScale(parsed, false);
+    dom.cameraDisplayScaleValue.value = Number(state.cameraSequenceDisplayScale || CAMERA_DISPLAY_SCALE_DEFAULT).toFixed(2);
 }
 
 function handleCameraSequenceDisplayScaleInputKeydown(e) {
@@ -6215,7 +6301,20 @@ function handleCameraSequenceDisplayScaleInputKeydown(e) {
     if (e.key === 'Enter') {
         commitCameraSequenceDisplayScaleFromInput();
         dom.cameraDisplayScaleValue.blur();
+        return;
     }
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+
+    e.preventDefault();
+    const direction = e.key === 'ArrowUp' ? 1 : -1;
+    const nextValue = nudgeNumericInputValue(
+        dom.cameraDisplayScaleValue.value,
+        0.01,
+        Number(state.cameraSequenceDisplayScale || CAMERA_DISPLAY_SCALE_DEFAULT),
+        direction
+    );
+    dom.cameraDisplayScaleValue.value = nextValue.toFixed(2);
+    setCameraSequenceDisplayScale(nextValue, true);
 }
 
 function updateCameraSequenceToggleButton() {
@@ -6237,6 +6336,9 @@ function updateCameraSequenceToggleButton() {
 function updateModelList() {
     if (!dom.modelList) return;
     const models = app?.getModels?.() || [];
+    if (modelRenameState && !models.some((model) => model.id === modelRenameState.modelId)) {
+        modelRenameState = null;
+    }
     updateCameraSequenceToggleButton();
 
     if (models.length === 0) {
@@ -6247,7 +6349,26 @@ function updateModelList() {
     } else {
         dom.modelList.innerHTML = models.map((model) => `
             <div class="model-item ${state.selectedModelId === model.id ? 'selected' : ''}" data-id="${model.id}">
-                <span class="model-name">${model.name}</span>
+                ${(() => {
+                    const renameDraft = getModelRenameDraft(model);
+                    if (modelRenameState?.modelId !== model.id) {
+                        return `<span class="model-name" title="${escapeHtml(model.name)}">${escapeHtml(model.name)}</span>`;
+                    }
+                    return `
+                        <label class="model-name-edit" data-id="${model.id}">
+                            <input
+                                type="text"
+                                class="model-name-input"
+                                data-id="${model.id}"
+                                value="${escapeHtml(modelRenameState.draftStem)}"
+                                spellcheck="false"
+                                autocomplete="off"
+                                aria-label="${escapeHtml(t('sidebar.renameModel'))}"
+                            >
+                            ${renameDraft.extension ? `<span class="model-name-ext">${escapeHtml(renameDraft.extension)}</span>` : ''}
+                        </label>
+                    `;
+                })()}
                 <span class="model-points">${t('sidebar.pointCount', { count: model.pointCount.toLocaleString() })}</span>
                 <button class="model-visibility-btn ${model.visible ? 'active' : ''}" data-id="${model.id}" title="${t('sidebar.toggleVisibility')}">
                     ${model.visible ? t('common.visible') : t('common.hidden')}
@@ -6261,6 +6382,9 @@ function updateModelList() {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const id = btn.dataset.id;
+                if (modelRenameState?.modelId === id) {
+                    modelRenameState = null;
+                }
                 app.removeModel(id);
                 if (state.selectedModelId === id) {
                     closeEditor();
@@ -6287,7 +6411,53 @@ function updateModelList() {
             item.addEventListener('click', () => {
                 selectModel(item.dataset.id);
             });
+            item.addEventListener('dblclick', (event) => {
+                if (event.target?.closest?.('.model-visibility-btn, .model-remove, .model-name-input')) {
+                    return;
+                }
+                beginModelRename(item.dataset.id);
+            });
         });
+
+        dom.modelList.querySelectorAll('.model-name').forEach(label => {
+            label.addEventListener('dblclick', (event) => {
+                event.stopPropagation();
+                beginModelRename(label.closest('.model-item')?.dataset.id);
+            });
+        });
+
+        dom.modelList.querySelectorAll('.model-name-input').forEach(input => {
+            input.addEventListener('click', (event) => {
+                event.stopPropagation();
+            });
+            input.addEventListener('dblclick', (event) => {
+                event.stopPropagation();
+            });
+            input.addEventListener('input', () => {
+                if (!modelRenameState || modelRenameState.modelId !== input.dataset.id) return;
+                const sanitized = sanitizeRenameStemInput(input.value);
+                modelRenameState.draftStem = sanitized;
+                if (sanitized !== input.value) {
+                    input.value = sanitized;
+                }
+            });
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void commitModelRename(input.dataset.id, { keepEditingOnError: true });
+                } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    cancelModelRename();
+                }
+            });
+            input.addEventListener('blur', () => {
+                void commitModelRename(input.dataset.id, { keepEditingOnError: true });
+            });
+        });
+
+        if (modelRenameState?.modelId) {
+            focusModelRenameInput(modelRenameState.modelId);
+        }
     }
 
     updateModelCount();
@@ -6634,9 +6804,9 @@ function setExportMode(mode, silent = false) {
     }
 
     const labelMap = {
-        color: t('sceneSettings.renderModes.color'),
-        depth: t('sceneSettings.renderModes.depth'),
-        normal: t('sceneSettings.renderModes.normal'),
+        color: t('modal.exportRenderModes.rgb'),
+        depth: t('modal.exportRenderModes.depth'),
+        normal: t('modal.exportRenderModes.normal'),
     };
     if (!silent) {
         showInfo(t('messages.displayModeSet', { mode: labelMap[mode] || mode }));
@@ -6842,16 +7012,18 @@ function buildExportResolutionOptions(aspectOption = null) {
 
 function setExportProgress(percent, visible = pendingExportType === 'video') {
     const safePercent = Math.max(0, Math.min(100, Number(percent) || 0));
+    const displayPercent = Math.round(safePercent);
     dom.exportProgress?.classList.toggle('hidden', !visible);
     dom.exportProgress?.setAttribute('aria-hidden', visible ? 'false' : 'true');
     if (dom.exportProgressFill) {
-        dom.exportProgressFill.style.width = `${safePercent}%`;
+        dom.exportProgressFill.style.width = `${displayPercent}%`;
     }
     if (dom.exportProgressText) {
-        dom.exportProgressText.textContent = safePercent > 0
-            ? t('modal.exportProgressValue', { percent: Math.round(safePercent) })
+        dom.exportProgressText.textContent = displayPercent > 0
+            ? t('modal.exportProgressValue', { percent: displayPercent })
             : t('modal.exportProgressIdle');
     }
+    return displayPercent;
 }
 
 function setExportModalBusy(busy) {
@@ -7236,8 +7408,8 @@ async function exportVideoWithOfficialPipeline(options) {
             playbackSpeed: options.playbackSpeed,
             fallbackSnapshot: cameraSnapshot,
             onProgress: (percent) => {
-                setExportProgress(percent, true);
-                showLoading(true, t('loading.renderingVideo'), percent, { passive: true });
+                const displayPercent = setExportProgress(percent, true);
+                showLoading(true, t('loading.renderingVideo'), displayPercent, { passive: true });
             },
         });
         (window).startTime = Date.now();
@@ -7326,6 +7498,224 @@ function isHttpUrl(value) {
 
 function sanitizeFileName(name) {
     return String(name || 'model').replace(/[\\/:*?"<>|]/g, '_').trim() || 'model';
+}
+
+const MODEL_COMPOUND_EXTENSIONS = ['.compressed.ply'];
+const WINDOWS_RESERVED_FILE_STEM_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+function splitEditableFileNameParts(fileName) {
+    const normalized = sanitizeFileName(extractFileName(fileName || 'model'));
+    const lower = normalized.toLowerCase();
+    const compoundExtension = MODEL_COMPOUND_EXTENSIONS.find((extension) => lower.endsWith(extension));
+    if (compoundExtension && normalized.length > compoundExtension.length) {
+        return {
+            stem: normalized.slice(0, normalized.length - compoundExtension.length),
+            extension: normalized.slice(normalized.length - compoundExtension.length),
+        };
+    }
+    const dotIndex = normalized.lastIndexOf('.');
+    if (dotIndex <= 0) {
+        return { stem: normalized, extension: '' };
+    }
+    return {
+        stem: normalized.slice(0, dotIndex),
+        extension: normalized.slice(dotIndex),
+    };
+}
+
+function sanitizeRenameStemInput(value) {
+    return String(value || '')
+        .replace(/[\u0000-\u001f]/g, '')
+        .replace(/[\\/:*?"<>|]/g, '_')
+        .replace(/^\.+/, '')
+        .replace(/\s+$/g, '')
+        .replace(/\.+$/g, '');
+}
+
+function validateRenameStem(stem) {
+    const candidate = String(stem || '').trim();
+    if (!candidate) {
+        return 'messages.invalidRenameEmpty';
+    }
+    if (candidate === '.' || candidate === '..' || WINDOWS_RESERVED_FILE_STEM_RE.test(candidate)) {
+        return 'messages.invalidRenameReserved';
+    }
+    return null;
+}
+
+function isRelativeWorkspaceAssetPath(sourcePath) {
+    if (typeof sourcePath !== 'string') return false;
+    const normalized = sourcePath.trim().replace(/\\/g, '/');
+    if (!normalized || normalized.startsWith('/')) return false;
+    if (/^[a-z]:\//i.test(normalized)) return false;
+    if (isHttpUrl(normalized)) return false;
+    if (isWorkspaceMaterializedAssetPath(normalized)) return false;
+    if (isServerMaterializedAssetPath(normalized)) return false;
+    if (isServerAgentAssetPath(normalized)) return false;
+    return true;
+}
+
+function buildSiblingAssetPath(relativePath, fileName) {
+    const parts = String(relativePath || '').replace(/\\/g, '/').split('/').filter(Boolean);
+    if (parts.length === 0) {
+        return fileName;
+    }
+    parts[parts.length - 1] = fileName;
+    return parts.join('/');
+}
+
+function getModelRenameDraft(model) {
+    const fileName = sanitizeFileName(model?.name || extractFileName(model?.sourcePath || '') || 'model');
+    return splitEditableFileNameParts(fileName);
+}
+
+function focusModelRenameInput(modelId) {
+    if (!dom.modelList || !modelId) return;
+    const selector = `.model-name-input[data-id="${CSS.escape(String(modelId))}"]`;
+    const input = dom.modelList.querySelector(selector);
+    if (!(input instanceof HTMLInputElement) || document.activeElement === input) return;
+    requestAnimationFrame(() => {
+        input.focus();
+        input.select();
+    });
+}
+
+function beginModelRename(modelId) {
+    const model = app?.getModel?.(modelId);
+    if (!model) return;
+    const draft = getModelRenameDraft(model);
+    modelRenameState = {
+        modelId,
+        draftStem: draft.stem,
+        busy: false,
+    };
+    updateModelList();
+    focusModelRenameInput(modelId);
+}
+
+function cancelModelRename() {
+    if (!modelRenameState) return;
+    modelRenameState = null;
+    updateModelList();
+}
+
+async function persistModelRenameNow() {
+    if (isServerProjectSessionActive()) {
+        return saveServerProjectToCurrentProject({ silent: true });
+    }
+    if (isLocalWorkspaceSyncMode() && sceneFs.isWorkspaceWritable?.()) {
+        return saveWorkspaceToCurrentWorkspace({
+            requestWorkspaceIfNeeded: false,
+            silent: true,
+            includeAssetPayloads: false,
+        });
+    }
+    return false;
+}
+
+async function commitModelRename(modelId, options = {}) {
+    const { keepEditingOnError = true } = options;
+    if (!modelRenameState || modelRenameState.modelId !== modelId || modelRenameState.busy) {
+        return false;
+    }
+    const model = app?.getModel?.(modelId);
+    if (!model) {
+        modelRenameState = null;
+        updateModelList();
+        return false;
+    }
+
+    const renameDraft = getModelRenameDraft(model);
+    const nextStem = sanitizeRenameStemInput(modelRenameState.draftStem);
+    modelRenameState.draftStem = nextStem;
+    const validationErrorKey = validateRenameStem(nextStem);
+    if (validationErrorKey) {
+        showError(t(validationErrorKey));
+        updateModelList();
+        if (keepEditingOnError) {
+            focusModelRenameInput(modelId);
+        } else {
+            modelRenameState = null;
+            updateModelList();
+        }
+        return false;
+    }
+
+    const nextName = `${nextStem}${renameDraft.extension}`;
+    if (nextName === model.name) {
+        modelRenameState = null;
+        updateModelList();
+        return true;
+    }
+
+    modelRenameState.busy = true;
+    let nextSourcePath = typeof model.sourcePath === 'string' ? model.sourcePath : undefined;
+    let nextSourceFile = model.sourceFile instanceof File ? model.sourceFile : undefined;
+    let renameApplied = false;
+    try {
+        if (sceneFs.isWorkspaceWritable?.() && isRelativeWorkspaceAssetPath(nextSourcePath)) {
+            const renamedSourcePath = buildSiblingAssetPath(nextSourcePath, nextName);
+            if (renamedSourcePath !== nextSourcePath) {
+                try {
+                    await sceneFs.readBinaryFromRoot(nextSourcePath);
+                    await sceneFs.renameRootFile(nextSourcePath, renamedSourcePath);
+                    nextSourcePath = renamedSourcePath;
+                } catch (error) {
+                    const errorMessage = error?.message || String(error);
+                    if (/target already exists/i.test(errorMessage)) {
+                        throw new Error(t('messages.modelRenameConflict', { name: nextName }));
+                    }
+                    if (!/file not found/i.test(errorMessage)) {
+                        throw error;
+                    }
+                }
+            }
+        }
+
+        if (nextSourceFile instanceof File && nextSourceFile.name !== nextName) {
+            nextSourceFile = new File([nextSourceFile], nextName, {
+                type: nextSourceFile.type,
+                lastModified: nextSourceFile.lastModified,
+            });
+        }
+
+        const renamed = app.renameModel(modelId, nextName, {
+            sourcePath: nextSourcePath,
+            sourceFile: nextSourceFile,
+        });
+        if (!renamed) {
+            throw new Error(t('messages.modelRenameRejected'));
+        }
+        renameApplied = true;
+
+        modelRenameState = null;
+        if (state.selectedModelId === modelId && dom.selectedModelName) {
+            dom.selectedModelName.textContent = nextName;
+        }
+        markWorkspaceDirty('model-rename');
+        await persistModelRenameNow();
+        showInfo(t('messages.modelRenamed', { name: nextName }));
+        return true;
+    } catch (error) {
+        modelRenameState.busy = false;
+        const message = error?.message || String(error);
+        if (renameApplied) {
+            modelRenameState = null;
+            updateModelList();
+            showError(t('messages.modelRenameFailed', { message }));
+            return false;
+        }
+        showError(
+            /^模型重命名冲突|^Model rename conflict/i.test(message)
+                ? message
+                : t('messages.modelRenameFailed', { message })
+        );
+        updateModelList();
+        if (keepEditingOnError) {
+            focusModelRenameInput(modelId);
+        }
+        return false;
+    }
 }
 
 function toHexFromBgColor(bgColor) {
@@ -7485,6 +7875,54 @@ function clearActiveServerProjectAssetCaches() {
     state.projectSession.activeProjectAgentAssetPaths = new Set();
 }
 
+function mergeServerAssetPathSets(...sets) {
+    const merged = new Set();
+    sets.forEach((paths) => {
+        if (!(paths instanceof Set)) return;
+        paths.forEach((value) => {
+            const relativePath = String(value || '').trim();
+            if (relativePath) {
+                merged.add(relativePath);
+            }
+        });
+    });
+    return merged;
+}
+
+async function resolveServerProjectExistingAssetPaths({ user, projectId, fallbackScenePaths = new Set(), fallbackAgentPaths = new Set() } = {}) {
+    const fallback = {
+        scene: mergeServerAssetPathSets(fallbackScenePaths),
+        agent: mergeServerAssetPathSets(fallbackAgentPaths),
+    };
+    if (!user || !projectId) {
+        return fallback;
+    }
+    try {
+        const index = await projectApi.loadAssetIndex(user, projectId);
+        const indexedScenePaths = new Set(
+            (Array.isArray(index?.scene) ? index.scene : [])
+                .map((value) => String(value || '').trim())
+                .filter((value) => isServerMaterializedAssetPath(value))
+        );
+        const indexedAgentPaths = new Set(
+            (Array.isArray(index?.agent) ? index.agent : [])
+                .map((value) => String(value || '').trim())
+                .filter((value) => isServerAgentAssetPath(value))
+        );
+        return {
+            scene: mergeServerAssetPathSets(fallback.scene, indexedScenePaths),
+            agent: mergeServerAssetPathSets(fallback.agent, indexedAgentPaths),
+        };
+    } catch (error) {
+        console.debug('[ProjectSync] resolveServerProjectExistingAssetPaths:error', {
+            user,
+            projectId,
+            error: error?.message || String(error),
+        });
+        return fallback;
+    }
+}
+
 async function resolveModelAssetBytes(model, sourcePath) {
     const sourceFile = model?.sourceFile;
     if (sourceFile instanceof Blob) {
@@ -7598,6 +8036,7 @@ async function buildSceneWorkspaceSnapshot(options = {}) {
         allowWorkspaceMaterializedAssetReuse = true,
         allowServerMaterializedAssetReuse = false,
     } = options;
+    const legacyInterpolation = buildLegacyCameraInterpolationSnapshot();
     const models = app.getModels();
     const assets = [];
     const assetInputs = [];
@@ -7612,7 +8051,7 @@ async function buildSceneWorkspaceSnapshot(options = {}) {
         const model = models[i];
         const sourceFile = model.sourceFile;
         const sourcePath = String(model.sourcePath || sourceFile?.name || model.name || `model-${i + 1}`);
-        const candidateName = sanitizeFileName(extractFileName(sourcePath));
+        const candidateName = sanitizeFileName(model.name || extractFileName(sourcePath));
         const shouldReuseWorkspaceMaterializedPath = allowWorkspaceMaterializedAssetReuse && isWorkspaceMaterializedAssetPath(sourcePath);
         const shouldReuseServerMaterializedPath = allowServerMaterializedAssetReuse && isServerMaterializedAssetPath(sourcePath);
         const canProvideAssetPayload = sourceFile instanceof Blob || (sceneFs.isWorkspaceWritable?.() && isWorkspaceMaterializedAssetPath(sourcePath));
@@ -7708,11 +8147,11 @@ async function buildSceneWorkspaceSnapshot(options = {}) {
                 positionInterpolationMode: resolveCameraPositionInterpolationModeFromTension(state.cameraCatmullTension),
                 rotationInterpolationMode: resolveCameraRotationInterpolationModeFromStrength(state.cameraRotationStrength),
                 timingInterpolationMode: resolveCameraTimingInterpolationModeFromStrength(state.cameraEaseStrength),
-                positionInterpolationStrength: Number(state.cameraCatmullTension ?? 1),
-                rotationInterpolationStrength: Number(state.cameraRotationStrength ?? 0),
-                timingInterpolationStrength: Number(state.cameraEaseStrength ?? 0),
-                catmullTension: Number(state.cameraCatmullTension ?? 1),
-                easeStrength: Number(state.cameraEaseStrength ?? 0),
+                positionInterpolationStrength: Number(state.cameraCatmullTension ?? DEFAULT_CAMERA_POSITION_TENSION),
+                rotationInterpolationStrength: Number(state.cameraRotationStrength ?? DEFAULT_CAMERA_ROTATION_STRENGTH),
+                timingInterpolationStrength: Number(state.cameraEaseStrength ?? DEFAULT_CAMERA_TIMING_STRENGTH),
+                catmullTension: Number(state.cameraCatmullTension ?? DEFAULT_CAMERA_POSITION_TENSION),
+                easeStrength: Number(state.cameraEaseStrength ?? DEFAULT_CAMERA_TIMING_STRENGTH),
                 selectedFrame: Number(state.selectedFrame || 0),
                 currentTime: Number(state.currentTime || 0),
                 isLooping: Boolean(state.isLooping),
@@ -8082,17 +8521,23 @@ async function saveServerProjectToCurrentProject(options = {}) {
                 includeAssets: true,
                 includeAssetPayloads: true,
             });
+            const existingServerAssetPaths = await resolveServerProjectExistingAssetPaths({
+                user: state.projectSession.user,
+                projectId: state.projectSession.activeProjectId,
+                fallbackScenePaths: state.projectSession.activeProjectSceneAssetPaths,
+                fallbackAgentPaths: state.projectSession.activeProjectAgentAssetPaths,
+            });
             const assetWrites = await uploadServerProjectAssets({
                 user: state.projectSession.user,
                 projectId: state.projectSession.activeProjectId,
                 assetInputs,
-                existingAssetPaths: state.projectSession.activeProjectSceneAssetPaths,
+                existingAssetPaths: existingServerAssetPaths.scene,
             });
             await uploadServerAgentHistoryAssets({
                 user: state.projectSession.user,
                 projectId: state.projectSession.activeProjectId,
                 assetPayloads: agentExport.assetPayloads,
-                existingAssetPaths: state.projectSession.activeProjectAgentAssetPaths,
+                existingAssetPaths: existingServerAssetPaths.agent,
             });
             const nextScene = buildServerProjectSceneSnapshot(manifest, assetWrites);
             await projectApi.saveScene({
@@ -8457,9 +8902,9 @@ async function loadScene() {
                 );
             } else {
                 applyCameraInterpolationSettings({
-                    positionMode: CAMERA_POSITION_INTERPOLATION_LINEAR,
-                    rotationMode: CAMERA_ROTATION_INTERPOLATION_SLERP,
-                    timingMode: CAMERA_TIMING_INTERPOLATION_LINEAR,
+                    positionStrength: DEFAULT_CAMERA_POSITION_TENSION,
+                    rotationStrength: DEFAULT_CAMERA_ROTATION_STRENGTH,
+                    timingStrength: DEFAULT_CAMERA_TIMING_STRENGTH,
                 }, { syncVisualization: false });
             }
             if (Number.isFinite(timeline.playbackSpeed)) {
@@ -8742,17 +9187,21 @@ async function createServerProjectFromCurrentScene(options = {}) {
             scene: manifest,
             agentHistory: agentExport.snapshot,
         });
+        const existingServerAssetPaths = await resolveServerProjectExistingAssetPaths({
+            user: state.projectSession.user,
+            projectId: draftProject?.id,
+        });
         const assetWrites = await uploadServerProjectAssets({
             user: state.projectSession.user,
             projectId: draftProject?.id,
             assetInputs,
-            existingAssetPaths: state.projectSession.activeProjectSceneAssetPaths,
+            existingAssetPaths: existingServerAssetPaths.scene,
         });
         await uploadServerAgentHistoryAssets({
             user: state.projectSession.user,
             projectId: draftProject?.id,
             assetPayloads: agentExport.assetPayloads,
-            existingAssetPaths: state.projectSession.activeProjectAgentAssetPaths,
+            existingAssetPaths: existingServerAssetPaths.agent,
         });
         const scene = buildServerProjectSceneSnapshot(manifest, assetWrites);
         const project = await projectApi.saveScene({
@@ -8911,6 +9360,25 @@ function logoutProjectSession() {
     updateWorkspaceStatusIndicator();
 }
 
+async function requestProjectSessionLogout() {
+    if (!isServerProjectSessionActive() || !state.workspace?.dirty) {
+        logoutProjectSession();
+        return true;
+    }
+
+    const shouldSyncBeforeLogout = confirm(t('projectSession.logoutDirtyConfirm'));
+    if (shouldSyncBeforeLogout) {
+        const saved = await saveServerProjectToCurrentProject({ silent: true });
+        if (!saved) {
+            showError(t('projectSession.logoutDirtySyncFailed'));
+            return false;
+        }
+    }
+
+    logoutProjectSession();
+    return true;
+}
+
 /**
  * 清空场景
  */
@@ -9015,6 +9483,14 @@ function clampCameraCatmullTension(value) {
     const n = Number(value);
     const raw = Number.isFinite(n) ? n : fallback;
     return Math.max(config.min ?? 0, Math.min(config.max ?? 1, raw));
+}
+
+function cameraPositionSmoothnessToTension(value) {
+    return 1 - clampCameraCatmullTension(value);
+}
+
+function cameraPositionTensionToSmoothness(value) {
+    return 1 - clampCameraCatmullTension(value);
 }
 
 function clampCameraRotationStrength(value) {
@@ -9132,11 +9608,26 @@ function syncCameraInterpolationControls() {
     const catmullConfig = CAMERA_POSITION_INTERPOLATION_CONFIGS[CAMERA_POSITION_INTERPOLATION_CATMULL];
     const rotationConfig = CAMERA_ROTATION_INTERPOLATION_STRENGTH_CONFIG;
     const easeConfig = CAMERA_TIMING_INTERPOLATION_CONFIGS[CAMERA_TIMING_INTERPOLATION_EASE];
+    const formatInterpolationValue = (config, value) => {
+        if (typeof config?.format === 'function') {
+            return config.format(Number(value) || 0);
+        }
+        return String(value);
+    };
+    const positionSmoothness = cameraPositionTensionToSmoothness(state.cameraCatmullTension);
     if (dom.timelineCatmullParam) {
         dom.timelineCatmullParam.min = String(catmullConfig.min ?? 0);
         dom.timelineCatmullParam.max = String(catmullConfig.max ?? 1);
         dom.timelineCatmullParam.step = String(catmullConfig.step ?? 0.01);
-        dom.timelineCatmullParam.value = String(state.cameraCatmullTension);
+        dom.timelineCatmullParam.value = String(positionSmoothness);
+    }
+    if (dom.timelineCatmullParamValue) {
+        dom.timelineCatmullParamValue.min = String(catmullConfig.min ?? 0);
+        dom.timelineCatmullParamValue.max = String(catmullConfig.max ?? 1);
+        dom.timelineCatmullParamValue.step = String(catmullConfig.step ?? 0.01);
+        if (document.activeElement !== dom.timelineCatmullParamValue) {
+            dom.timelineCatmullParamValue.value = formatInterpolationValue(catmullConfig, positionSmoothness);
+        }
     }
     if (dom.timelineRotationParam) {
         dom.timelineRotationParam.min = String(rotationConfig.min ?? 0);
@@ -9144,11 +9635,27 @@ function syncCameraInterpolationControls() {
         dom.timelineRotationParam.step = String(rotationConfig.step ?? 0.01);
         dom.timelineRotationParam.value = String(state.cameraRotationStrength);
     }
+    if (dom.timelineRotationParamValue) {
+        dom.timelineRotationParamValue.min = String(rotationConfig.min ?? 0);
+        dom.timelineRotationParamValue.max = String(rotationConfig.max ?? 1);
+        dom.timelineRotationParamValue.step = String(rotationConfig.step ?? 0.01);
+        if (document.activeElement !== dom.timelineRotationParamValue) {
+            dom.timelineRotationParamValue.value = formatInterpolationValue(rotationConfig, state.cameraRotationStrength);
+        }
+    }
     if (dom.timelineEaseParam) {
         dom.timelineEaseParam.min = String(easeConfig.min ?? 0);
         dom.timelineEaseParam.max = String(easeConfig.max ?? 1);
         dom.timelineEaseParam.step = String(easeConfig.step ?? 0.01);
         dom.timelineEaseParam.value = String(state.cameraEaseStrength);
+    }
+    if (dom.timelineEaseParamValue) {
+        dom.timelineEaseParamValue.min = String(easeConfig.min ?? 0);
+        dom.timelineEaseParamValue.max = String(easeConfig.max ?? 1);
+        dom.timelineEaseParamValue.step = String(easeConfig.step ?? 0.01);
+        if (document.activeElement !== dom.timelineEaseParamValue) {
+            dom.timelineEaseParamValue.value = formatInterpolationValue(easeConfig, state.cameraEaseStrength);
+        }
     }
 }
 
@@ -9191,14 +9698,15 @@ function applyCameraInterpolationSettings(settings = {}, {
 }
 
 function setCameraPositionInterpolationStrength(value, silent = false) {
-    state.cameraCatmullTension = clampCameraCatmullTension(value);
+    const smoothness = clampCameraCatmullTension(value);
+    state.cameraCatmullTension = cameraPositionSmoothnessToTension(smoothness);
     syncCameraInterpolationControls();
     persistCameraInterpolationSettings();
     syncCameraSequenceVisualization();
     if (!silent) {
         showInfo(t('messages.parameterSet', {
             label: t('timeline.positionInterpolation'),
-            value: state.cameraCatmullTension.toFixed(2),
+            value: smoothness.toFixed(2),
         }));
     }
 }
@@ -9227,6 +9735,148 @@ function setCameraTimingInterpolationStrength(value, silent = false) {
             value: state.cameraEaseStrength.toFixed(2),
         }));
     }
+}
+
+function parseCameraInterpolationNumberInputValue(value) {
+    return extractNumericValue(value);
+}
+
+function commitCameraInterpolationNumberInput(rawValue, applyFn, currentValue, digits) {
+    const parsed = parseCameraInterpolationNumberInputValue(rawValue);
+    if (parsed === null) {
+        return Number(currentValue).toFixed(digits);
+    }
+    applyFn(parsed, false);
+    return null;
+}
+
+function handleCameraInterpolationInputArrowKey(e, inputEl, step, fallbackValue, digits, applyFn) {
+    if (!(inputEl instanceof HTMLInputElement)) return;
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+
+    e.preventDefault();
+    const direction = e.key === 'ArrowUp' ? 1 : -1;
+    const nextValue = nudgeNumericInputValue(inputEl.value, step, fallbackValue, direction);
+    inputEl.value = nextValue.toFixed(digits);
+    applyFn(nextValue, true);
+}
+
+function updateCameraPositionInterpolationFromInput() {
+    const parsed = parseCameraInterpolationNumberInputValue(dom.timelineCatmullParamValue?.value);
+    if (parsed === null) return;
+    setCameraPositionInterpolationStrength(parsed, true);
+}
+
+function commitCameraPositionInterpolationFromInput() {
+    if (!dom.timelineCatmullParamValue) return false;
+    const fallbackValue = cameraPositionTensionToSmoothness(state.cameraCatmullTension);
+    const nextText = commitCameraInterpolationNumberInput(
+        dom.timelineCatmullParamValue.value,
+        setCameraPositionInterpolationStrength,
+        fallbackValue,
+        2
+    );
+    if (nextText !== null) {
+        dom.timelineCatmullParamValue.value = nextText;
+        return false;
+    }
+    dom.timelineCatmullParamValue.value = cameraPositionTensionToSmoothness(state.cameraCatmullTension).toFixed(2);
+    return true;
+}
+
+function handleCameraPositionInterpolationInputKeydown(e) {
+    if (!dom.timelineCatmullParamValue) return;
+    if (e.key === 'Enter') {
+        commitCameraPositionInterpolationFromInput();
+        dom.timelineCatmullParamValue.blur();
+        return;
+    }
+    handleCameraInterpolationInputArrowKey(
+        e,
+        dom.timelineCatmullParamValue,
+        0.01,
+        cameraPositionTensionToSmoothness(state.cameraCatmullTension),
+        2,
+        setCameraPositionInterpolationStrength
+    );
+}
+
+function updateCameraRotationInterpolationFromInput() {
+    const parsed = parseCameraInterpolationNumberInputValue(dom.timelineRotationParamValue?.value);
+    if (parsed === null) return;
+    setCameraRotationStrength(parsed, true);
+}
+
+function commitCameraRotationInterpolationFromInput() {
+    if (!dom.timelineRotationParamValue) return false;
+    const nextText = commitCameraInterpolationNumberInput(
+        dom.timelineRotationParamValue.value,
+        setCameraRotationStrength,
+        state.cameraRotationStrength,
+        2
+    );
+    if (nextText !== null) {
+        dom.timelineRotationParamValue.value = nextText;
+        return false;
+    }
+    dom.timelineRotationParamValue.value = state.cameraRotationStrength.toFixed(2);
+    return true;
+}
+
+function handleCameraRotationInterpolationInputKeydown(e) {
+    if (!dom.timelineRotationParamValue) return;
+    if (e.key === 'Enter') {
+        commitCameraRotationInterpolationFromInput();
+        dom.timelineRotationParamValue.blur();
+        return;
+    }
+    handleCameraInterpolationInputArrowKey(
+        e,
+        dom.timelineRotationParamValue,
+        0.01,
+        state.cameraRotationStrength,
+        2,
+        setCameraRotationStrength
+    );
+}
+
+function updateCameraTimingInterpolationFromInput() {
+    const parsed = parseCameraInterpolationNumberInputValue(dom.timelineEaseParamValue?.value);
+    if (parsed === null) return;
+    setCameraTimingInterpolationStrength(parsed, true);
+}
+
+function commitCameraTimingInterpolationFromInput() {
+    if (!dom.timelineEaseParamValue) return false;
+    const nextText = commitCameraInterpolationNumberInput(
+        dom.timelineEaseParamValue.value,
+        setCameraTimingInterpolationStrength,
+        state.cameraEaseStrength,
+        2
+    );
+    if (nextText !== null) {
+        dom.timelineEaseParamValue.value = nextText;
+        return false;
+    }
+    dom.timelineEaseParamValue.value = state.cameraEaseStrength.toFixed(2);
+    return true;
+}
+
+function handleCameraTimingInterpolationInputKeydown(e) {
+    if (!dom.timelineEaseParamValue) return;
+    if (e.key === 'Enter') {
+        commitCameraTimingInterpolationFromInput();
+        dom.timelineEaseParamValue.blur();
+        return;
+    }
+    handleCameraInterpolationInputArrowKey(
+        e,
+        dom.timelineEaseParamValue,
+        0.01,
+        state.cameraEaseStrength,
+        2,
+        setCameraTimingInterpolationStrength
+    );
 }
 
 function buildSampledCameraTrajectory() {
@@ -9359,7 +10009,7 @@ function quaternionExpPure(v) {
     });
 }
 
-function computeSquadTangent(prev, current, next) {
+function computeSquadTangent(prev, current, next, strength = 1) {
     const currentNorm = normalizeQuaternionValue(current);
     const prevAligned = alignQuaternionHemisphere(currentNorm, prev);
     const nextAligned = alignQuaternionHemisphere(currentNorm, next);
@@ -9368,21 +10018,22 @@ function computeSquadTangent(prev, current, next) {
     const nextDelta = multiplyQuaternions(currentInverse, nextAligned);
     const prevLog = quaternionLogUnit(prevDelta);
     const nextLog = quaternionLogUnit(nextDelta);
+    const strengthScale = clampCameraRotationStrength(strength);
     const omega = {
-        x: -0.25 * (prevLog.x + nextLog.x),
-        y: -0.25 * (prevLog.y + nextLog.y),
-        z: -0.25 * (prevLog.z + nextLog.z),
+        x: -0.25 * strengthScale * (prevLog.x + nextLog.x),
+        y: -0.25 * strengthScale * (prevLog.y + nextLog.y),
+        z: -0.25 * strengthScale * (prevLog.z + nextLog.z),
     };
     return multiplyQuaternions(currentNorm, quaternionExpPure(omega));
 }
 
-function interpolateQuaternionSquad(prev, a, b, next, t) {
+function interpolateQuaternionSquad(prev, a, b, next, t, strength = state.cameraRotationStrength) {
     const start = normalizeQuaternionValue(a);
     const end = alignQuaternionHemisphere(start, b);
     const prevRef = prev ? alignQuaternionHemisphere(start, prev) : start;
     const nextRef = next ? alignQuaternionHemisphere(end, next) : end;
-    const tangentA = computeSquadTangent(prevRef, start, end);
-    const tangentB = computeSquadTangent(start, end, nextRef);
+    const tangentA = computeSquadTangent(prevRef, start, end, strength);
+    const tangentB = computeSquadTangent(start, end, nextRef, strength);
     const slerpMain = slerpQuaternion(start, end, t);
     const slerpTangents = slerpQuaternion(tangentA, tangentB, t);
     return slerpQuaternion(slerpMain, slerpTangents, 2 * t * (1 - t));
@@ -10125,11 +10776,11 @@ function buildCameraSequenceExportPayload() {
         positionInterpolationMode: resolveCameraPositionInterpolationModeFromTension(state.cameraCatmullTension),
         rotationInterpolationMode: resolveCameraRotationInterpolationModeFromStrength(state.cameraRotationStrength),
         timingInterpolationMode: resolveCameraTimingInterpolationModeFromStrength(state.cameraEaseStrength),
-        positionInterpolationStrength: Number(state.cameraCatmullTension ?? 1),
-        rotationInterpolationStrength: Number(state.cameraRotationStrength ?? 0),
-        timingInterpolationStrength: Number(state.cameraEaseStrength ?? 0),
-        catmullTension: Number(state.cameraCatmullTension ?? 1),
-        easeStrength: Number(state.cameraEaseStrength ?? 0),
+        positionInterpolationStrength: Number(state.cameraCatmullTension ?? DEFAULT_CAMERA_POSITION_TENSION),
+        rotationInterpolationStrength: Number(state.cameraRotationStrength ?? DEFAULT_CAMERA_ROTATION_STRENGTH),
+        timingInterpolationStrength: Number(state.cameraEaseStrength ?? DEFAULT_CAMERA_TIMING_STRENGTH),
+        catmullTension: Number(state.cameraCatmullTension ?? DEFAULT_CAMERA_POSITION_TENSION),
+        easeStrength: Number(state.cameraEaseStrength ?? DEFAULT_CAMERA_TIMING_STRENGTH),
         keyframes: (Array.isArray(state.keyframes) ? state.keyframes : []).map((keyframe) => ({
             frame: Math.round(Number(keyframe.frame) || 0),
             time: Number(keyframe.time) || 0,
@@ -10427,26 +11078,22 @@ function lerpVec3(a, b, t) {
     };
 }
 
-function easeInOutCubic(t) {
+function smootherstepQuintic(t) {
     if (t <= 0) return 0;
     if (t >= 1) return 1;
-    return t < 0.5
-        ? 4 * t * t * t
-        : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    return t * t * t * ((t * ((6 * t) - 15)) + 10);
 }
 
 function remapInterpolationTime(t, strength = state.cameraEaseStrength) {
     const clampedT = Math.max(0, Math.min(1, Number(t) || 0));
     const clampedStrength = Math.max(-1, Math.min(1, Number(strength) || 0));
     const strengthMagnitude = Math.abs(clampedStrength);
-    const eased = easeInOutCubic(clampedT);
+    const eased = smootherstepQuintic(clampedT);
     if (clampedStrength >= 0) {
         return lerpNumber(clampedT, eased, strengthMagnitude);
     }
-    const fastNearKeyframes = clampedT < 0.5
-        ? 0.5 * (1 - Math.pow(1 - (clampedT * 2), 3))
-        : 0.5 + (0.5 * Math.pow((clampedT * 2) - 1, 3));
-    return lerpNumber(clampedT, fastNearKeyframes, strengthMagnitude);
+    const accelerated = (2 * clampedT) - eased;
+    return lerpNumber(clampedT, accelerated, strengthMagnitude);
 }
 
 function buildVirtualBoundaryKeyframe(anchor, neighbor) {
@@ -10546,8 +11193,7 @@ function interpolateCameraRotationByMode(keyframes, index, t, mode = state.camer
     }
     const prev = keyframes[index - 1]?.camera?.rotation || a.camera.rotation;
     const next = keyframes[index + 2]?.camera?.rotation || b.camera.rotation;
-    const squad = interpolateQuaternionSquad(prev, a.camera.rotation, b.camera.rotation, next, t);
-    return slerpQuaternion(slerp, squad, squadStrength);
+    return interpolateQuaternionSquad(prev, a.camera.rotation, b.camera.rotation, next, t, squadStrength);
 }
 
 function interpolateCameraPoseAt(timeSec) {
@@ -10717,6 +11363,10 @@ function initTimelineUI() {
                 .join('');
         }
         dom.timelineFps.value = String(state.timelineFps);
+    }
+    state.timelinePlaybackSpeed = TIMELINE_PLAYBACK_SPEED_DEFAULT;
+    if (dom.timelineSpeed) {
+        dom.timelineSpeed.value = TIMELINE_PLAYBACK_SPEED_DEFAULT.toFixed(1);
     }
     const savedPositionInterpolationMode = localStorage.getItem(CAMERA_POSITION_INTERPOLATION_STORAGE_KEY);
     const savedRotationInterpolationMode = localStorage.getItem(CAMERA_ROTATION_INTERPOLATION_STORAGE_KEY);
@@ -10944,11 +11594,11 @@ function initEventListeners() {
         }
     });
     dom.btnProjectBrowserLogout?.addEventListener('click', () => {
-        logoutProjectSession();
+        void requestProjectSessionLogout();
     });
     dom.btnAdminProjectClose?.addEventListener('click', closeAdminProjectModal);
     dom.btnAdminProjectLogout?.addEventListener('click', () => {
-        logoutProjectSession();
+        void requestProjectSessionLogout();
     });
     dom.adminUserList?.addEventListener('click', (event) => {
         const deleteButton = event.target.closest?.('[data-admin-user-delete]');
@@ -11216,30 +11866,38 @@ function initEventListeners() {
     dom.timelineRotationParam?.addEventListener('change', (e) => {
         setCameraRotationStrength(e.target.value);
     });
+    dom.timelineRotationParamValue?.addEventListener('input', updateCameraRotationInterpolationFromInput);
+    dom.timelineRotationParamValue?.addEventListener('change', commitCameraRotationInterpolationFromInput);
+    dom.timelineRotationParamValue?.addEventListener('blur', commitCameraRotationInterpolationFromInput);
+    dom.timelineRotationParamValue?.addEventListener('keydown', handleCameraRotationInterpolationInputKeydown);
     dom.timelineCatmullParam?.addEventListener('input', (e) => {
         setCameraPositionInterpolationStrength(e.target.value, true);
     });
     dom.timelineCatmullParam?.addEventListener('change', (e) => {
         setCameraPositionInterpolationStrength(e.target.value);
     });
+    dom.timelineCatmullParamValue?.addEventListener('input', updateCameraPositionInterpolationFromInput);
+    dom.timelineCatmullParamValue?.addEventListener('change', commitCameraPositionInterpolationFromInput);
+    dom.timelineCatmullParamValue?.addEventListener('blur', commitCameraPositionInterpolationFromInput);
+    dom.timelineCatmullParamValue?.addEventListener('keydown', handleCameraPositionInterpolationInputKeydown);
     dom.timelineEaseParam?.addEventListener('input', (e) => {
         setCameraTimingInterpolationStrength(e.target.value, true);
     });
     dom.timelineEaseParam?.addEventListener('change', (e) => {
         setCameraTimingInterpolationStrength(e.target.value);
     });
+    dom.timelineEaseParamValue?.addEventListener('input', updateCameraTimingInterpolationFromInput);
+    dom.timelineEaseParamValue?.addEventListener('change', commitCameraTimingInterpolationFromInput);
+    dom.timelineEaseParamValue?.addEventListener('blur', commitCameraTimingInterpolationFromInput);
+    dom.timelineEaseParamValue?.addEventListener('keydown', handleCameraTimingInterpolationInputKeydown);
     dom.cameraDisplayScale?.addEventListener('input', (e) => {
         setCameraSequenceDisplayScale(e.target.value, true);
     });
     dom.cameraDisplayScale?.addEventListener('change', (e) => {
         setCameraSequenceDisplayScale(e.target.value);
     });
-    dom.cameraDisplayScaleValue?.addEventListener('input', (e) => {
-        setCameraSequenceDisplayScale(e.target.value, true);
-    });
-    dom.cameraDisplayScaleValue?.addEventListener('change', (e) => {
-        setCameraSequenceDisplayScale(e.target.value);
-    });
+    dom.cameraDisplayScaleValue?.addEventListener('input', updateCameraSequenceDisplayScaleFromInput);
+    dom.cameraDisplayScaleValue?.addEventListener('change', commitCameraSequenceDisplayScaleFromInput);
     dom.cameraDisplayScaleValue?.addEventListener('blur', commitCameraSequenceDisplayScaleFromInput);
     dom.cameraDisplayScaleValue?.addEventListener('keydown', handleCameraSequenceDisplayScaleInputKeydown);
     dom.timelineCameraFovRange?.addEventListener('input', (e) => {
@@ -11248,12 +11906,8 @@ function initEventListeners() {
     dom.timelineCameraFovRange?.addEventListener('change', (e) => {
         applyTimelineCameraFov(e.target.value);
     });
-    dom.timelineCameraFovNumber?.addEventListener('input', (e) => {
-        applyTimelineCameraFov(e.target.value, true);
-    });
-    dom.timelineCameraFovNumber?.addEventListener('change', (e) => {
-        applyTimelineCameraFov(e.target.value);
-    });
+    dom.timelineCameraFovNumber?.addEventListener('input', updateTimelineCameraFovFromInput);
+    dom.timelineCameraFovNumber?.addEventListener('change', commitTimelineCameraFovFromInput);
     dom.timelineCameraFovNumber?.addEventListener('blur', commitTimelineCameraFovFromInput);
     dom.timelineCameraFovNumber?.addEventListener('keydown', handleTimelineCameraFovInputKeydown);
     dom.timelineFps?.addEventListener('change', (e) => {
@@ -11378,6 +12032,7 @@ function initEventListeners() {
  * 应用初始化
  */
 async function init() {
+    setBootLoadingVisible(true);
     console.log(`[Editor ${state.VERSION}] Initializing...`);
     console.log(`[Editor ${state.VERSION}] Version: ${state.VERSION}`);
     console.log(`[Editor ${state.VERSION}] Checking DOM elements...`);
@@ -11575,22 +12230,12 @@ async function init() {
     updateModelList();
 
     console.log(`[Editor ${state.VERSION}] Initialized successfully!`);
-    console.log(`[Editor ${state.VERSION}] 功能状态：`);
-    console.log('');
-    console.log('第一阶段功能状态：');
-    console.log('3D 场景渲染：已实现（WebGPU + GaussianRenderer）');
-    console.log('模型加载：已实现（支持 .ply, .onnx, .glb, .gltf, .obj, .fbx, .stl 等）');
-    console.log('相机控制：已实现（轨道/自由模式，预设视角）');
-    console.log('');
-    console.log('请测试以下功能：');
-    console.log('1. 点击"添加模型"按钮，选择文件');
-    console.log('2. 拖拽 .ply/.onnx/.glb/.gltf/.obj/.fbx/.stl 文件到页面');
-    console.log('3. 使用鼠标控制相机（左键旋转，右键平移，滚轮缩放）');
     console.log('');
     console.log('调试信息：');
     console.log('- 打开浏览器开发者工具查看控制台输出');
     console.log('- 如果有问题，请提供控制台错误信息');
     console.log('- 版本号：', state.VERSION);
+    setBootLoadingVisible(false);
 }
 
 // 启动应用

@@ -8,7 +8,11 @@ test('timeline camera fov uses independent keyframe storage and export payloads'
 
     assert.match(source, /cameraFovKeyframes:\s*\[\]/);
     assert.match(source, /function applyTimelineCameraFov\(value, silent = false, markDirty = true\)/);
+    assert.match(source, /function updateTimelineCameraFovFromInput\(\)/);
     assert.match(source, /findCameraFovKeyframeIndexByFrame\(frame\)/);
+    assert.match(source, /document\.activeElement !== dom\.timelineCameraFovNumber/);
+    assert.match(source, /const parsed = extractNumericValue\(dom\.timelineCameraFovNumber\.value\);/);
+    assert.match(source, /nudgeNumericInputValue\(\s*dom\.timelineCameraFovNumber\.value,\s*0\.001/);
     assert.match(source, /fovKeyframes:\s*\(Array\.isArray\(state\.cameraFovKeyframes\) \? state\.cameraFovKeyframes : \[\]\)/);
     assert.match(html, /id="timelineCameraFovRange"/);
     assert.match(html, /id="timelineCameraFovNumber"/);

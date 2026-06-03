@@ -1,5 +1,5 @@
 /**
- * Visionary Editor Application 0.1.8
+ * Visionary Editor Application 0.1.9
  * Editor version of main app with UI controls
  */
 
@@ -250,7 +250,7 @@ export class EditorApp {
   private activeCameraKeys: Set<string> = new Set();
 
   // Version
-  readonly VERSION = "0.1.8";
+  readonly VERSION = "0.1.9";
 
   private globalTimelineTime: number = 0;
   private globalTimelineFrame: number = 0;
@@ -1599,6 +1599,24 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       model.object3D.visible = visible;
     }
 
+    this.notifyModelsChanged();
+    return true;
+  }
+
+  renameModel(id: string, name: string, options: { sourcePath?: string; sourceFile?: File } = {}): boolean {
+    const model = this.editorModels.get(id);
+    if (!model) return false;
+
+    const nextName = String(name || '').trim();
+    if (!nextName) return false;
+
+    model.name = nextName;
+    if (typeof options.sourcePath === 'string' && options.sourcePath.trim()) {
+      model.sourcePath = options.sourcePath;
+    }
+    if (options.sourceFile instanceof File) {
+      model.sourceFile = options.sourceFile;
+    }
     this.notifyModelsChanged();
     return true;
   }

@@ -3,10 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title data-i18n="editor.title">Visionary Editor 0.1.8</title>
+    <title data-i18n="editor.title">Visionary Editor 0.1.9</title>
     <link rel="stylesheet" href="./editor.css">
 </head>
 <body class="theme-light">
+    <div id="bootLoadingOverlay" class="boot-loading-overlay" aria-live="polite" aria-busy="true">
+        <div class="spinner"></div>
+        <div class="loading-text" data-i18n="canvas.loading">Loading...</div>
+    </div>
     <div id="app">
         <div id="editor-shell">
         <!-- Canvas Container -->
@@ -330,7 +334,7 @@
                                     </label>
                                     <div class="property-inputs render-mode-row">
                                         <button class="menu-btn menu-btn-active" data-mode="color" id="modeColor">
-                                            <span class="menu-btn-text" data-i18n="sceneSettings.renderModes.color">图片</span>
+                                            <span class="menu-btn-text" data-i18n="sceneSettings.renderModes.color">彩色图</span>
                                         </button>
                                         <button class="menu-btn" data-mode="depth" id="modeDepth">
                                             <span class="menu-btn-text" data-i18n="sceneSettings.renderModes.depth">深度图</span>
@@ -503,21 +507,24 @@
                                         </div>
                                     </div>
                                     <div class="property-row timeline-camera-param-row">
-                                        <span id="timelinePositionInterpolationLabel" class="property-label" for="timelineCatmullParam" data-i18n="timeline.positionInterpolation">位置插值</span>
-                                        <div class="property-inputs timeline-camera-param-inputs">
+                                        <span id="timelinePositionInterpolationLabel" class="property-label" for="timelineCatmullParam" data-i18n="timeline.positionInterpolationShort">位置平滑</span>
+                                        <div class="property-inputs timeline-camera-param-inputs timeline-camera-number-inputs">
                                             <input type="range" id="timelineCatmullParam" min="0" max="1" step="0.01" value="1">
+                                            <input type="number" id="timelineCatmullParamValue" min="0" max="1" step="0.01" value="1.00">
                                         </div>
                                     </div>
                                     <div class="property-row timeline-camera-param-row">
-                                        <span id="timelineRotationInterpolationLabel" class="property-label" for="timelineRotationParam" data-i18n="timeline.rotationInterpolation">旋转插值</span>
-                                        <div class="property-inputs timeline-camera-param-inputs">
-                                            <input type="range" id="timelineRotationParam" min="0" max="1" step="0.01" value="0">
+                                        <span id="timelineRotationInterpolationLabel" class="property-label" for="timelineRotationParam" data-i18n="timeline.rotationInterpolationShort">旋转平滑</span>
+                                        <div class="property-inputs timeline-camera-param-inputs timeline-camera-number-inputs">
+                                            <input type="range" id="timelineRotationParam" min="0" max="1" step="0.01" value="1">
+                                            <input type="number" id="timelineRotationParamValue" min="0" max="1" step="0.01" value="1.00">
                                         </div>
                                     </div>
                                     <div class="property-row timeline-camera-param-row">
-                                        <span id="timelineTimingInterpolationLabel" class="property-label" for="timelineEaseParam" data-i18n="timeline.timingInterpolation">时间节奏</span>
-                                        <div class="property-inputs timeline-camera-param-inputs">
+                                        <span id="timelineTimingInterpolationLabel" class="property-label" for="timelineEaseParam" data-i18n="timeline.timingInterpolationShort">帧间节奏</span>
+                                        <div class="property-inputs timeline-camera-param-inputs timeline-camera-number-inputs">
                                             <input type="range" id="timelineEaseParam" min="-1" max="1" step="0.01" value="0">
+                                            <input type="number" id="timelineEaseParamValue" min="-1" max="1" step="0.01" value="0.00">
                                         </div>
                                     </div>
                                 </div>
@@ -828,7 +835,7 @@
                 <div class="help-modal-header">
                     <div class="help-modal-header-main">
                         <h3 data-i18n="modal.helpTitle">操作提示</h3>
-                        <span class="version-label help-version-label" id="versionLabel">0.1.8</span>
+                        <span class="version-label help-version-label" id="versionLabel">0.1.9</span>
                     </div>
                     <button id="helpTipsClose" class="icon-btn help-modal-close-btn" title="关闭操作提示" data-i18n-attrs="title:modal.closeHelp;aria-label:modal.closeHelp">×</button>
                 </div>

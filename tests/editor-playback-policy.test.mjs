@@ -45,6 +45,18 @@ test('playback restarts from frame zero when play is pressed on the final frame'
     assert.match(body, /if \(state\.selectedFrame >= getTimelineTotalFrames\(\)\) \{\s*setTimelineFrame\(0, \{ applyPose: true, syncSlider: true \}\);\s*\}/);
 });
 
+test('timeline speed initializes to 1.0 on a fresh editor open', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const match = source.match(/function initTimelineUI\(\) \{([\s\S]*?)\n\}/);
+
+    assert.ok(match, 'expected to find initTimelineUI');
+    const body = match[1];
+
+    assert.match(source, /const TIMELINE_PLAYBACK_SPEED_DEFAULT = 1\.0;/);
+    assert.match(body, /state\.timelinePlaybackSpeed = TIMELINE_PLAYBACK_SPEED_DEFAULT;/);
+    assert.match(body, /dom\.timelineSpeed\.value = TIMELINE_PLAYBACK_SPEED_DEFAULT\.toFixed\(1\);/);
+});
+
 test('global playback shortcut only ignores text editing controls, not every input', () => {
     const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
     const match = source.match(/function isEditingText\(\) \{([\s\S]*?)\n\}/);
