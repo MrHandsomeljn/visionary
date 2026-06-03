@@ -25,6 +25,7 @@ public/ort/
 .codex/
 .agents/
 .trellis/
+.chrome-devtool-trace
 
 # @kangan npm run build
 dist/
