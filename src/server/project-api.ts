@@ -241,6 +241,12 @@ async function handleProjectsRequest(
       return true;
     }
 
+    if (action === 'asset-index' && method === 'GET') {
+      const user = getQueryString(url, 'user');
+      sendOk(res, await storage.listAssetIndex(user, projectId));
+      return true;
+    }
+
     if (action === 'agent-history' && method === 'PUT') {
       const body = readBodyObject(await readJsonBody(req));
       const user = resolveUser(url, body);

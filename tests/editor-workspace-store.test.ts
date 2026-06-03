@@ -232,6 +232,12 @@ class MockDirectoryHandle {
     }
     return new MockFileHandle(target, () => this.writeOrder.push(path));
   }
+  async removeEntry(name: string): Promise<void> {
+    const path = this.resolvePath(name);
+    if (!this.files.delete(path)) {
+      throw new Error(`File not found: ${path}`);
+    }
+  }
   setFileContent(fileName: string, content: string): void {
     this.files.set(fileName, { content: textEncoder.encode(content) });
   }
@@ -412,4 +418,20 @@ test('asset plan hashes content, rewrites manifest path, and skips duplicate wri
   const persistedManifest = JSON.parse(directory.getFileContent('scene.json') ?? '{}') as SceneManifest;
   assert.equal(persistedManifest.assets[0]?.path, expectedPath);
   assert.deepEqual(directory.getFileBytes(expectedPath), content);
+});
+
+test('renameRootFile moves bytes inside the writable workspace', async () => {
+  const directory = new MockDirectoryHandle('workspace-G');
+  await directory.getDirectoryHandle('models', { create: true });
+  directory.setFileContent('models/sample.ply', 'sample-bytes');
+  (globalThis as any).window = {
+    showDirectoryPicker: async () => directory,
+  };
+
+  const sceneFs = new SceneFS();
+  await sceneFs.openWorkspaceReadWrite();
+  await sceneFs.renameRootFile('models/sample.ply', 'models/renamed-sample.ply');
+
+  assert.equal(directory.getFileContent('models/sample.ply'), null);
+  assert.equal(directory.getFileContent('models/renamed-sample.ply'), 'sample-bytes');
 });

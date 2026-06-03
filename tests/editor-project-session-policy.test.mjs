@@ -69,6 +69,7 @@ test('server-backed project flow uploads assets and rewrites server asset urls o
     assert.match(source, /function buildServerProjectSceneSnapshot\(manifest, assetWrites = \[\]\)/);
     assert.match(source, /function restoreServerProjectModelSourcePaths\(sceneAssets = \[\]\)/);
     assert.match(source, /function buildServerSceneAssetUrls\(rawScene, user, projectId\)/);
+    assert.match(source, /async function resolveServerProjectExistingAssetPaths\(\{ user, projectId, fallbackScenePaths = new Set\(\), fallbackAgentPaths = new Set\(\) \} = \{\}\)/);
     assert.match(source, /async function buildPersistableAgentConversationExport\(options = \{\}\)/);
     assert.match(source, /function hydrateAgentConversationAssetUrls\(snapshot, resolveAssetUrl\)/);
     assert.match(source, /const scene = buildServerSceneAssetUrls\(rawScene, state\.projectSession\.user, projectId\);/);
@@ -76,10 +77,14 @@ test('server-backed project flow uploads assets and rewrites server asset urls o
     assert.match(source, /hydrateAgentConversationSnapshot\(hydrateAgentConversationAssetUrls\(/);
     assert.match(source, /const \{ manifest, assetInputs \} = await buildSceneWorkspaceSnapshot\(\{[\s\S]*includeAssetPayloads: true,[\s\S]*showProgress: false,[\s\S]*allowWorkspaceMaterializedAssetReuse: false,[\s\S]*\}\);/);
     assert.match(source, /const agentExport = await buildPersistableAgentConversationExport\(\{\s*includeAssets: true,\s*includeAssetPayloads: true,\s*\}\);/s);
+    assert.match(source, /const existingServerAssetPaths = await resolveServerProjectExistingAssetPaths\(\{[\s\S]*projectId: state\.projectSession\.activeProjectId,[\s\S]*fallbackScenePaths: state\.projectSession\.activeProjectSceneAssetPaths,[\s\S]*fallbackAgentPaths: state\.projectSession\.activeProjectAgentAssetPaths,[\s\S]*\}\);/);
     assert.match(source, /const assetWrites = await uploadServerProjectAssets\(/);
     assert.match(source, /await uploadServerAgentHistoryAssets\(/);
+    assert.match(source, /existingAssetPaths: existingServerAssetPaths\.scene/);
+    assert.match(source, /existingAssetPaths: existingServerAssetPaths\.agent/);
     assert.match(source, /agentHistory: agentExport\.snapshot/);
     assert.match(clientSource, /getAssetUrl\(user, projectId, relativePath\)/);
+    assert.match(clientSource, /async loadAssetIndex\(user, projectId\)/);
     assert.match(clientSource, /async writeAsset\(\{ user, projectId, relativePath, content \}\)/);
 });
 
@@ -108,6 +113,7 @@ test('project creation uses pre-close only for post-login flow and keeps browser
     assert.match(source, /reopenModalOnError = closeModal \? 'post-login' : 'project-browser-saveas'/);
     assert.match(source, /if \(reopenModalOnError === 'post-login'\) \{\s*closePostLoginProjectModal\(\);\s*\}/s);
     assert.match(source, /showLoading\(true, t\('projectSession\.savingProject'\), 40, \{ passive: true \}\);/);
+    assert.match(source, /const existingServerAssetPaths = await resolveServerProjectExistingAssetPaths\(\{[\s\S]*projectId: draftProject\?\.id,[\s\S]*\}\);/);
     assert.match(source, /if \(reopenModalOnError === 'post-login'\) \{\s*openPostLoginProjectModal\(\);/s);
     assert.match(source, /else if \(reopenModalOnError === 'project-browser-saveas' && dom\.projectBrowserSaveAsName\) \{\s*dom\.projectBrowserSaveAsName\.value = projectName;\s*\}/s);
 });
@@ -135,4 +141,17 @@ test('project browser save-as panel only closes after a successful save', async 
     assert.match(source, /if \(saved\) \{\s*closeProjectBrowserSaveAsPanel\(\);\s*\}/s);
     assert.match(source, /return true;\s*\} catch \(error\) \{/s);
     assert.match(source, /if \(isDuplicateProjectNameError\(error\)\) \{\s*setProjectNameConflictState\(reopenedInput, reopenedErrorElement\);\s*return false;\s*\}/s);
+});
+
+test('logout from an active dirty server project routes through explicit sync-or-discard handling', async () => {
+    const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(source, /async function requestProjectSessionLogout\(\)/);
+    assert.match(source, /if \(!isServerProjectSessionActive\(\) \|\| !state\.workspace\?\.dirty\) \{\s*logoutProjectSession\(\);\s*return true;\s*\}/s);
+    assert.match(source, /const shouldSyncBeforeLogout = confirm\(t\('projectSession\.logoutDirtyConfirm'\)\);/);
+    assert.match(source, /const saved = await saveServerProjectToCurrentProject\(\{ silent: true \}\);/);
+    assert.match(source, /if \(!saved\) \{\s*showError\(t\('projectSession\.logoutDirtySyncFailed'\)\);\s*return false;\s*\}/s);
+    assert.match(source, /logoutProjectSession\(\);\s*return true;/s);
+    assert.match(source, /dom\.btnProjectBrowserLogout\?\.addEventListener\('click', \(\) => \{\s*void requestProjectSessionLogout\(\);\s*\}\);/s);
+    assert.match(source, /dom\.btnAdminProjectLogout\?\.addEventListener\('click', \(\) => \{\s*void requestProjectSessionLogout\(\);\s*\}\);/s);
 });

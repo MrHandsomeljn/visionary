@@ -75,6 +75,11 @@ export interface ProjectAssetWriteResult {
   skipped: boolean;
 }
 
+export interface ProjectAssetIndex {
+  scene: string[];
+  agent: string[];
+}
+
 const PROJECT_METADATA_FILE = 'project.json';
 const SCENE_FILE = 'scene.json';
 const AGENT_HISTORY_FILE = 'agent_history.json';
@@ -376,6 +381,18 @@ export class ProjectStorage {
     return readFile(targetPath);
   }
 
+  async listAssetIndex(userInput: string, projectIdInput: string): Promise<ProjectAssetIndex> {
+    const { userId } = normalizeUserIdentity(userInput);
+    const projectId = assertSafeSegment(projectIdInput, 'project id');
+    await this.assertProjectExists(userId, projectId);
+
+    const projectDir = this.getProjectDir(userId, projectId);
+    return {
+      scene: await this.listRelativeFiles(path.join(projectDir, 'assets'), 'assets'),
+      agent: await this.listRelativeFiles(path.join(projectDir, 'agent_history'), 'agent_history'),
+    };
+  }
+
   async deleteProject(userInput: string, projectIdInput: string): Promise<{ userId: string; projectId: string }> {
     const { userId } = normalizeUserIdentity(userInput);
     const projectId = assertSafeSegment(projectIdInput, 'project id');
@@ -459,6 +476,27 @@ export class ProjectStorage {
       }
     }
     return projects;
+  }
+
+  private async listRelativeFiles(targetDir: string, prefix: string): Promise<string[]> {
+    if (!(await pathExists(targetDir))) {
+      return [];
+    }
+
+    const entries = await readdir(targetDir, { withFileTypes: true });
+    const files: string[] = [];
+    for (const entry of entries) {
+      const relativePath = path.posix.join(prefix, entry.name);
+      const absolutePath = path.join(targetDir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await this.listRelativeFiles(absolutePath, relativePath));
+        continue;
+      }
+      if (entry.isFile()) {
+        files.push(relativePath);
+      }
+    }
+    return files.sort();
   }
 
   private async assertProjectExists(userId: string, projectId: string): Promise<void> {

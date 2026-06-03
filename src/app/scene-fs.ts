@@ -1391,6 +1391,46 @@ export class SceneFS {
     });
   }
 
+  async renameRootFile(fromRelativePath: string, toRelativePath: string): Promise<void> {
+    if (!this.isWorkspaceWritable()) {
+      throw new Error('No writable workspace selected. Use openWorkspaceReadWrite() first.');
+    }
+    const fromPath = String(fromRelativePath || '').replace(/\\/g, '/');
+    const toPath = String(toRelativePath || '').replace(/\\/g, '/');
+    if (!fromPath || !toPath) {
+      throw new Error('Invalid relative file path');
+    }
+    if (fromPath === toPath) {
+      return;
+    }
+
+    if (await this.fileExists(toPath)) {
+      throw new Error(`SceneFS: Target already exists: ${toPath}`);
+    }
+
+    this.debugLog('renameRootFile:start', {
+      from: fromPath,
+      to: toPath,
+    });
+    const bytes = await this.readBinaryFromRoot(fromPath);
+    await this.writeBinary(toPath, bytes);
+    await this.deleteFile(fromPath);
+    this.debugLog('renameRootFile:complete', {
+      from: fromPath,
+      to: toPath,
+      bytes: bytes.byteLength,
+    });
+  }
+
+  async readBinaryFromRoot(relativePath: string): Promise<Uint8Array> {
+    if (!this.rootHandle) {
+      throw new Error('No root directory handle');
+    }
+    const fileHandle = await this.getFileHandleByPath(relativePath, false);
+    const file = await fileHandle.getFile();
+    return new Uint8Array(await file.arrayBuffer());
+  }
+
   private createCommitToken(manifest: SceneManifest): string {
     const basis = `${Date.now()}::${JSON.stringify(manifest)}`;
     return this.computeAssetContentHash(basis);
@@ -1500,6 +1540,31 @@ export class SceneFS {
     });
   }
 
+  private async deleteFile(relativePath: string): Promise<void> {
+    const parts = relativePath.split('/').filter((part) => part.length > 0);
+    if (parts.length === 0) {
+      throw new Error('Invalid relative file path');
+    }
+    const fileName = parts.pop() as string;
+    const directoryHandle = await this.getDirectoryHandleByPath(parts, false);
+    await directoryHandle.removeEntry(fileName);
+  }
+
+  private async getDirectoryHandleByPath(
+    parts: string[],
+    create: boolean
+  ): Promise<FileSystemDirectoryHandle> {
+    if (!this.rootHandle) {
+      throw new Error('No root directory handle');
+    }
+
+    let currentHandle: FileSystemDirectoryHandle = this.rootHandle;
+    for (const part of parts) {
+      currentHandle = await currentHandle.getDirectoryHandle(part, { create });
+    }
+    return currentHandle;
+  }
+
   private async getFileHandleByPath(
     relativePath: string,
     create: boolean
@@ -1512,11 +1577,7 @@ export class SceneFS {
       throw new Error('Invalid relative file path');
     }
 
-    let currentHandle: FileSystemDirectoryHandle = this.rootHandle;
-    for (let i = 0; i < parts.length - 1; i++) {
-      currentHandle = await currentHandle.getDirectoryHandle(parts[i], { create });
-    }
-
+    const currentHandle = await this.getDirectoryHandleByPath(parts.slice(0, -1), create);
     return currentHandle.getFileHandle(parts[parts.length - 1], { create });
   }
 

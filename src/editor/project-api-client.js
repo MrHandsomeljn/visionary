@@ -86,6 +86,11 @@ export class ProjectApiClient {
         return parseApiResponse(response);
     }
 
+    async loadAssetIndex(user, projectId) {
+        const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}/asset-index${buildQuery({ user })}`);
+        return parseApiResponse(response);
+    }
+
     async saveAgentHistory({ user, projectId, agentHistory }) {
         const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}/agent-history`, {
             method: 'PUT',

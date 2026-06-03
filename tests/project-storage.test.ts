@@ -81,6 +81,7 @@ test('saves scene and agent history with staged json files inside project folder
   const { rootDir, storage, cleanup } = await createTempStorage();
   try {
     const project = await storage.createProject({ user: 'alice', name: 'Server Scene' });
+    const createdUpdatedAt = project.updatedAt;
 
     await storage.saveScene({
       user: 'alice',
@@ -106,8 +107,15 @@ test('saves scene and agent history with staged json files inside project folder
     const userId = normalizeUserIdentity('alice').userId;
     const sceneTmpPath = path.join(rootDir, userId, project.id, 'scene.json.tmp');
     const scenePath = path.join(rootDir, userId, project.id, 'scene.json');
+    const agentTmpPath = path.join(rootDir, userId, project.id, 'agent_history.json.tmp');
+    const agentPath = path.join(rootDir, userId, project.id, 'agent_history.json');
     assert.equal(JSON.parse(await readFile(sceneTmpPath, 'utf8')).version, 2);
     assert.equal(JSON.parse(await readFile(scenePath, 'utf8')).version, 2);
+    assert.equal(JSON.parse(await readFile(agentTmpPath, 'utf8')).schema, 'visionary.agent_history');
+    assert.equal(JSON.parse(await readFile(agentPath, 'utf8')).schema, 'visionary.agent_history');
+
+    const refreshedProject = await storage.getProject('alice', project.id);
+    assert.notEqual(refreshedProject.updatedAt, createdUpdatedAt);
   } finally {
     await cleanup();
   }
@@ -117,6 +125,7 @@ test('writes project assets only under allowed project asset roots', async () =>
   const { rootDir, storage, cleanup } = await createTempStorage();
   try {
     const project = await storage.createProject({ user: 'alice', name: 'Assets' });
+    const beforeWrite = await storage.getProject('alice', project.id);
     const content = new TextEncoder().encode('asset bytes');
 
     const writeResult = await storage.writeAsset({
@@ -165,6 +174,14 @@ test('writes project assets only under allowed project asset roots', async () =>
     await stat(path.join(rootDir, userId, project.id, 'assets', 'hash.ply'));
     await stat(path.join(rootDir, userId, project.id, 'agent_history', 'assets', 'aa', 'hash.png'));
 
+    assert.deepEqual(await storage.listAssetIndex('alice', project.id), {
+      scene: ['assets/hash.ply'],
+      agent: ['agent_history/assets/aa/hash.png'],
+    });
+
+    const afterWrites = await storage.getProject('alice', project.id);
+    assert.notEqual(afterWrites.updatedAt, beforeWrite.updatedAt);
+
     await assert.rejects(
       () => storage.writeAsset({
         user: 'alice',
@@ -184,6 +201,25 @@ test('writes project assets only under allowed project asset roots', async () =>
       }),
       (error) => error instanceof ProjectStorageError && error.code === 'BAD_REQUEST',
     );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('asset index excludes json manifests and remains empty before binary uploads', async () => {
+  const { storage, cleanup } = await createTempStorage();
+  try {
+    const project = await storage.createProject({
+      user: 'alice',
+      name: 'Fresh Index',
+      scene: { version: 2, assets: [] },
+      agentHistory: { schema: 'visionary.agent_history', version: 2, workflows: [] },
+    });
+
+    assert.deepEqual(await storage.listAssetIndex('alice', project.id), {
+      scene: [],
+      agent: [],
+    });
   } finally {
     await cleanup();
   }
