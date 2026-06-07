@@ -398,6 +398,8 @@ let agentMessageBottomPinRaf = 0;
 let agentMessageBottomPinFramesRemaining = 0;
 let agentMessageScrollbarSyncRaf = 0;
 let agentWorkbenchResizeRaf = 0;
+let agentWorkbenchCollapseSyncRaf = 0;
+let agentWorkbenchTogglingTimer = 0;
 let agentSessionStore = null;
 let agentSessionPersistTimer = 0;
 let preferredLeftSidebarWidth = null;
@@ -845,7 +847,7 @@ const UI_TEXT = {
             help: '操作提示',
         },
         timeline: {
-            title: '相机关键帧',
+            title: '关键帧',
             cameraPreview: '预览',
             cameraPreviewTitle: '相机预览',
             cameraSettings: '控制',
@@ -1369,7 +1371,7 @@ const UI_TEXT = {
             help: 'Help',
         },
         timeline: {
-            title: 'Camera Keyframes',
+            title: 'Keyframes',
             cameraPreview: 'Preview',
             cameraPreviewTitle: 'Camera Preview',
             cameraSettings: 'Control',
@@ -2657,11 +2659,9 @@ function linearChannelToSrgb(channel) {
     return (1.055 * (value ** (1 / 2.4))) - 0.055;
 }
 
-// Agent/workbench 不能直接复用场景设置里的原始 #RRGGBB。
-// left-sidebar 看到的是 canvas 最终显示出来的背景色，而编辑器渲染链会把
-// scene background 当作线性空间 clear color，再经过 linear -> sRGB 输出。
-// 因此如果 agent 直接吃原始 hex，会稳定比 left-sidebar 更灰、更暗。
-// 这里先把场景设置值转换成“canvas 实际可见背景色”，再同步给 agent 的底层。
+// DOM fallback backgrounds cannot directly reuse the raw scene #RRGGBB.
+// The renderer treats scene background as linear clear color and outputs sRGB,
+// so first convert to the visible canvas color before syncing CSS fallbacks.
 function sceneHexToVisibleCanvasHex(hex) {
     const rgb = hexToRgb(hex);
     if (!rgb) return '#707070';
@@ -2686,6 +2686,7 @@ function syncAgentWorkbenchSceneBackground() {
     const normalized = normalizeHexColor(state.sceneBackgroundHex) || '#707070';
     const visibleHex = sceneHexToVisibleCanvasHex(normalized);
     document.documentElement.style.setProperty('--agent-workbench-scene-bg', visibleHex);
+    document.documentElement.style.setProperty('--canvas-bg', visibleHex);
 }
 
 function escapeHtml(value) {
@@ -4104,6 +4105,33 @@ function syncAgentWorkbenchCollapsedState() {
     scheduleAgentMessageScrollbarSync();
 }
 
+function scheduleAgentWorkbenchCollapseLayoutSync({ persist = true } = {}) {
+    if (agentWorkbenchTogglingTimer !== 0) {
+        clearTimeout(agentWorkbenchTogglingTimer);
+    }
+    document.body.classList.add('agent-workbench-toggling');
+
+    if (agentWorkbenchCollapseSyncRaf !== 0) {
+        return;
+    }
+
+    agentWorkbenchCollapseSyncRaf = requestAnimationFrame(() => {
+        agentWorkbenchCollapseSyncRaf = requestAnimationFrame(() => {
+            agentWorkbenchCollapseSyncRaf = 0;
+            if (persist) {
+                localStorage.setItem(AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY, String(state.agentWorkbenchCollapsed));
+            }
+            syncCanvasContainerToViewport();
+            scheduleAgentMessageScrollbarSync();
+
+            agentWorkbenchTogglingTimer = setTimeout(() => {
+                agentWorkbenchTogglingTimer = 0;
+                document.body.classList.remove('agent-workbench-toggling');
+            }, 120);
+        });
+    });
+}
+
 function applyAgentWorkbenchWidth(width, persist = true, {
     syncViewport = true,
     syncScrollbar = true,
@@ -4129,10 +4157,7 @@ function applyAgentWorkbenchWidth(width, persist = true, {
 function setAgentWorkbenchCollapsed(collapsed, persist = true) {
     state.agentWorkbenchCollapsed = Boolean(collapsed);
     syncAgentWorkbenchCollapsedState();
-    if (persist) {
-        localStorage.setItem(AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY, String(state.agentWorkbenchCollapsed));
-    }
-    syncCanvasContainerToViewport();
+    scheduleAgentWorkbenchCollapseLayoutSync({ persist });
 }
 
 function setAgentWorkflow(workflowId, persist = true) {

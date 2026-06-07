@@ -180,7 +180,14 @@ body.theme-light .agent-composer textarea {
 
 body.theme-light .button-primary,
 body.theme-light .menu-btn.menu-btn-active {
-    color: #111111;
+    background: rgba(107, 159, 249, 0.24);
+    border-color: rgba(47, 104, 196, 0.72);
+    color: #0b3d91;
+    box-shadow: 0 0 0 1px rgba(47, 104, 196, 0.18) inset;
+}
+
+body.theme-light .menu-btn.menu-btn-active .menu-btn-text {
+    color: #0b3d91;
 }
 
 body.theme-light .sidebar-toggle-btn {
@@ -2198,6 +2205,7 @@ body.clear-screen-mode #right-sidebar .floating-tool-group {
     border-radius: 12px;
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
     backdrop-filter: var(--panel-surface-filter);
+    -webkit-backdrop-filter: var(--panel-surface-filter);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -3269,8 +3277,10 @@ body.clear-screen-mode #right-sidebar .floating-tool-group {
     min-width: 0;
 }
 
+#right-sidebar.sidebar-narrow .depth-scale-row input[type="text"],
 #right-sidebar.sidebar-narrow .depth-scale-row input[type="number"],
 #right-sidebar.sidebar-narrow .scene-fov-row input[type="number"],
+#right-sidebar.sidebar-xnarrow .depth-scale-row input[type="text"],
 #right-sidebar.sidebar-xnarrow .depth-scale-row input[type="number"],
 #right-sidebar.sidebar-xnarrow .scene-fov-row input[type="number"] {
     flex: 0 0 64px;
@@ -3405,60 +3415,21 @@ body.clear-screen-mode #right-sidebar .floating-tool-group {
     -webkit-appearance: none;
 }
 
-#sceneDepthScale {
+#sceneDepthScale,
+#sceneFovRange,
+#cameraDisplayScale,
+#timelineCameraFovRange,
+#timelineCatmullParam,
+#timelineRotationParam,
+#timelineEaseParam {
     flex: 1;
-    height: 8px;
-    background: var(--input-bg);
-    border: 1px solid var(--input-border);
-    border-radius: 4px;
-    outline: none;
-    -webkit-appearance: none;
-}
-
-#sceneDepthScale::-webkit-slider-runnable-track {
-    background: var(--input-bg);
-    height: 8px;
-    border-radius: 4px;
-}
-
-#sceneDepthScale::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
-    background: var(--accent);
-    border-radius: 50%;
-    cursor: pointer;
-    margin-top: -3px;
+    height: 6px;
+    margin: 0;
+    accent-color: var(--accent);
 }
 
 #sceneDepthScaleNumber {
     width: 78px;
-}
-
-#sceneFovRange {
-    flex: 1;
-    height: 8px;
-    background: var(--input-bg);
-    border: 1px solid var(--input-border);
-    border-radius: 4px;
-    outline: none;
-    -webkit-appearance: none;
-}
-
-#sceneFovRange::-webkit-slider-runnable-track {
-    background: var(--input-bg);
-    height: 8px;
-    border-radius: 4px;
-}
-
-#sceneFovRange::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
-    background: var(--accent);
-    border-radius: 50%;
-    cursor: pointer;
-    margin-top: -3px;
 }
 
 #sceneFovNumber {
@@ -3857,23 +3828,14 @@ body.theme-light #cameraSettingsPanel .property-inputs select option {
 #timelineRotationParam,
 #timelineEaseParam {
     width: 84px;
-    height: 6px;
-    margin: 0;
-    accent-color: var(--accent);
 }
 
 #cameraDisplayScale {
     width: 84px;
-    height: 6px;
-    margin: 0;
-    accent-color: var(--accent);
 }
 
 #timelineCameraFovRange {
     width: 84px;
-    height: 6px;
-    margin: 0;
-    accent-color: var(--accent);
 }
 
 #cameraSettingsPanel .timeline-camera-number-inputs input[type="number"] {

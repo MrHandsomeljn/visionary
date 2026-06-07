@@ -34,3 +34,11 @@ test('timeline track renders compact fov markers independently from pose markers
     assert.match(source, /state\.cameraFovKeyframes\.length > 0/);
     assert.match(css, /\.timeline-fov-marker \{/);
 });
+
+test('scene and timeline camera sliders share the compact accent styling', () => {
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+
+    assert.match(css, /#sceneDepthScale,\s*#sceneFovRange,\s*#cameraDisplayScale,\s*#timelineCameraFovRange/);
+    assert.match(css, /#sceneDepthScale,[\s\S]*#timelineEaseParam \{[\s\S]*height:\s*6px;[\s\S]*accent-color:\s*var\(--accent\);/);
+    assert.doesNotMatch(css, /#timelineCameraFovRange::-webkit-slider-thumb/);
+});

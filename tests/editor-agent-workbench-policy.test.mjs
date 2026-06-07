@@ -32,6 +32,36 @@ test('agent scrollbar sync is coalesced instead of queueing duplicate rAF callba
     assert.doesNotMatch(source, /requestAnimationFrame\(syncAgentMessageScrollbar\)/);
 });
 
+test('agent collapse defers layout-heavy sync outside the click frame', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const scheduleStart = source.indexOf('function scheduleAgentWorkbenchCollapseLayoutSync');
+    const applyStart = source.indexOf('function applyAgentWorkbenchWidth', scheduleStart);
+    const scheduleBody = source.slice(scheduleStart, applyStart);
+    const setStart = source.indexOf('function setAgentWorkbenchCollapsed');
+    const workflowStart = source.indexOf('function setAgentWorkflow', setStart);
+    const setBody = source.slice(setStart, workflowStart);
+
+    assert.match(source, /let agentWorkbenchCollapseSyncRaf = 0;/);
+    assert.match(source, /let agentWorkbenchTogglingTimer = 0;/);
+    assert.ok(scheduleStart >= 0, 'expected collapse sync scheduler');
+    assert.match(scheduleBody, /document\.body\.classList\.add\('agent-workbench-toggling'\);/);
+    assert.match(scheduleBody, /if \(agentWorkbenchCollapseSyncRaf !== 0\) \{[\s\S]*return;[\s\S]*\}/);
+    assert.equal(
+        (scheduleBody.match(/agentWorkbenchCollapseSyncRaf = requestAnimationFrame\(\(\) => \{/g) || []).length,
+        2
+    );
+    assert.match(scheduleBody, /syncCanvasContainerToViewport\(\);/);
+    assert.match(scheduleBody, /scheduleAgentMessageScrollbarSync\(\);/);
+    assert.match(scheduleBody, /document\.body\.classList\.remove\('agent-workbench-toggling'\);/);
+    assert.match(setBody, /state\.agentWorkbenchCollapsed = Boolean\(collapsed\);/);
+    assert.match(setBody, /syncAgentWorkbenchCollapsedState\(\);/);
+    assert.match(setBody, /scheduleAgentWorkbenchCollapseLayoutSync\(\{ persist \}\);/);
+    assert.doesNotMatch(setBody, /syncCanvasContainerToViewport\(\);/);
+    assert.match(css, /body\.agent-workbench-resizing #agent-workbench\s*\{[\s\S]*will-change:\s*width;[\s\S]*backdrop-filter:\s*none;[\s\S]*-webkit-backdrop-filter:\s*none;[\s\S]*\}/);
+    assert.doesNotMatch(css, /body\.agent-workbench-toggling #agent-workbench\s*\{[\s\S]*backdrop-filter:\s*none/);
+});
+
 test('agent workflow tabs keep a fixed width and resize mode disables expensive workbench filters', () => {
     const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
 
@@ -47,6 +77,7 @@ test('agent workflow tabs keep a fixed width and resize mode disables expensive 
         css,
         /body\.agent-workbench-resizing #agent-workbench\s*\{[\s\S]*will-change:\s*width;[\s\S]*backdrop-filter:\s*none;[\s\S]*-webkit-backdrop-filter:\s*none;[\s\S]*\}/
     );
+    assert.doesNotMatch(css, /body\.agent-workbench-toggling #agent-workbench\s*\{[\s\S]*backdrop-filter:\s*none/);
     assert.match(
         css,
         /\.agent-workflow-tabs\s*\{[\s\S]*flex:\s*1 1 auto;[\s\S]*display:\s*flex;[\s\S]*justify-content:\s*flex-start;[\s\S]*gap:\s*var\(--agent-workflow-tab-gap\);[\s\S]*margin-right:\s*var\(--agent-output-right-gap\);[\s\S]*order:\s*1;[\s\S]*\}/
@@ -151,6 +182,17 @@ test('agent workflow tabs keep a fixed width and resize mode disables expensive 
         css,
         /#agent-workbench\.is-collapsed \.agent-composer-actions\s*\{[\s\S]*justify-content:\s*flex-start;[\s\S]*\}/
     );
+});
+
+test('left sidebar shares the bottom timeline panel surface treatment', () => {
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const leftSidebarRule = css.match(/#left-sidebar\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+
+    assert.match(leftSidebarRule, /background:\s*var\(--panel-surface-bg\);/);
+    assert.match(leftSidebarRule, /backdrop-filter:\s*var\(--panel-surface-filter\);/);
+    assert.match(leftSidebarRule, /-webkit-backdrop-filter:\s*var\(--panel-surface-filter\);/);
+    assert.match(css, /#bottom-timeline\s*\{[\s\S]*background:\s*var\(--panel-surface-bg\);[\s\S]*backdrop-filter:\s*var\(--panel-surface-filter\);/);
+    assert.doesNotMatch(css, /--left-sidebar-bg|--scene-canvas-bg-color/);
 });
 
 test('project session button renders as a composer avatar with dynamic gradients', () => {

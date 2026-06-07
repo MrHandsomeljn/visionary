@@ -26,3 +26,10 @@ test('timeline and camera preview selects define explicit option colors for open
     assert.match(css, /color:\s*var\(--text-primary\);/);
     assert.match(css, /body\.theme-light #timelineFps option,\s*body\.theme-light #timelineSpeed option,\s*body\.theme-light #cameraPreviewPanel \.property-inputs select option/);
 });
+
+test('light theme render mode active button keeps selected text visible', () => {
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+
+    assert.match(css, /body\.theme-light \.button-primary,\s*body\.theme-light \.menu-btn\.menu-btn-active \{[\s\S]*background:\s*rgba\(107,\s*159,\s*249,\s*0\.24\);[\s\S]*border-color:\s*rgba\(47,\s*104,\s*196,\s*0\.72\);[\s\S]*color:\s*#0b3d91;/);
+    assert.match(css, /body\.theme-light \.menu-btn\.menu-btn-active \.menu-btn-text \{[\s\S]*color:\s*#0b3d91;/);
+});

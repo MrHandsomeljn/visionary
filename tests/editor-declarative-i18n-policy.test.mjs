@@ -42,3 +42,9 @@ test('editor js routes user-visible feedback through i18n keys', () => {
     assert.doesNotMatch(source, /confirm\('[^']*[\u4e00-\u9fff]/);
     assert.doesNotMatch(source, /throw new Error\('[^']*[\u4e00-\u9fff]/);
 });
+
+test('scene background sync updates canvas fallback css background', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(source, /function syncAgentWorkbenchSceneBackground\(\) \{[\s\S]*const visibleHex = sceneHexToVisibleCanvasHex\(normalized\);[\s\S]*--agent-workbench-scene-bg[\s\S]*--canvas-bg/);
+});
