@@ -228,6 +228,8 @@ test('project browser cards expose delete actions and inline rename editing', as
     assert.match(source, /if \(state\.projectSession\.activeProjectId === project\.id\) \{[\s\S]*state\.projectSession\.activeProjectId = renamed\?\.id \|\| project\.id;[\s\S]*resetAgentCodexSessionBinding\(\);/);
     assert.match(source, /projectApi\.deleteProject\(state\.projectSession\.user, project\.id\)/);
     assert.match(source, /if \(state\.projectSession\.activeProjectId === project\.id\) \{[\s\S]*clearActiveServerProjectSelection\(\);/);
+    assert.match(source, /if \(state\.projectSession\.activeProjectId === project\.id\) \{[\s\S]*clearActiveServerProjectSelection\(\);[\s\S]*resetAllAgentConversations\(\);[\s\S]*resetAgentCodexSessionBinding\(\);/);
+    assert.match(source, /function resetAllAgentConversations\(\) \{[\s\S]*Object\.keys\(AGENT_WORKFLOW_DEFS\)\.forEach\(\(workflowId\) => \{[\s\S]*thread\.items = createDefaultAgentMessages\(workflowId\);[\s\S]*state\.agentPendingImages = \[\];/);
     assert.match(css, /\.project-browser-project-rename-btn\s*\{/);
     assert.match(css, /\.project-browser-project-card-meta\s*\{[\s\S]*justify-content:\s*space-between;/);
     assert.match(css, /\.project-browser-project-card-size\s*\{[\s\S]*text-align:\s*right;/);

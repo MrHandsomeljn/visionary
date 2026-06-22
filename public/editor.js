@@ -2742,6 +2742,8 @@ async function deleteProjectFromBrowser(projectId) {
         await projectApi.deleteProject(state.projectSession.user, project.id);
         if (state.projectSession.activeProjectId === project.id) {
             clearActiveServerProjectSelection();
+            resetAllAgentConversations();
+            resetAgentCodexSessionBinding();
             updateWorkspaceStatusIndicator();
         }
         cancelProjectRename();
@@ -5728,6 +5730,17 @@ function resetAgentConversation() {
     renderAgentComposerAttachments();
     renderAgentMessages({ autoScroll: 'always' });
     schedulePersistAgentConversations();
+}
+
+function resetAllAgentConversations() {
+    Object.keys(AGENT_WORKFLOW_DEFS).forEach((workflowId) => {
+        const thread = ensureAgentWorkflowThread(workflowId);
+        thread.items = createDefaultAgentMessages(workflowId);
+    });
+    setCurrentAgentWorkflowThread(state.agentWorkflow);
+    state.agentPendingImages = [];
+    renderAgentComposerAttachments();
+    renderAgentMessages({ autoScroll: 'always' });
 }
 
 function handleAgentMessageListClick(event) {
