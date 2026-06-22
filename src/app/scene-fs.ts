@@ -519,9 +519,11 @@ export class SceneFS {
     if (Array.isArray((raw as any).scenes)) {
       const scenes = (raw as any).scenes as Array<{ models: Array<any> }>;
       const assets: AssetEntry[] = [];
+      let sourceModelCount = 0;
 
       for (const scene of scenes) {
         const models = Array.isArray(scene?.models) ? scene.models : [];
+        sourceModelCount += models.length;
         for (const m of models) {
           const source = this.resolveModelSource(m);
           if (!source) {
@@ -581,7 +583,15 @@ export class SceneFS {
       }
 
       if (assets.length === 0) {
-        return null;
+        if (sourceModelCount > 0) {
+          return null;
+        }
+        return {
+          version: 1,
+          meta: raw.meta ?? { app: 'VisionaryEditor', createdAt: new Date().toISOString() },
+          env: raw.env ?? {},
+          assets: []
+        };
       }
 
       return {
@@ -636,7 +646,15 @@ export class SceneFS {
       }
 
       if (normalizedAssets.length === 0) {
-        return null;
+        if (raw.assets.length > 0) {
+          return null;
+        }
+        return {
+          version: 1,
+          meta: raw.meta ?? { app: 'VisionaryEditor', createdAt: new Date().toISOString() },
+          env: raw.env ?? {},
+          assets: []
+        };
       }
 
       return {

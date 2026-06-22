@@ -100,6 +100,44 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
     const snapshot = {
         version: 2,
         savedAt: '2026-04-12T00:00:00.000Z',
+        stepStates: {
+            'session-1:attempt-1:main-image': {
+                sessionId: 'session-1',
+                attemptId: 'attempt-1',
+                blockId: 'progress-1',
+                stepKey: 'main-image',
+                images: [
+                    {
+                        id: 'main-image-1',
+                        title: '主图 1',
+                        assetPath: 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png',
+                        relativePath: 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png',
+                        mimeType: 'image/png',
+                        bytes: 123,
+                    },
+                ],
+                selectedIndex: 0,
+                applied: true,
+                actions: [],
+                isCurrent: false,
+                expanded: true,
+            },
+        },
+        pipelineStates: {
+            'session-1:attempt-1': {
+                kind: 'scene-skill',
+                sessionId: 'session-1',
+                attemptId: 'attempt-1',
+                status: 'ready',
+                currentStepKey: 'front-view',
+                lastAppliedStepKey: 'main-image',
+                autoContinue: true,
+                steps: {
+                    'main-image': { status: 'applied' },
+                    'front-view': { status: 'ready' },
+                },
+            },
+        },
         workflows: [
             {
                 workflow: 'scene-build',
@@ -140,6 +178,7 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
                                     {
                                         id: 'progress-1',
                                         type: 'progress',
+                                        stepKey: 'main-image',
                                         title: '场景构建中',
                                         status: 'complete',
                                         statusText: '已完成',
@@ -152,6 +191,30 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
                                         status: 'ready',
                                         alt: '场景草图预览',
                                         src: 'data:image/png;base64,V29ybGQ=',
+                                    },
+                                ],
+                                steps: [
+                                    {
+                                        id: 'progress-1',
+                                        type: 'progress',
+                                        stepKey: 'main-image',
+                                        title: '主图生成',
+                                        statusText: '已完成',
+                                        value: 1,
+                                        applied: true,
+                                        isCurrent: false,
+                                        expanded: true,
+                                        images: [
+                                            {
+                                                id: 'main-image-1',
+                                                title: '主图 1',
+                                                assetPath: 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png',
+                                                relativePath: 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png',
+                                                src: 'mock://runtime-url',
+                                                mimeType: 'image/png',
+                                                bytes: 123,
+                                            },
+                                        ],
                                     },
                                 ],
                             },
@@ -181,10 +244,17 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
     assert.equal(persisted.schema, 'visionary.agent_history');
     assert.equal(persisted.storageMode, 'workspace');
     assert.equal(persisted.assetRoot, 'agent_history');
+    assert.deepEqual(persisted.stepStates?.['session-1:attempt-1:main-image'], snapshot.stepStates['session-1:attempt-1:main-image']);
+    assert.deepEqual(persisted.pipelineStates?.['session-1:attempt-1'], snapshot.pipelineStates['session-1:attempt-1']);
     assert.equal(Array.isArray(persisted.references?.links), true);
     assert.equal(persisted.workflows.length, 1);
     assert.equal(persisted.workflows[0].workflow, 'scene-build');
     assert.equal(persisted.workflows[0].label, '场景');
+    const persistedSteps = persisted.workflows[0].items[1].attempts[0].steps;
+    assert.equal(persistedSteps.length, 1);
+    assert.equal(persistedSteps[0].stepKey, 'main-image');
+    assert.equal(persistedSteps[0].images[0].src, undefined);
+    assert.equal(persistedSteps[0].images[0].assetPath, 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png');
 
     const openaiMessages = persisted.openai_conversation?.data || [];
     assert.equal(openaiMessages.length, 2);

@@ -12,6 +12,7 @@ import {
     createAgentGenerationAttempt,
     createAgentSession,
     createAgentThreadMessage,
+    getAgentAttemptStepBlocks,
     getAgentSessionActiveAttempt,
     patchAgentSessionAttemptBlock,
     resolveAgentSessionActionAvailability,
@@ -56,12 +57,20 @@ const dom = {
     app: document.getElementById('app'),
     editorShell: document.getElementById('editor-shell'),
     editorStage: document.getElementById('editor-stage'),
+    agentWorkbenchShell: document.getElementById('agent-workbench-shell'),
     agentWorkbench: document.getElementById('agent-workbench'),
+    agentWorkbenchCollapsedControls: document.getElementById('agentWorkbenchCollapsedControls'),
     agentWorkbenchResizer: document.getElementById('agent-workbench-resizer'),
     btnToggleAgentWorkbench: document.getElementById('btnToggleAgentWorkbench'),
     agentWorkflowStatus: document.getElementById('agentWorkflowStatus'),
+    agentWorkbenchModeTabs: document.getElementById('agentWorkbenchModeTabs'),
+    agentWorkbenchCollapsedModeTabs: document.getElementById('agentWorkbenchCollapsedModeTabs'),
     agentWorkflowTabs: document.getElementById('agentWorkflowTabs'),
+    assetLibraryTabs: document.getElementById('assetLibraryTabs'),
+    agentWorkbenchPanels: Array.from(document.querySelectorAll('[data-mode-panel]')),
+    assetLibraryPanels: Array.from(document.querySelectorAll('[data-asset-panel]')),
     btnUserSession: document.getElementById('btnUserSession'),
+    btnCollapsedUserSession: document.getElementById('btnCollapsedUserSession'),
     agentContextSummary: document.getElementById('agentContextSummary'),
     btnAgentClearConversation: document.getElementById('btnAgentClearConversation'),
     agentMessageScroll: document.querySelector('.agent-message-scroll'),
@@ -73,6 +82,8 @@ const dom = {
     agentComposer: document.getElementById('agentComposer'),
     agentComposerDock: document.getElementById('agentComposerDock'),
     agentComposerAttachments: document.getElementById('agentComposerAttachments'),
+    agentComposerSkillToolbar: document.getElementById('agentComposerSkillToolbar'),
+    agentComposerSkillTokens: document.getElementById('agentComposerSkillTokens'),
     agentImageInput: document.getElementById('agentImageInput'),
     agentComposerInput: document.getElementById('agentComposerInput'),
     btnAgentAddImage: document.getElementById('btnAgentAddImage'),
@@ -249,14 +260,27 @@ const dom = {
     projectBrowserTitle: document.getElementById('projectBrowserTitle'),
     projectBrowserUserSummary: document.getElementById('projectBrowserUserSummary'),
     projectBrowserProjectGrid: document.getElementById('projectBrowserProjectGrid'),
+    projectBrowserCodexAuthInline: document.getElementById('projectBrowserCodexAuthInline'),
+    projectBrowserCodexAuthStatus: document.getElementById('projectBrowserCodexAuthStatus'),
+    projectBrowserAgentRuntimeStatus: document.getElementById('projectBrowserAgentRuntimeStatus'),
+    projectBrowserCodexAuthKey: document.getElementById('projectBrowserCodexAuthKey'),
     projectBrowserSaveAsPanel: document.getElementById('projectBrowserSaveAsPanel'),
     projectBrowserSaveAsName: document.getElementById('projectBrowserSaveAsName'),
     projectBrowserSaveAsNameError: document.getElementById('projectBrowserSaveAsNameError'),
     btnProjectBrowserClose: document.getElementById('btnProjectBrowserClose'),
+    btnProjectBrowserCreateNew: document.getElementById('btnProjectBrowserCreateNew'),
     btnProjectBrowserSaveAs: document.getElementById('btnProjectBrowserSaveAs'),
     btnProjectBrowserSaveAsCancel: document.getElementById('btnProjectBrowserSaveAsCancel'),
     btnProjectBrowserSaveAsConfirm: document.getElementById('btnProjectBrowserSaveAsConfirm'),
+    btnProjectBrowserEditCodexAuth: document.getElementById('btnProjectBrowserEditCodexAuth'),
+    btnProjectBrowserSaveCodexAuth: document.getElementById('btnProjectBrowserSaveCodexAuth'),
     btnProjectBrowserLogout: document.getElementById('btnProjectBrowserLogout'),
+    projectCreateModal: document.getElementById('projectCreateModal'),
+    projectCreateName: document.getElementById('projectCreateName'),
+    projectCreateNameError: document.getElementById('projectCreateNameError'),
+    btnProjectCreateClose: document.getElementById('btnProjectCreateClose'),
+    btnProjectCreateCancel: document.getElementById('btnProjectCreateCancel'),
+    btnProjectCreateConfirm: document.getElementById('btnProjectCreateConfirm'),
     workspaceTargetModal: document.getElementById('workspaceTargetModal'),
     workspaceTargetTitle: document.getElementById('workspaceTargetTitle'),
     workspaceTargetPrompt: document.getElementById('workspaceTargetPrompt'),
@@ -306,6 +330,14 @@ function createProjectSessionState() {
         projects: [],
         loadingProjects: false,
         lastError: null,
+        codexAuthLoading: false,
+        codexAuthSaving: false,
+        codexAuthEditing: false,
+        codexAuthHasAuth: false,
+        codexAuthProjectCount: 0,
+        renamingProjectId: '',
+        renamingProjectName: '',
+        renamingProjectError: '',
         adminUsers: [],
         loadingAdminUsers: false,
         adminSelectedUser: '',
@@ -359,10 +391,15 @@ const state = {
     uiLanguage: 'zh',
     leftSidebarCollapsed: false,
     agentWorkbenchCollapsed: false,
+    agentWorkbenchMode: 'conversation',
+    agentAssetLibraryTab: 'scene',
     agentWorkflow: 'scene-build',
+    agentCodexConversationId: '',
+    agentCodexThreadId: '',
     agentWorkflowThreads: {},
     agentMessages: [],
     agentPendingImages: [],
+    agentComposerSkillId: '',
     demoScene: createInactiveDemoSceneState(),
     workspace: createWorkspaceState(),
     projectSession: createProjectSessionState(),
@@ -370,6 +407,42 @@ const state = {
     forceFullWorkspaceAssetMigration: false,
     forceFullServerAssetMigration: false,
 };
+
+const AGENT_COMPOSER_SKILL_DEFS = [
+    {
+        id: 'scene',
+        value: '$scene-skill',
+        labelKey: 'agent.skills.scene',
+        aliases: ['$scene-skill'],
+    },
+    {
+        id: 'object',
+        value: '$object-skill',
+        labelKey: 'agent.skills.object',
+        aliases: ['$object-skill'],
+    },
+    {
+        id: 'character',
+        value: '$character-skill',
+        labelKey: 'agent.skills.character',
+        aliases: ['$character-skill'],
+    },
+    {
+        id: 'camera',
+        value: '$camera-skill',
+        labelKey: 'agent.skills.camera',
+        aliases: ['$camera-skill', 'camera-skill'],
+    },
+];
+
+const SCENE_PIPELINE_STEP_DEFS = [
+    { key: 'main-image', titleKey: 'agent.pipelineSteps.mainImage' },
+    { key: 'front-view', titleKey: 'agent.pipelineSteps.frontView' },
+    { key: 'top-view', titleKey: 'agent.pipelineSteps.topView' },
+    { key: 'layout', titleKey: 'agent.pipelineSteps.layout' },
+    { key: 'components-3d', titleKey: 'agent.pipelineSteps.components3d' },
+    { key: 'insert-scene', titleKey: 'agent.pipelineSteps.insertScene' },
+];
 
 // EditorApp 实例 (会在 init 后设置)
 let app = null;
@@ -394,6 +467,7 @@ let sidebarResizeState = null;
 let agentWorkbenchResizeState = null;
 let agentMessageScrollbarDragState = null;
 let agentPreviewManagerPromise = null;
+let projectRenameCommitInFlight = false;
 let agentMessageBottomPinRaf = 0;
 let agentMessageBottomPinFramesRemaining = 0;
 let agentMessageScrollbarSyncRaf = 0;
@@ -547,6 +621,13 @@ const UI_TEXT = {
         },
         loading: {
             default: '加载中...',
+            bootPreparing: '正在准备编辑器外壳...',
+            bootRestoringPreferences: '正在恢复语言、主题和项目会话...',
+            bootInitializingWorkbench: '正在初始化 Agent 工作台与相机面板...',
+            bootLoadingEditorApp: '正在加载 EditorApp 模块...',
+            bootInitializingWebGpu: '正在初始化 WebGPU 渲染器...',
+            bootConnectingEditor: '正在连接模型、相机和时间轴事件...',
+            bootFinalizingUi: '正在同步侧栏、工具栏和时间轴状态...',
             loadingModel: '加载模型中... ({current}/{total})',
             renderingVideo: '渲染视频中...',
             renderingImage: '渲染图片中...',
@@ -633,6 +714,9 @@ const UI_TEXT = {
             browserTitle: '我的项目',
             saveAsLabel: '另存为项目名',
             saveAction: '保存',
+            createNewProjectAction: '创建新项目',
+            createProjectNameLabel: '新项目名称',
+            createAction: '创建',
             saveCurrentAsAction: '当前项目另存为',
             logoutAction: '退出登录',
             adminTitle: '管理员面板',
@@ -643,6 +727,32 @@ const UI_TEXT = {
             noProjectsYet: '暂无历史项目',
             currentBadge: '当前项目',
             openAction: '打开',
+            deleteAction: '删除',
+            renameProjectAria: '重命名项目 {name}',
+            invalidProjectName: '项目名称包含不支持的字符，无法作为服务器端项目名称',
+            projectRenamed: '项目已重命名为“{name}”',
+            confirmDeleteProject: '确认删除项目“{name}”？',
+            projectDeleted: '项目已删除：{name}',
+            codexAuthTitle: 'Codex Auth',
+            codexAuthPlaceholder: '输入 CODEX_API_KEY',
+            codexAuthSaveAction: '保存 Auth',
+            codexAuthEditAction: '编辑 Codex Auth',
+            codexAuthSubmitAction: '提交 Codex Auth',
+            codexAuthReady: '已配置',
+            codexAuthMissing: '未配置',
+            codexAuthSaving: '保存中...',
+            codexAuthSaved: 'Codex Auth 已保存，并同步到 {count} 个项目',
+            codexAuthRequired: '请输入 Codex Auth Key',
+            codexAuthSaveFailed: '保存 Codex Auth 失败',
+            agentRuntimeLabel: 'Agent',
+            agentRuntimeCodex: 'Codex',
+            agentRuntimeDemo: 'Demo',
+            agentRuntimeChecking: '正在检查 Codex Auth',
+            agentRuntimeNoLogin: '未登录，当前使用 Demo Agent',
+            agentRuntimeNoProject: '未打开服务器项目，当前使用 Demo Agent',
+            agentRuntimeNoServerWorkspace: '当前项目未绑定服务器工作区，当前使用 Demo Agent',
+            agentRuntimeNoAuth: 'Codex Auth 未配置，当前使用 Demo Agent',
+            agentRuntimeReady: '已启用实际 Codex Agent',
             loadingUsers: '正在加载用户...',
             noUsersFound: '暂无用户',
             projectCount: '{count} 个项目',
@@ -697,6 +807,8 @@ const UI_TEXT = {
             workflowTabs: 'Agent 流程',
             messageHistory: '对话记录',
             pendingImages: '待发送图片',
+            skillToolbar: 'Agent 技能',
+            removeSkill: '移除技能 {name}',
             inputPlaceholder: '输入一句自然语言，触发当前流程的占位 Agent 响应',
             collapsedTooltip: '收起 Agent 工作台',
             expandedTooltip: '展开 Agent 工作台',
@@ -706,6 +818,12 @@ const UI_TEXT = {
             resetView: '重置视角',
             archivePreview: '展开查看',
             collapseSession: '收起',
+            skills: {
+                scene: '场景',
+                object: '物体',
+                character: '人物',
+                camera: '相机',
+            },
             actions: {
                 cancel: '取消',
                 retry: '重试',
@@ -782,6 +900,22 @@ const UI_TEXT = {
                 progressPlan: '整理生成步骤',
                 progressCompose: '组合输出内容',
                 progressDone: '已完成',
+            },
+            pipelineSteps: {
+                mainImage: '主图生成',
+                frontView: '正视图生成',
+                topView: '俯视图生成',
+                layout: '获取 layout',
+                components3d: '生成组件 3D 资产',
+                insertScene: '最终插入到场景',
+                pending: '等待上一步完成',
+                current: '当前步骤',
+                applied: '已应用',
+                more: '后续步骤',
+                continueAction: '继续',
+                layoutDetections: '检测到 {count} 个对象',
+                components3dAssets: '3D 资产 {count} 个',
+                insertSceneAsset: 'Blender 工程，{count} 个对象',
             },
         },
         sidebar: {
@@ -922,6 +1056,7 @@ const UI_TEXT = {
                 mouse: '鼠标操作',
                 keyboard: '键盘快捷键',
                 camera: '相机移动',
+                codex: '后台 Codex',
             },
             helpItems: {
                 mouseRotate: '旋转视角',
@@ -940,6 +1075,7 @@ const UI_TEXT = {
                 movePlane: '前后左右移动',
                 moveVertical: '上升 / 下降',
                 speedUp: '加速移动',
+                codexResume: '进项目目录，用 CODEX_HOME=$PWD/codex_home codex exec --json resume <threadId> "继续"',
             },
             exportCurrentFrame: '将导出当前视角的单帧图像',
             exportTimeline: '时间轴导出: {duration}s, {fps} FPS, {frames} 帧, 关键帧 {keyframes}',
@@ -957,6 +1093,7 @@ const UI_TEXT = {
             demoCameraPreviewCanceled: 'Demo 相机预览已取消，并恢复原时间轴',
             demoCameraCompletion: '请查看当前相机，并确认是否应用。',
             agentExecutionFailed: 'Agent 执行失败',
+            codexAgentFailed: 'Codex 执行失败: {message}',
             agentPreviewPlaceholder: 'Agent 生成预览占位',
             invalidDepthScale: '深度倍率格式错误',
             setDepthScaleFailed: '设置深度倍率失败',
@@ -1071,6 +1208,13 @@ const UI_TEXT = {
         },
         loading: {
             default: 'Loading...',
+            bootPreparing: 'Preparing editor shell...',
+            bootRestoringPreferences: 'Restoring language, theme, and project session...',
+            bootInitializingWorkbench: 'Initializing Agent workbench and camera panels...',
+            bootLoadingEditorApp: 'Loading EditorApp module...',
+            bootInitializingWebGpu: 'Initializing WebGPU renderer...',
+            bootConnectingEditor: 'Connecting model, camera, and timeline events...',
+            bootFinalizingUi: 'Syncing sidebars, toolbar, and timeline state...',
             loadingModel: 'Loading models... ({current}/{total})',
             renderingVideo: 'Rendering video...',
             renderingImage: 'Rendering image...',
@@ -1157,6 +1301,9 @@ const UI_TEXT = {
             browserTitle: 'My Projects',
             saveAsLabel: 'Save as project name',
             saveAction: 'Save',
+            createNewProjectAction: 'Create New Project',
+            createProjectNameLabel: 'New project name',
+            createAction: 'Create',
             saveCurrentAsAction: 'Save Current As',
             logoutAction: 'Logout',
             adminTitle: 'Admin Panel',
@@ -1167,6 +1314,32 @@ const UI_TEXT = {
             noProjectsYet: 'No projects yet',
             currentBadge: 'Current',
             openAction: 'Open',
+            deleteAction: 'Delete',
+            renameProjectAria: 'Rename project {name}',
+            invalidProjectName: 'Project name contains unsupported characters for a server project name',
+            projectRenamed: 'Project renamed to "{name}"',
+            confirmDeleteProject: 'Delete project "{name}"?',
+            projectDeleted: 'Project deleted: {name}',
+            codexAuthTitle: 'Codex Auth',
+            codexAuthPlaceholder: 'Enter CODEX_API_KEY',
+            codexAuthSaveAction: 'Save Auth',
+            codexAuthEditAction: 'Edit Codex Auth',
+            codexAuthSubmitAction: 'Submit Codex Auth',
+            codexAuthReady: 'Configured',
+            codexAuthMissing: 'Not configured',
+            codexAuthSaving: 'Saving...',
+            codexAuthSaved: 'Codex Auth saved and synced to {count} projects',
+            codexAuthRequired: 'Enter a Codex auth key',
+            codexAuthSaveFailed: 'Failed to save Codex Auth',
+            agentRuntimeLabel: 'Agent',
+            agentRuntimeCodex: 'Codex',
+            agentRuntimeDemo: 'Demo',
+            agentRuntimeChecking: 'Checking Codex Auth',
+            agentRuntimeNoLogin: 'Not logged in, using Demo Agent',
+            agentRuntimeNoProject: 'No server project is open, using Demo Agent',
+            agentRuntimeNoServerWorkspace: 'Current project is not bound to the server workspace, using Demo Agent',
+            agentRuntimeNoAuth: 'Codex Auth is not configured, using Demo Agent',
+            agentRuntimeReady: 'Real Codex Agent is enabled',
             loadingUsers: 'Loading users...',
             noUsersFound: 'No users found',
             projectCount: '{count} projects',
@@ -1221,6 +1394,8 @@ const UI_TEXT = {
             workflowTabs: 'Agent Workflows',
             messageHistory: 'Conversation history',
             pendingImages: 'Pending images',
+            skillToolbar: 'Agent skills',
+            removeSkill: 'Remove skill {name}',
             inputPlaceholder: 'Type a natural-language request to trigger the placeholder agent for the current workflow',
             collapsedTooltip: 'Collapse agent workbench',
             expandedTooltip: 'Expand agent workbench',
@@ -1230,6 +1405,12 @@ const UI_TEXT = {
             resetView: 'Reset view',
             archivePreview: 'Expand details',
             collapseSession: 'Collapse',
+            skills: {
+                scene: 'Scene',
+                object: 'Object',
+                character: 'Character',
+                camera: 'Camera',
+            },
             actions: {
                 cancel: 'Cancel',
                 retry: 'Retry',
@@ -1306,6 +1487,22 @@ const UI_TEXT = {
                 progressPlan: 'Organizing generation steps',
                 progressCompose: 'Composing output',
                 progressDone: 'Completed',
+            },
+            pipelineSteps: {
+                mainImage: 'Main image generation',
+                frontView: 'Front view generation',
+                topView: 'Top view generation',
+                layout: 'Layout extraction',
+                components3d: 'Generate component 3D assets',
+                insertScene: 'Insert into scene',
+                pending: 'Waiting for previous step',
+                current: 'Current step',
+                applied: 'Applied',
+                more: 'Later steps',
+                continueAction: 'Continue',
+                layoutDetections: '{count} detected objects',
+                components3dAssets: '{count} 3D assets',
+                insertSceneAsset: 'Blender scene, {count} objects',
             },
         },
         sidebar: {
@@ -1446,6 +1643,7 @@ const UI_TEXT = {
                 mouse: 'Mouse',
                 keyboard: 'Keyboard shortcuts',
                 camera: 'Camera movement',
+                codex: 'Backend Codex',
             },
             helpItems: {
                 mouseRotate: 'Rotate view',
@@ -1464,6 +1662,7 @@ const UI_TEXT = {
                 movePlane: 'Move forward / backward / sideways',
                 moveVertical: 'Move up / down',
                 speedUp: 'Move faster',
+                codexResume: 'Enter the project folder, then run CODEX_HOME=$PWD/codex_home codex exec --json resume <threadId> "continue"',
             },
             exportCurrentFrame: 'Exports a single frame from the current view',
             exportTimeline: 'Timeline export: {duration}s, {fps} FPS, {frames} frames, {keyframes} keyframes',
@@ -1481,6 +1680,7 @@ const UI_TEXT = {
             demoCameraPreviewCanceled: 'Demo camera preview was canceled and restored',
             demoCameraCompletion: 'Please review the current camera preview and confirm whether to apply it.',
             agentExecutionFailed: 'Agent execution failed',
+            codexAgentFailed: 'Codex failed: {message}',
             agentPreviewPlaceholder: 'Agent preview placeholder',
             invalidDepthScale: 'Invalid depth scale',
             setDepthScaleFailed: 'Failed to set depth scale',
@@ -1645,22 +1845,36 @@ function clearProjectNameConflictState(input, errorElement) {
     }
 }
 
-function setProjectNameConflictState(input, errorElement) {
+function setProjectNameErrorState(input, errorElement, message) {
     if (input) {
         input.classList.add('has-error');
         input.focus();
         input.select?.();
     }
     if (errorElement) {
-        errorElement.textContent = t('projectSession.duplicateProjectName');
+        errorElement.textContent = message;
         errorElement.classList.remove('hidden');
     }
+}
+
+function setProjectNameConflictState(input, errorElement) {
+    setProjectNameErrorState(input, errorElement, t('projectSession.duplicateProjectName'));
 }
 
 function isDuplicateProjectNameError(error) {
     const code = String(error?.code || '').trim().toUpperCase();
     const message = String(error?.message || '').trim().toLowerCase();
     return code === 'CONFLICT' || message.includes('project name already exists');
+}
+
+function isInvalidProjectNameError(error) {
+    const code = String(error?.code || '').trim().toUpperCase();
+    const message = String(error?.message || '').trim().toLowerCase();
+    return code === 'BAD_REQUEST' && (
+        message.includes('project name')
+        || message.includes('unsupported characters')
+        || message.includes('is required')
+    );
 }
 
 function logCameraControlDebug(kind = 'unknown') {
@@ -1741,6 +1955,43 @@ function formatWorkspaceSavedAt(savedAt) {
     } catch (error) {
         return new Date(savedAt).toLocaleString();
     }
+}
+
+function formatProjectUpdatedAt(updatedAt) {
+    const timestamp = Date.parse(String(updatedAt || ''));
+    if (!Number.isFinite(timestamp)) {
+        return String(updatedAt || '');
+    }
+    try {
+        return new Intl.DateTimeFormat(state.uiLanguage === 'en' ? 'en-US' : 'zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+        }).format(new Date(timestamp));
+    } catch (error) {
+        return new Date(timestamp).toLocaleString();
+    }
+}
+
+function formatProjectSize(sizeBytes) {
+    const bytes = Number(sizeBytes);
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+        return '0 MB';
+    }
+    const mb = bytes / (1024 * 1024);
+    if (mb >= 1024) {
+        return `${formatProjectSizeNumber(mb / 1024)} GB`;
+    }
+    return `${formatProjectSizeNumber(Math.max(mb, 0.01))} MB`;
+}
+
+function formatProjectSizeNumber(value) {
+    if (value >= 100) return value.toFixed(0);
+    if (value >= 10) return value.toFixed(1);
+    return value.toFixed(2);
 }
 
 function getWorkspaceCombinedLastSavedAt() {
@@ -1889,25 +2140,28 @@ function getProjectSessionAvatarGradient(token) {
 }
 
 function syncProjectSessionButton() {
-    if (!dom.btnUserSession) return;
+    const buttons = [dom.btnUserSession, dom.btnCollapsedUserSession].filter(Boolean);
+    if (buttons.length === 0) return;
     const authenticated = Boolean(state.projectSession?.authenticated);
     const user = state.projectSession?.user || '';
     const avatarToken = authenticated ? getProjectSessionAvatarToken(user) : '';
     const avatarLabel = avatarToken ? avatarToken.toLocaleUpperCase() : '';
     const gradient = getProjectSessionAvatarGradient(avatarToken);
-    dom.btnUserSession.dataset.authenticated = String(authenticated);
-    dom.btnUserSession.style.setProperty('--agent-user-avatar-start', gradient.start);
-    dom.btnUserSession.style.setProperty('--agent-user-avatar-end', gradient.end);
-    setElementText(dom.btnUserSession.querySelector('.agent-user-avatar-text'), avatarLabel);
-    setButtonTooltip(
-        dom.btnUserSession,
-        authenticated
-            ? t('projectSession.userButtonTooltipLoggedIn')
-            : t('projectSession.userButtonLogin'),
-        authenticated
-            ? t('projectSession.currentUser', { user })
-            : t('projectSession.userButtonLogin'),
-    );
+    buttons.forEach((button) => {
+        button.dataset.authenticated = String(authenticated);
+        button.style.setProperty('--agent-user-avatar-start', gradient.start);
+        button.style.setProperty('--agent-user-avatar-end', gradient.end);
+        setElementText(button.querySelector('.agent-user-avatar-text'), avatarLabel);
+        setButtonTooltip(
+            button,
+            authenticated
+                ? t('projectSession.userButtonTooltipLoggedIn')
+                : t('projectSession.userButtonLogin'),
+            authenticated
+                ? t('projectSession.currentUser', { user })
+                : t('projectSession.userButtonLogin'),
+        );
+    });
 }
 
 function isAdminUser(user) {
@@ -1965,12 +2219,16 @@ function openProjectBrowserModal() {
     }
     closeProjectBrowserSaveAsPanel();
     dom.projectBrowserModal?.classList.remove('hidden');
+    renderProjectBrowserCodexAuthStatus();
+    void refreshProjectBrowserCodexAuthStatus();
     void refreshProjectSessionProjects();
 }
 
 function closeProjectBrowserModal() {
     clearProjectNameConflictState(dom.projectBrowserSaveAsName, dom.projectBrowserSaveAsNameError);
+    closeProjectBrowserCodexAuthEditor();
     closeProjectBrowserSaveAsPanel();
+    closeProjectCreateDialog();
     dom.projectBrowserModal?.classList.add('hidden');
 }
 
@@ -2037,6 +2295,7 @@ function clearActiveServerProjectSelection() {
     state.projectSession.activeProjectId = '';
     state.projectSession.activeProjectName = '';
     clearActiveServerProjectAssetCaches();
+    resetAgentCodexSessionBinding();
 }
 
 async function selectLocalWorkspace(options = {}) {
@@ -2133,11 +2392,13 @@ function closeAdminProjectModal() {
     dom.adminProjectModal?.classList.add('hidden');
 }
 
-function openProjectBrowserSaveAsPanel() {
+function openProjectBrowserSaveAsPanel({ preferDefaultName = false } = {}) {
     clearProjectNameConflictState(dom.projectBrowserSaveAsName, dom.projectBrowserSaveAsNameError);
     dom.projectBrowserSaveAsPanel?.classList.remove('hidden');
     if (dom.projectBrowserSaveAsName) {
-        dom.projectBrowserSaveAsName.value = state.projectSession.activeProjectName || getProjectSessionDefaultProjectName();
+        dom.projectBrowserSaveAsName.value = preferDefaultName
+            ? getProjectSessionDefaultProjectName()
+            : state.projectSession.activeProjectName || getProjectSessionDefaultProjectName();
         dom.projectBrowserSaveAsName.focus();
         dom.projectBrowserSaveAsName.select?.();
     }
@@ -2146,6 +2407,171 @@ function openProjectBrowserSaveAsPanel() {
 function closeProjectBrowserSaveAsPanel() {
     clearProjectNameConflictState(dom.projectBrowserSaveAsName, dom.projectBrowserSaveAsNameError);
     dom.projectBrowserSaveAsPanel?.classList.add('hidden');
+}
+
+function openProjectCreateDialog() {
+    clearProjectNameConflictState(dom.projectCreateName, dom.projectCreateNameError);
+    dom.projectCreateModal?.classList.remove('hidden');
+    if (dom.projectCreateName) {
+        dom.projectCreateName.value = getProjectSessionDefaultProjectName();
+        dom.projectCreateName.focus();
+        dom.projectCreateName.select?.();
+    }
+}
+
+function closeProjectCreateDialog() {
+    clearProjectNameConflictState(dom.projectCreateName, dom.projectCreateNameError);
+    dom.projectCreateModal?.classList.add('hidden');
+}
+
+function getAgentRuntimeStatus() {
+    if (!state.projectSession?.authenticated || !state.projectSession?.user) {
+        return {
+            mode: 'demo',
+            ready: false,
+            reason: t('projectSession.agentRuntimeNoLogin'),
+        };
+    }
+    if (!state.projectSession?.activeProjectId) {
+        return {
+            mode: 'demo',
+            ready: false,
+            reason: t('projectSession.agentRuntimeNoProject'),
+        };
+    }
+    if (state.workspace?.mode !== 'server') {
+        return {
+            mode: 'demo',
+            ready: false,
+            reason: t('projectSession.agentRuntimeNoServerWorkspace'),
+        };
+    }
+    if (state.projectSession.codexAuthLoading) {
+        return {
+            mode: 'demo',
+            ready: false,
+            reason: t('projectSession.agentRuntimeChecking'),
+        };
+    }
+    if (!state.projectSession.codexAuthHasAuth) {
+        return {
+            mode: 'demo',
+            ready: false,
+            reason: t('projectSession.agentRuntimeNoAuth'),
+        };
+    }
+    return {
+        mode: 'codex',
+        ready: true,
+        reason: t('projectSession.agentRuntimeReady'),
+    };
+}
+
+function renderProjectBrowserCodexAuthStatus() {
+    const editing = Boolean(state.projectSession.codexAuthEditing);
+    if (dom.projectBrowserCodexAuthStatus) {
+        dom.projectBrowserCodexAuthStatus.textContent = state.projectSession.codexAuthHasAuth
+            ? t('projectSession.codexAuthReady')
+            : t('projectSession.codexAuthMissing');
+        dom.projectBrowserCodexAuthStatus.classList.toggle('is-ready', Boolean(state.projectSession.codexAuthHasAuth));
+        dom.projectBrowserCodexAuthStatus.hidden = editing;
+    }
+    if (dom.projectBrowserAgentRuntimeStatus) {
+        const runtime = getAgentRuntimeStatus();
+        const modeLabel = runtime.ready
+            ? t('projectSession.agentRuntimeCodex')
+            : t('projectSession.agentRuntimeDemo');
+        dom.projectBrowserAgentRuntimeStatus.textContent = `${t('projectSession.agentRuntimeLabel')}: ${modeLabel}`;
+        dom.projectBrowserAgentRuntimeStatus.title = runtime.reason;
+        dom.projectBrowserAgentRuntimeStatus.classList.toggle('is-ready', runtime.ready);
+        dom.projectBrowserAgentRuntimeStatus.hidden = editing;
+    }
+    if (dom.btnProjectBrowserEditCodexAuth) {
+        dom.btnProjectBrowserEditCodexAuth.hidden = editing;
+        dom.btnProjectBrowserEditCodexAuth.disabled = Boolean(state.projectSession.codexAuthSaving);
+    }
+    if (dom.projectBrowserCodexAuthKey) {
+        dom.projectBrowserCodexAuthKey.hidden = !editing;
+        dom.projectBrowserCodexAuthKey.disabled = Boolean(state.projectSession.codexAuthSaving);
+    }
+    if (dom.btnProjectBrowserSaveCodexAuth) {
+        dom.btnProjectBrowserSaveCodexAuth.hidden = !editing;
+        dom.btnProjectBrowserSaveCodexAuth.disabled = Boolean(state.projectSession.codexAuthSaving);
+    }
+}
+
+function openProjectBrowserCodexAuthEditor() {
+    if (state.projectSession.codexAuthSaving) return;
+    state.projectSession.codexAuthEditing = true;
+    if (dom.projectBrowserCodexAuthKey) {
+        dom.projectBrowserCodexAuthKey.value = '';
+    }
+    renderProjectBrowserCodexAuthStatus();
+    requestAnimationFrame(() => {
+        dom.projectBrowserCodexAuthKey?.focus();
+    });
+}
+
+function closeProjectBrowserCodexAuthEditor() {
+    state.projectSession.codexAuthEditing = false;
+    if (dom.projectBrowserCodexAuthKey) {
+        dom.projectBrowserCodexAuthKey.value = '';
+    }
+    renderProjectBrowserCodexAuthStatus();
+}
+
+async function refreshProjectBrowserCodexAuthStatus() {
+    if (!state.projectSession?.authenticated || !state.projectSession.user || state.projectSession.isAdmin) {
+        state.projectSession.codexAuthEditing = false;
+        state.projectSession.codexAuthHasAuth = false;
+        state.projectSession.codexAuthProjectCount = 0;
+        state.projectSession.codexAuthLoading = false;
+        renderProjectBrowserCodexAuthStatus();
+        return;
+    }
+    state.projectSession.codexAuthLoading = true;
+    renderProjectBrowserCodexAuthStatus();
+    try {
+        const status = await projectApi.getCodexAuthStatus(state.projectSession.user);
+        state.projectSession.codexAuthHasAuth = Boolean(status?.hasAuth);
+        state.projectSession.codexAuthProjectCount = Number(status?.projectCount || 0);
+    } catch (error) {
+        state.projectSession.lastError = error?.message || String(error);
+    } finally {
+        state.projectSession.codexAuthLoading = false;
+        renderProjectBrowserCodexAuthStatus();
+    }
+}
+
+async function saveProjectBrowserCodexAuth() {
+    if (state.projectSession.codexAuthSaving) return;
+    if (!state.projectSession?.authenticated || !state.projectSession.user) {
+        showError(t('projectSession.loginRequired'));
+        return;
+    }
+    const apiKey = String(dom.projectBrowserCodexAuthKey?.value || '').trim();
+    if (!apiKey) {
+        closeProjectBrowserCodexAuthEditor();
+        return;
+    }
+
+    state.projectSession.codexAuthSaving = true;
+    renderProjectBrowserCodexAuthStatus();
+    try {
+        const status = await projectApi.saveCodexAuth({
+            user: state.projectSession.user,
+            apiKey,
+        });
+        state.projectSession.codexAuthHasAuth = Boolean(status?.hasAuth);
+        state.projectSession.codexAuthProjectCount = Number(status?.projectCount || 0);
+        closeProjectBrowserCodexAuthEditor();
+        showInfo(t('projectSession.codexAuthSaved', { count: state.projectSession.codexAuthProjectCount }));
+    } catch (error) {
+        showError(`${t('projectSession.codexAuthSaveFailed')}: ${error?.message || String(error)}`);
+    } finally {
+        state.projectSession.codexAuthSaving = false;
+        renderProjectBrowserCodexAuthStatus();
+    }
 }
 
 function renderProjectBrowserProjectGrid() {
@@ -2161,21 +2587,171 @@ function renderProjectBrowserProjectGrid() {
     }
     dom.projectBrowserProjectGrid.innerHTML = projects.map((project) => {
         const isActive = (project.id || '') === (state.projectSession.activeProjectId || '');
+        const projectId = project.id || '';
+        const projectName = project.name || project.id || '';
+        const isRenaming = state.projectSession.renamingProjectId === projectId;
+        const renameValue = isRenaming ? state.projectSession.renamingProjectName : projectName;
+        const renameError = isRenaming ? state.projectSession.renamingProjectError : '';
         return `
         <div class="project-browser-project-card${isActive ? ' is-active' : ''}">
             <div class="project-browser-project-card-header">
                 ${isActive ? `<span class="project-browser-project-card-badge">${escapeHtml(t('projectSession.currentBadge'))}</span>` : ''}
-                <span class="project-browser-project-card-title">${escapeHtml(project.name || project.id || '')}</span>
-                <span class="project-browser-project-card-subtitle">${escapeHtml(project.updatedAt || '')}</span>
+                ${isRenaming ? `
+                    <input
+                        class="project-session-input project-browser-project-name-edit ${renameError ? 'has-error' : ''}"
+                        type="text"
+                        maxlength="96"
+                        value="${escapeHtml(renameValue)}"
+                        data-project-rename-input="${escapeHtml(projectId)}"
+                        aria-label="${escapeHtml(t('projectSession.createProjectNameLabel'))}"
+                    >
+                    ${renameError ? `<div class="project-session-inline-error" role="alert">${escapeHtml(renameError)}</div>` : ''}
+                ` : `
+                    <div class="project-browser-project-card-title-row">
+                        <span class="project-browser-project-card-title">${escapeHtml(projectName)}</span>
+                        <button
+                            type="button"
+                            class="project-browser-project-rename-btn"
+                            data-project-rename-start="${escapeHtml(projectId)}"
+                            title="${escapeHtml(t('projectSession.renameProjectAria', { name: projectName }))}"
+                            aria-label="${escapeHtml(t('projectSession.renameProjectAria', { name: projectName }))}"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 20h9" />
+                                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                            </svg>
+                        </button>
+                    </div>
+                `}
+                <div class="project-browser-project-card-meta">
+                    <span class="project-browser-project-card-subtitle">${escapeHtml(formatProjectUpdatedAt(project.updatedAt))}</span>
+                    <span class="project-browser-project-card-size">${escapeHtml(formatProjectSize(project.sizeBytes))}</span>
+                </div>
             </div>
             <div class="project-browser-project-card-actions">
-                <button type="button" class="button button-secondary" data-project-open="${escapeHtml(project.id || '')}">
+                <button type="button" class="button button-secondary project-browser-project-action-btn" data-project-open="${escapeHtml(projectId)}">
                     ${escapeHtml(t('projectSession.openAction'))}
+                </button>
+                <button type="button" class="button button-secondary project-browser-project-action-btn project-browser-project-delete-btn" data-project-delete="${escapeHtml(projectId)}">
+                    ${escapeHtml(t('projectSession.deleteAction'))}
                 </button>
             </div>
         </div>
     `;
     }).join('');
+}
+
+function getProjectBrowserProject(projectId) {
+    const id = String(projectId || '').trim();
+    return (Array.isArray(state.projectSession?.projects) ? state.projectSession.projects : [])
+        .find((project) => project.id === id) || null;
+}
+
+function focusProjectRenameInput(projectId) {
+    requestAnimationFrame(() => {
+        const input = dom.projectBrowserProjectGrid?.querySelector(`[data-project-rename-input="${CSS.escape(projectId)}"]`);
+        if (input instanceof HTMLInputElement) {
+            input.focus();
+            input.select();
+        }
+    });
+}
+
+function startProjectRename(projectId) {
+    const project = getProjectBrowserProject(projectId);
+    if (!project?.id) return;
+    state.projectSession.renamingProjectId = project.id;
+    state.projectSession.renamingProjectName = project.name || project.id;
+    state.projectSession.renamingProjectError = '';
+    renderProjectBrowserProjectGrid();
+    focusProjectRenameInput(project.id);
+}
+
+function cancelProjectRename() {
+    state.projectSession.renamingProjectId = '';
+    state.projectSession.renamingProjectName = '';
+    state.projectSession.renamingProjectError = '';
+    renderProjectBrowserProjectGrid();
+}
+
+function setProjectRenameError(projectId, message) {
+    state.projectSession.renamingProjectId = projectId;
+    state.projectSession.renamingProjectError = message;
+    renderProjectBrowserProjectGrid();
+    focusProjectRenameInput(projectId);
+}
+
+async function commitProjectRename(projectId) {
+    if (projectRenameCommitInFlight) return;
+    const project = getProjectBrowserProject(projectId);
+    if (!project?.id || state.projectSession.renamingProjectId !== project.id) return;
+    const nextName = String(state.projectSession.renamingProjectName || '').trim();
+    if (!nextName || nextName === project.name) {
+        cancelProjectRename();
+        return;
+    }
+
+    projectRenameCommitInFlight = true;
+    try {
+        const renamed = await projectApi.renameProject({
+            user: state.projectSession.user,
+            projectId: project.id,
+            name: nextName,
+        });
+        state.projectSession.projects = state.projectSession.projects.map((item) => (
+            item.id === project.id ? { ...item, ...renamed } : item
+        ));
+        if (state.projectSession.activeProjectId === project.id) {
+            state.projectSession.activeProjectId = renamed?.id || project.id;
+            state.projectSession.activeProjectName = renamed?.name || nextName;
+            state.workspace = {
+                ...state.workspace,
+                name: state.projectSession.activeProjectName,
+            };
+            resetAgentCodexSessionBinding();
+        }
+        state.projectSession.renamingProjectId = '';
+        state.projectSession.renamingProjectName = '';
+        state.projectSession.renamingProjectError = '';
+        await refreshProjectSessionProjects();
+        updateWorkspaceStatusIndicator();
+        showInfo(t('projectSession.projectRenamed', { name: renamed?.name || nextName }));
+    } catch (error) {
+        if (isDuplicateProjectNameError(error)) {
+            setProjectRenameError(project.id, t('projectSession.duplicateProjectName'));
+            return;
+        }
+        if (isInvalidProjectNameError(error)) {
+            setProjectRenameError(project.id, t('projectSession.invalidProjectName'));
+            return;
+        }
+        showError(error?.message || String(error));
+    } finally {
+        projectRenameCommitInFlight = false;
+    }
+}
+
+async function deleteProjectFromBrowser(projectId) {
+    const project = getProjectBrowserProject(projectId);
+    if (!project?.id) return;
+    const projectName = project.name || project.id;
+    if (!confirm(t('projectSession.confirmDeleteProject', { name: projectName }))) return;
+
+    showLoading(true, t('messages.deletingProject'), 60);
+    try {
+        await projectApi.deleteProject(state.projectSession.user, project.id);
+        if (state.projectSession.activeProjectId === project.id) {
+            clearActiveServerProjectSelection();
+            updateWorkspaceStatusIndicator();
+        }
+        cancelProjectRename();
+        await refreshProjectSessionProjects();
+        showLoading(false);
+        showInfo(t('projectSession.projectDeleted', { name: projectName }));
+    } catch (error) {
+        showLoading(false);
+        showError(error?.message || String(error));
+    }
 }
 
 function renderAdminUserList() {
@@ -2228,7 +2804,10 @@ function renderAdminProjectGrid() {
             <button type="button" class="admin-delete-btn admin-project-card-delete" data-admin-project-delete="${escapeHtml(project.id || '')}" aria-label="${escapeHtml(t('projectSession.deleteProjectAria'))}">×</button>
             <div class="project-browser-project-card-header">
                 <span class="project-browser-project-card-title">${escapeHtml(project.name || project.id || '')}</span>
-                <span class="project-browser-project-card-subtitle">${escapeHtml(project.updatedAt || '')}</span>
+                <div class="project-browser-project-card-meta">
+                    <span class="project-browser-project-card-subtitle">${escapeHtml(formatProjectUpdatedAt(project.updatedAt))}</span>
+                    <span class="project-browser-project-card-size">${escapeHtml(formatProjectSize(project.sizeBytes))}</span>
+                </div>
             </div>
         </div>
     `).join('');
@@ -2324,6 +2903,7 @@ function setProjectSessionUser(user) {
     }
     syncProjectSessionButton();
     updateWorkspaceStatusIndicator();
+    void refreshProjectBrowserCodexAuthStatus();
 }
 
 function getSkyPresetDisplayName(presetOrId) {
@@ -2364,13 +2944,15 @@ function updateLocalizedStaticUi() {
 
     if (dom.bootLoadingOverlay) {
         setElementText(dom.bootLoadingOverlay.querySelector('.loading-text'), t('canvas.loading'));
+        setElementText(dom.bootLoadingOverlay.querySelector('.loading-detail'), t('loading.bootPreparing'));
     }
     if (dom.loadingOverlay && dom.loadingOverlay.classList.contains('hidden')) {
         setElementText(dom.loadingOverlay.querySelector('.loading-text'), t('canvas.loading'));
     }
     if (dom.agentComposerInput) {
-        dom.agentComposerInput.placeholder = t('agent.inputPlaceholder');
+        dom.agentComposerInput.setAttribute('data-placeholder', t('agent.inputPlaceholder'));
     }
+    renderAgentComposerSkillControls();
     document.querySelectorAll('.agent-workflow-tab').forEach((button) => {
         const workflowId = button.dataset.workflow;
         if (!workflowId) return;
@@ -2466,6 +3048,7 @@ function updateLocalizedStaticUi() {
     setElementText(helpSectionTitles[0], t('modal.helpSections.mouse'));
     setElementText(helpSectionTitles[1], t('modal.helpSections.keyboard'));
     setElementText(helpSectionTitles[2], t('modal.helpSections.camera'));
+    setElementText(helpSectionTitles[3], t('modal.helpSections.codex'));
     const helpSpans = dom.helpTipsModal?.querySelectorAll('.help-list span') || [];
     const helpTexts = [
         t('modal.helpItems.mouseRotate'),
@@ -2485,6 +3068,7 @@ function updateLocalizedStaticUi() {
         t('modal.helpItems.movePlane'),
         t('modal.helpItems.moveVertical'),
         t('modal.helpItems.speedUp'),
+        t('modal.helpItems.codexResume'),
     ];
     helpSpans.forEach((span, index) => setElementText(span, helpTexts[index] || span.textContent));
 }
@@ -2493,6 +3077,7 @@ function syncProjectSessionModalLabels() {
     setButtonTooltip(dom.btnLoginModalClose, t('common.close'), t('common.close'));
     setButtonTooltip(dom.btnProjectSessionClose, t('common.close'), t('common.close'));
     setButtonTooltip(dom.btnProjectBrowserClose, t('common.close'), t('common.close'));
+    setButtonTooltip(dom.btnProjectCreateClose, t('common.close'), t('common.close'));
     syncWorkspaceTargetModalLabels(dom.workspaceTargetModal?.dataset.reason || 'status');
     if (dom.projectSessionNewProjectName) {
         dom.projectSessionNewProjectName.placeholder = getProjectSessionDefaultProjectName();
@@ -2500,13 +3085,25 @@ function syncProjectSessionModalLabels() {
     if (dom.projectBrowserSaveAsName) {
         dom.projectBrowserSaveAsName.placeholder = getProjectSessionDefaultProjectName();
     }
+    if (dom.projectCreateName) {
+        dom.projectCreateName.placeholder = getProjectSessionDefaultProjectName();
+    }
+    if (dom.projectBrowserCodexAuthKey) {
+        dom.projectBrowserCodexAuthKey.placeholder = t('projectSession.codexAuthPlaceholder');
+    }
+    setElementText(dom.btnProjectBrowserCreateNew, t('projectSession.createNewProjectAction'));
     setElementText(dom.btnProjectBrowserSaveAs, t('projectSession.saveCurrentAsAction'));
     setElementText(dom.btnProjectBrowserSaveAsCancel, t('common.cancel'));
     setElementText(dom.btnProjectBrowserSaveAsConfirm, t('projectSession.saveAction'));
+    setButtonTooltip(dom.btnProjectBrowserEditCodexAuth, t('projectSession.codexAuthEditAction'), t('projectSession.codexAuthEditAction'));
+    setButtonTooltip(dom.btnProjectBrowserSaveCodexAuth, t('projectSession.codexAuthSubmitAction'), t('projectSession.codexAuthSubmitAction'));
     setElementText(dom.btnProjectBrowserLogout, t('projectSession.logoutAction'));
+    setElementText(dom.btnProjectCreateCancel, t('common.cancel'));
+    setElementText(dom.btnProjectCreateConfirm, t('projectSession.createAction'));
 
     setButtonTooltip(dom.btnAdminProjectClose, t('common.close'), t('common.close'));
     setElementText(dom.btnAdminProjectLogout, t('projectSession.logoutAction'));
+    renderProjectBrowserCodexAuthStatus();
 }
 
 function refreshAgentWorkflowLanguageState() {
@@ -2533,6 +3130,7 @@ function applyLanguage(language, persist = false) {
     updateLanguageToggleLabel();
     refreshAgentWorkflowLanguageState();
     renderAgentComposerAttachments();
+    renderAgentComposerSkillControls();
     renderAgentMessages();
     renderSkyPresetGrid();
     updateModelList();
@@ -2815,6 +3413,8 @@ function buildAgentConversationSnapshot() {
         return {
             version: 2,
         savedAt: new Date().toISOString(),
+        stepStates: buildAgentStepStatesSnapshot(),
+        pipelineStates: buildAgentPipelineStatesSnapshot(),
         workflows: Object.keys(AGENT_WORKFLOW_DEFS).map((workflowId) => {
             const thread = ensureAgentWorkflowThread(workflowId);
             return {
@@ -2826,6 +3426,127 @@ function buildAgentConversationSnapshot() {
     };
 }
 
+function buildAgentStepStatesSnapshot() {
+    const stepStates = {};
+    Object.keys(AGENT_WORKFLOW_DEFS).forEach((workflowId) => {
+        const thread = ensureAgentWorkflowThread(workflowId);
+        (thread.items || []).forEach((item) => {
+            if (item?.kind !== 'session') return;
+            (item.attempts || []).forEach((attempt) => {
+                getAgentAttemptStepBlocks(attempt).forEach((block) => {
+                    if (block?.type !== 'progress' || !block.stepKey) return;
+                    stepStates[`${item.id}:${attempt.id}:${block.stepKey}`] = {
+                        sessionId: item.id,
+                        attemptId: attempt.id,
+                        blockId: block.id,
+                        stepKey: block.stepKey,
+                        images: Array.isArray(block.images) ? block.images.map((image) => ({
+                            id: image.id || image.title || '',
+                            title: image.title || image.id || '',
+                            assetPath: image.assetPath || '',
+                            relativePath: image.relativePath || image.assetPath || '',
+                            mimeType: image.mimeType || '',
+                            bytes: image.bytes || 0,
+                            metadata: image.metadata && typeof image.metadata === 'object' ? image.metadata : undefined,
+                        })) : [],
+                        selectedIndex: Number(block.selectedIndex) || 0,
+                        applied: Boolean(block.applied),
+                        actions: Array.isArray(block.actions) ? [...block.actions] : [],
+                        isCurrent: Boolean(block.isCurrent),
+                        expanded: Boolean(block.expanded),
+                    };
+                });
+            });
+        });
+    });
+    return stepStates;
+}
+
+function createScenePipelineState({
+    sessionId = '',
+    attemptId = '',
+    currentStepKey = 'main-image',
+    lastAppliedStepKey = '',
+    status = 'waiting_for_apply',
+    autoContinue = true,
+    steps = {},
+} = {}) {
+    const normalizedSteps = {};
+    SCENE_PIPELINE_STEP_DEFS.forEach((definition) => {
+        normalizedSteps[definition.key] = {
+            status: steps?.[definition.key]?.status || 'pending',
+        };
+    });
+    return {
+        kind: 'scene-skill',
+        sessionId,
+        attemptId,
+        status,
+        currentStepKey,
+        lastAppliedStepKey,
+        autoContinue: autoContinue !== false,
+        steps: normalizedSteps,
+        updatedAt: new Date().toISOString(),
+    };
+}
+
+function deriveScenePipelineState(session, attempt, overrides = {}) {
+    const blocks = getAgentAttemptStepBlocks(attempt);
+    let currentStepKey = '';
+    let lastAppliedStepKey = '';
+    const steps = {};
+    SCENE_PIPELINE_STEP_DEFS.forEach((definition) => {
+        const block = blocks.find((item) => item?.stepKey === definition.key);
+        let status = 'pending';
+        if (block?.applied) {
+            status = 'applied';
+            lastAppliedStepKey = definition.key;
+        } else if (block?.indeterminate) {
+            status = 'running';
+            currentStepKey = definition.key;
+        } else if (block?.isCurrent) {
+            status = Array.isArray(block.images) && block.images.length > 0 ? 'waiting_for_apply' : 'ready';
+            currentStepKey = definition.key;
+        } else if (Array.isArray(block?.images) && block.images.length > 0) {
+            status = 'waiting_for_apply';
+        }
+        steps[definition.key] = { status };
+    });
+    const finalStep = SCENE_PIPELINE_STEP_DEFS[SCENE_PIPELINE_STEP_DEFS.length - 1]?.key || '';
+    const status = overrides.status
+        || (finalStep && steps[finalStep]?.status === 'applied'
+            ? 'completed'
+            : currentStepKey
+                ? steps[currentStepKey]?.status || 'ready'
+                : 'paused');
+    return createScenePipelineState({
+        sessionId: session?.id || '',
+        attemptId: attempt?.id || '',
+        currentStepKey: overrides.currentStepKey || currentStepKey || getNextScenePipelineStepKey(lastAppliedStepKey) || finalStep,
+        lastAppliedStepKey: overrides.lastAppliedStepKey || lastAppliedStepKey,
+        status,
+        autoContinue: overrides.autoContinue !== undefined ? overrides.autoContinue : attempt?.pipelineState?.autoContinue,
+        steps,
+    });
+}
+
+function buildAgentPipelineStatesSnapshot() {
+    const pipelineStates = {};
+    Object.keys(AGENT_WORKFLOW_DEFS).forEach((workflowId) => {
+        const thread = ensureAgentWorkflowThread(workflowId);
+        (thread.items || []).forEach((item) => {
+            if (item?.kind !== 'session') return;
+            (item.attempts || []).forEach((attempt) => {
+                const hasScenePipeline = getAgentAttemptStepBlocks(attempt)
+                    .some((block) => SCENE_PIPELINE_STEP_DEFS.some((step) => step.key === block?.stepKey));
+                if (!hasScenePipeline) return;
+                pipelineStates[`${item.id}:${attempt.id}`] = deriveScenePipelineState(item, attempt);
+            });
+        });
+    });
+    return pipelineStates;
+}
+
 async function buildPersistableAgentConversationExport(options = {}) {
     const store = ensureAgentSessionStore();
     return store.exportSnapshot(buildAgentConversationSnapshot(), {
@@ -2834,11 +3555,146 @@ async function buildPersistableAgentConversationExport(options = {}) {
     });
 }
 
+function normalizeAgentStepStateImage(image, index = 0, existingImage = null) {
+    const assetPath = String(image?.assetPath || image?.relativePath || '').trim();
+    const nextImage = {
+        id: image?.id || image?.title || `Image ${index + 1}`,
+        title: image?.title || image?.id || `Image ${index + 1}`,
+        assetPath,
+        relativePath: assetPath,
+        mimeType: image?.mimeType || '',
+        bytes: Number(image?.bytes) || 0,
+        metadata: image?.metadata && typeof image.metadata === 'object' ? image.metadata : undefined,
+    };
+    if (existingImage?.src && !image?.src) {
+        nextImage.src = existingImage.src;
+    } else if (image?.src) {
+        nextImage.src = image.src;
+    }
+    return nextImage;
+}
+
+function applyAgentStepStatesToSnapshot(snapshot) {
+    if (!snapshot) {
+        return snapshot;
+    }
+    const nextSnapshot = JSON.parse(JSON.stringify(snapshot));
+    if (!nextSnapshot?.stepStates || typeof nextSnapshot.stepStates !== 'object') {
+        return nextSnapshot;
+    }
+    const stepStates = nextSnapshot.stepStates && typeof nextSnapshot.stepStates === 'object'
+        ? nextSnapshot.stepStates
+        : {};
+    const workflows = Array.isArray(nextSnapshot.workflows) ? nextSnapshot.workflows : [];
+    Object.values(stepStates).forEach((stepState) => {
+        const sessionId = String(stepState?.sessionId || '').trim();
+        const attemptId = String(stepState?.attemptId || '').trim();
+        const blockId = String(stepState?.blockId || '').trim();
+        const stepKey = String(stepState?.stepKey || '').trim();
+        if (!sessionId || !stepKey) return;
+        for (const workflow of workflows) {
+            const items = Array.isArray(workflow?.items) ? workflow.items : [];
+            const session = items.find((item) => item?.kind === 'session' && item.id === sessionId);
+            if (!session || !Array.isArray(session.attempts)) continue;
+            for (const attempt of session.attempts) {
+                if (attemptId && attempt.id !== attemptId) continue;
+                const blocks = getAgentAttemptStepBlocks(attempt);
+                const block = blocks.find((candidate) => {
+                    if (candidate?.type !== 'progress') return false;
+                    if (blockId && candidate.id !== blockId) return false;
+                    return candidate.stepKey === stepKey;
+                });
+                if (!block) continue;
+                const existingImages = Array.isArray(block.images) ? block.images : [];
+                const images = Array.isArray(stepState.images)
+                    ? stepState.images.map((image, index) => {
+                        const assetPath = String(image?.assetPath || image?.relativePath || '').trim();
+                        const existingImage = existingImages.find((candidate) => {
+                            const candidatePath = String(candidate?.assetPath || candidate?.relativePath || '').trim();
+                            return assetPath && candidatePath === assetPath;
+                        });
+                        return normalizeAgentStepStateImage(image, index, existingImage);
+                    })
+                    : [];
+                block.images = images;
+                block.selectedIndex = Math.max(0, Math.min(images.length - 1, Number(stepState.selectedIndex) || 0));
+                block.applied = Boolean(stepState.applied);
+                block.actions = Array.isArray(stepState.actions)
+                    ? stepState.actions.filter(Boolean).map((action) => String(action))
+                    : [];
+                block.isCurrent = Boolean(stepState.isCurrent);
+                block.expanded = Boolean(stepState.expanded);
+                return;
+            }
+        }
+    });
+    return nextSnapshot;
+}
+
+function applyAgentPipelineStatesToSnapshot(snapshot) {
+    if (!snapshot) {
+        return snapshot;
+    }
+    const nextSnapshot = JSON.parse(JSON.stringify(snapshot));
+    const pipelineStates = nextSnapshot?.pipelineStates && typeof nextSnapshot.pipelineStates === 'object'
+        ? nextSnapshot.pipelineStates
+        : {};
+    const workflows = Array.isArray(nextSnapshot.workflows) ? nextSnapshot.workflows : [];
+    Object.values(pipelineStates).forEach((pipelineState) => {
+        const sessionId = String(pipelineState?.sessionId || '').trim();
+        const attemptId = String(pipelineState?.attemptId || '').trim();
+        if (!sessionId || !attemptId) return;
+        for (const workflow of workflows) {
+            const items = Array.isArray(workflow?.items) ? workflow.items : [];
+            const session = items.find((item) => item?.kind === 'session' && item.id === sessionId);
+            const attempt = session?.attempts?.find((item) => item?.id === attemptId);
+            if (!attempt) continue;
+            attempt.pipelineState = {
+                ...pipelineState,
+                steps: pipelineState.steps && typeof pipelineState.steps === 'object' ? pipelineState.steps : {},
+            };
+            return;
+        }
+    });
+    return nextSnapshot;
+}
+
+function hydrateAgentBlockAssetUrls(block, resolveAssetUrl) {
+    const assetPath = String(block?.assetPath || '');
+    if (!assetPath) {
+        if (block?.type === 'progress' && Array.isArray(block.images)) {
+            return {
+                ...block,
+                images: block.images.map((image) => {
+                    const imageAssetPath = String(image?.assetPath || image?.relativePath || '');
+                    return imageAssetPath
+                        ? { ...image, src: resolveAssetUrl(imageAssetPath), assetPath: imageAssetPath }
+                        : image;
+                }),
+            };
+        }
+        return block;
+    }
+    if (block.type === 'image') {
+        return {
+            ...block,
+            src: resolveAssetUrl(assetPath),
+        };
+    }
+    if (block.type === 'viewer3d') {
+        return {
+            ...block,
+            assetUrl: resolveAssetUrl(assetPath),
+        };
+    }
+    return block;
+}
+
 function hydrateAgentConversationAssetUrls(snapshot, resolveAssetUrl) {
     if (!snapshot || typeof resolveAssetUrl !== 'function') {
         return snapshot;
     }
-    const nextSnapshot = JSON.parse(JSON.stringify(snapshot));
+    const nextSnapshot = applyAgentPipelineStatesToSnapshot(applyAgentStepStatesToSnapshot(snapshot));
     const workflows = Array.isArray(nextSnapshot.workflows) ? nextSnapshot.workflows : [];
     workflows.forEach((workflow) => {
         const items = Array.isArray(workflow?.items) ? workflow.items : [];
@@ -2859,26 +3715,11 @@ function hydrateAgentConversationAssetUrls(snapshot, resolveAssetUrl) {
                 item.attempts = item.attempts.map((attempt) => ({
                     ...attempt,
                     blocks: Array.isArray(attempt?.blocks)
-                        ? attempt.blocks.map((block) => {
-                            const assetPath = String(block?.assetPath || '');
-                            if (!assetPath) {
-                                return block;
-                            }
-                            if (block.type === 'image') {
-                                return {
-                                    ...block,
-                                    src: resolveAssetUrl(assetPath),
-                                };
-                            }
-                            if (block.type === 'viewer3d') {
-                                return {
-                                    ...block,
-                                    assetUrl: resolveAssetUrl(assetPath),
-                                };
-                            }
-                            return block;
-                        })
+                        ? attempt.blocks.map((block) => hydrateAgentBlockAssetUrls(block, resolveAssetUrl))
                         : [],
+                    ...(Array.isArray(attempt?.steps)
+                        ? { steps: attempt.steps.map((block) => hydrateAgentBlockAssetUrls(block, resolveAssetUrl)) }
+                        : {}),
                 }));
             }
         });
@@ -2890,7 +3731,7 @@ async function hydrateAgentConversationLocalWorkspaceAssets(snapshot, rootHandle
     if (!snapshot || !rootHandle || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
         return snapshot;
     }
-    const nextSnapshot = JSON.parse(JSON.stringify(snapshot));
+    const nextSnapshot = applyAgentPipelineStatesToSnapshot(applyAgentStepStatesToSnapshot(snapshot));
     const workflows = Array.isArray(nextSnapshot.workflows) ? nextSnapshot.workflows : [];
 
     async function resolveLocalAssetUrl(relativePath) {
@@ -2914,9 +3755,25 @@ async function hydrateAgentConversationLocalWorkspaceAssets(snapshot, rootHandle
             }
             if (item?.kind === 'session' && Array.isArray(item?.attempts)) {
                 for (const attempt of item.attempts) {
-                    const blocks = Array.isArray(attempt?.blocks) ? attempt.blocks : [];
+                    const blocks = [
+                        ...(Array.isArray(attempt?.blocks) ? attempt.blocks : []),
+                        ...(Array.isArray(attempt?.steps) ? attempt.steps : []),
+                    ];
                     for (const block of blocks) {
                         const assetPath = String(block?.assetPath || '');
+                        if (block?.type === 'progress' && Array.isArray(block.images)) {
+                            for (const image of block.images) {
+                                const imageAssetPath = String(image?.assetPath || image?.relativePath || '');
+                                if (!imageAssetPath) continue;
+                                try {
+                                    image.src = await resolveLocalAssetUrl(imageAssetPath);
+                                    image.assetPath = imageAssetPath;
+                                } catch (error) {
+                                    console.warn('[Agent Sessions] failed to hydrate local step image asset', imageAssetPath, error);
+                                }
+                            }
+                            continue;
+                        }
                         if (!assetPath) continue;
                         try {
                             const assetUrl = await resolveLocalAssetUrl(assetPath);
@@ -2938,7 +3795,8 @@ async function hydrateAgentConversationLocalWorkspaceAssets(snapshot, rootHandle
 }
 
 function hydrateAgentConversationSnapshot(snapshot) {
-    const workflows = Array.isArray(snapshot?.workflows) ? snapshot.workflows : [];
+    const hydratedSnapshot = applyAgentPipelineStatesToSnapshot(applyAgentStepStatesToSnapshot(snapshot));
+    const workflows = Array.isArray(hydratedSnapshot?.workflows) ? hydratedSnapshot.workflows : [];
     state.agentWorkflowThreads = {};
     Object.keys(AGENT_WORKFLOW_DEFS).forEach((workflowId) => {
         const matched = workflows.find((workflow) => workflow?.workflow === workflowId);
@@ -3208,9 +4066,14 @@ function finalizeDemoCameraWorkflowPreview(handle) {
 function getAgentSessionArchiveThumbnail(session) {
     if (session?.archiveSummary?.thumbnailUrl) return session.archiveSummary.thumbnailUrl;
     for (const attempt of session?.attempts || []) {
-        for (const block of attempt.blocks || []) {
+        for (const block of getAgentAttemptStepBlocks(attempt)) {
             if (block.type === 'image' && block.status === 'ready' && block.src) {
                 return block.src;
+            }
+            if (block.type === 'progress' && Array.isArray(block.images)) {
+                const selectedIndex = Math.max(0, Math.min(block.images.length - 1, Number(block.selectedIndex) || 0));
+                const image = block.images[selectedIndex];
+                if (image?.src) return image.src;
             }
         }
     }
@@ -3223,6 +4086,7 @@ function getAgentItemIndexById(itemId) {
 
 function updateAgentSessionById(sessionId, updater, {
     autoScroll = 'preserve-or-pin-bottom',
+    skipRender = false,
 } = {}) {
     const index = getAgentItemIndexById(sessionId);
     if (index < 0) return null;
@@ -3231,9 +4095,221 @@ function updateAgentSessionById(sessionId, updater, {
     const nextSession = updater(session);
     if (!nextSession) return null;
     state.agentMessages[index] = nextSession;
-    renderAgentMessages({ autoScroll });
+    if (!skipRender) {
+        renderAgentMessages({ autoScroll });
+    }
     schedulePersistAgentConversations();
     return nextSession;
+}
+
+function getAgentStepBlockContextFromElement(element) {
+    const blockElement = element?.closest?.('.agent-block-progress');
+    if (!(blockElement instanceof HTMLElement)) return null;
+    const sessionId = String(blockElement.dataset.agentSessionId || '').trim();
+    const attemptId = String(blockElement.dataset.agentAttemptId || '').trim();
+    const blockId = String(blockElement.dataset.agentBlockId || '').trim();
+    const stepKey = String(blockElement.dataset.agentStepKey || '').trim();
+    if (!sessionId || !attemptId || !blockId || !stepKey) return null;
+    const session = state.agentMessages.find((item) => item?.kind === 'session' && item.id === sessionId);
+    const attempt = session?.attempts?.find((item) => item?.id === attemptId);
+    const block = getAgentAttemptStepBlocks(attempt).find((item) => item?.id === blockId);
+    if (!session || !attempt || !block) return null;
+    return {
+        session,
+        attempt,
+        block,
+        sessionId,
+        attemptId,
+        blockId,
+        stepKey,
+    };
+}
+
+function patchAgentStepBlock(context, patch) {
+    if (!context) return null;
+    return updateAgentSessionById(context.sessionId, (session) => patchAgentSessionAttemptBlock(session, {
+        attemptId: context.attemptId,
+        blockId: context.blockId,
+        patch,
+    }), {
+        autoScroll: 'preserve-or-pin-bottom',
+    });
+}
+
+function updateAgentStepSelectedIndex(context, selectedIndex) {
+    if (!context) return null;
+    const session = updateAgentSessionById(context.sessionId, (session) => patchAgentSessionAttemptBlock(session, {
+        attemptId: context.attemptId,
+        blockId: context.blockId,
+        patch: { selectedIndex },
+    }), {
+        skipRender: true,
+    });
+    if (!session) return null;
+    const nextContext = getAgentStepBlockContextById(context.sessionId, context.attemptId, context.blockId);
+    if (nextContext) {
+        updateAgentStepGalleryDom(nextContext);
+    }
+    return session;
+}
+
+function getAgentStepBlockContextById(sessionId, attemptId, blockId) {
+    const session = state.agentMessages.find((item) => item?.kind === 'session' && item.id === sessionId);
+    const attempt = session?.attempts?.find((item) => item?.id === attemptId);
+    const block = getAgentAttemptStepBlocks(attempt).find((item) => item?.id === blockId);
+    if (!session || !attempt || !block?.stepKey) return null;
+    return {
+        session,
+        attempt,
+        block,
+        sessionId,
+        attemptId,
+        blockId,
+        stepKey: block.stepKey,
+    };
+}
+
+function getAgentStepBlockContextByStepKey(sessionId, attemptId, stepKey) {
+    const session = state.agentMessages.find((item) => item?.kind === 'session' && item.id === sessionId);
+    const attempt = session?.attempts?.find((item) => item?.id === attemptId);
+    const block = getAgentAttemptStepBlocks(attempt).find((item) => item?.stepKey === stepKey);
+    if (!session || !attempt || !block?.id || !block.stepKey) return null;
+    return {
+        session,
+        attempt,
+        block,
+        sessionId,
+        attemptId,
+        blockId: block.id,
+        stepKey: block.stepKey,
+    };
+}
+
+function updateAgentStepGalleryDom(context) {
+    const blockElement = Array.from(dom.agentMessageList?.querySelectorAll('[data-agent-block-id]') || [])
+        .find((element) => element instanceof HTMLElement && element.dataset.agentBlockId === context.blockId);
+    if (!(blockElement instanceof HTMLElement)) return;
+    const images = Array.isArray(context.block.images) ? context.block.images : [];
+    const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(context.block.selectedIndex) || 0));
+    const selectedImage = images[selectedIndex] || null;
+    const image = blockElement.querySelector('.agent-step-gallery-image img');
+    if (image instanceof HTMLImageElement && selectedImage) {
+        image.src = selectedImage.src || '';
+        image.alt = selectedImage.alt || selectedImage.title || context.block.title || t('agent.blocks.image');
+    }
+    const count = blockElement.querySelector('.agent-step-gallery-count');
+    if (count) {
+        count.textContent = `${selectedIndex + 1} / ${images.length}`;
+    }
+    const gallery = blockElement.querySelector('.agent-step-gallery');
+    if (gallery instanceof HTMLElement) {
+        const previousMetadata = gallery.querySelector('.agent-step-metadata');
+        previousMetadata?.remove();
+        if (selectedImage) {
+            gallery.insertAdjacentHTML('beforeend', renderAgentStepImageMetadata(selectedImage));
+        }
+    }
+    blockElement.querySelectorAll('[data-agent-step-gallery-nav]').forEach((button) => {
+        if (!(button instanceof HTMLButtonElement)) return;
+        const direction = button.dataset.agentStepGalleryNav;
+        button.disabled = context.block.applied
+            || images.length <= 1
+            || (direction === 'prev' && selectedIndex <= 0)
+            || (direction === 'next' && selectedIndex >= images.length - 1);
+    });
+}
+
+function serializeAgentStepImage(image) {
+    return {
+        id: image?.id || image?.title || '',
+        title: image?.title || image?.id || '',
+        relativePath: image?.relativePath || image?.assetPath || '',
+        assetPath: image?.assetPath || image?.relativePath || '',
+        mimeType: image?.mimeType || '',
+        bytes: image?.bytes || 0,
+        metadata: image?.metadata && typeof image.metadata === 'object' ? image.metadata : undefined,
+    };
+}
+
+function getSelectedAgentStepImage(attempt, stepKey) {
+    const block = getAgentAttemptStepBlocks(attempt).find((item) => item?.stepKey === stepKey);
+    const images = Array.isArray(block?.images) ? block.images : [];
+    if (images.length <= 0) return null;
+    const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(block.selectedIndex) || 0));
+    return images[selectedIndex] || null;
+}
+
+function serializeAgentStepSourceImage(attempt, stepKey) {
+    const image = getSelectedAgentStepImage(attempt, stepKey);
+    if (!image) return null;
+    return {
+        ...serializeAgentStepImage(image),
+        sourceStepKey: stepKey,
+    };
+}
+
+function shouldShowAgentPipelineContinue(context) {
+    const pipelineState = context?.attempt?.pipelineState;
+    const block = context?.block;
+    if (!pipelineState || pipelineState.kind !== 'scene-skill' || pipelineState.status === 'completed') return false;
+    if (!block?.stepKey || block.stepKey !== pipelineState.currentStepKey) return false;
+    if (block.applied || block.indeterminate) return false;
+    if (Array.isArray(block.images) && block.images.length > 0) return false;
+    const stepStatus = pipelineState.steps?.[block.stepKey]?.status || '';
+    return ['ready', 'paused', 'failed', 'running'].includes(stepStatus) || Boolean(block.isCurrent);
+}
+
+function advanceAgentPipelineAfterStepApply(context) {
+    if (!context?.sessionId || !context?.attemptId || !context?.stepKey) return null;
+    const nextStepKey = getNextScenePipelineStepKey(context.stepKey);
+    if (!nextStepKey) return null;
+    const patchPipelineBlocks = (blocks = []) => blocks.map((block) => {
+        if (block?.stepKey === context.stepKey) {
+            return {
+                ...block,
+                applied: true,
+                isCurrent: false,
+                expanded: true,
+                actions: [],
+                statusText: block.statusText || t('agent.pipelineSteps.applied'),
+            };
+        }
+        if (block?.stepKey === nextStepKey) {
+            return {
+                ...block,
+                isCurrent: true,
+                expanded: true,
+                statusText: t('agent.pipelineSteps.current'),
+                actions: Array.isArray(block.images) && block.images.length > 0
+                    ? ['cancel', 'retry', 'apply']
+                    : ['cancel', 'retry'],
+            };
+        }
+        return block;
+    });
+    const session = updateAgentSessionById(context.sessionId, (session) => {
+        const nextSession = {
+            ...session,
+            attempts: (session.attempts || []).map((attempt) => {
+            if (attempt.id !== context.attemptId) return attempt;
+            const nextAttempt = {
+                ...attempt,
+                blocks: patchPipelineBlocks(attempt.blocks || []),
+                ...(Array.isArray(attempt.steps) ? { steps: patchPipelineBlocks(attempt.steps) } : {}),
+                updatedAt: new Date().toISOString(),
+            };
+            return {
+                ...nextAttempt,
+                pipelineState: deriveScenePipelineState(session, nextAttempt),
+            };
+        }),
+            updatedAt: new Date().toISOString(),
+        };
+        return nextSession;
+    }, {
+        autoScroll: 'preserve-or-pin-bottom',
+    });
+    return session ? getAgentStepBlockContextByStepKey(context.sessionId, context.attemptId, nextStepKey) : null;
 }
 
 function createAgentBlockId(prefix = 'block') {
@@ -3242,19 +4318,94 @@ function createAgentBlockId(prefix = 'block') {
 
 function createAgentProgressBlock({
     id = createAgentBlockId('progress'),
+    stepKey = '',
     title = '',
     statusText = '',
     value = 0,
     indeterminate = false,
+    images = [],
+    selectedIndex = 0,
+    applied = false,
+    actions = [],
+    isCurrent = false,
+    expanded = false,
 } = {}) {
+    const gallery = Array.isArray(images) ? images : [];
     return {
         id,
         type: 'progress',
+        stepKey,
         title,
         statusText,
         value,
         indeterminate,
+        images: gallery,
+        selectedIndex: Math.max(0, Math.min(gallery.length - 1, Number(selectedIndex) || 0)),
+        applied: Boolean(applied),
+        actions: Array.isArray(actions) ? actions.filter(Boolean).map((action) => String(action)) : [],
+        isCurrent: Boolean(isCurrent),
+        expanded: Boolean(expanded),
     };
+}
+
+function createScenePipelineStepBlock({
+    key,
+    titleKey,
+    images = [],
+    statusText = t('agent.pipelineSteps.pending'),
+    value = 0,
+    indeterminate = false,
+    applied = false,
+    actions = [],
+    isCurrent = false,
+    expanded = false,
+} = {}) {
+    return createAgentProgressBlock({
+        id: createAgentBlockId(`step-${key || 'pipeline'}`),
+        stepKey: key,
+        title: t(titleKey || 'agent.blocks.progress'),
+        statusText,
+        value,
+        indeterminate,
+        images,
+        selectedIndex: 0,
+        applied,
+        actions,
+        isCurrent,
+        expanded,
+    });
+}
+
+function createScenePipelineSteps({
+    mainImageBlock,
+} = {}) {
+    return SCENE_PIPELINE_STEP_DEFS.map((definition, index) => {
+        if (definition.key === 'main-image' && mainImageBlock) {
+            return {
+                ...mainImageBlock,
+                title: mainImageBlock.title || t(definition.titleKey),
+                isCurrent: !mainImageBlock.applied,
+                expanded: true,
+            };
+        }
+        const unlocked = index === 1 && Boolean(mainImageBlock?.applied);
+        return createScenePipelineStepBlock({
+            key: definition.key,
+            titleKey: definition.titleKey,
+            statusText: unlocked ? t('agent.pipelineSteps.current') : t('agent.pipelineSteps.pending'),
+            value: 0,
+            isCurrent: unlocked,
+            expanded: false,
+            actions: unlocked ? ['cancel', 'retry'] : [],
+        });
+    });
+}
+
+function getNextScenePipelineStepKey(stepKey) {
+    const index = SCENE_PIPELINE_STEP_DEFS.findIndex((step) => step.key === stepKey);
+    return index >= 0 && index < SCENE_PIPELINE_STEP_DEFS.length - 1
+        ? SCENE_PIPELINE_STEP_DEFS[index + 1].key
+        : '';
 }
 
 function createAgentImageBlock({
@@ -3263,6 +4414,7 @@ function createAgentImageBlock({
     status = 'placeholder',
     src = '',
     alt = '',
+    assetPath = '',
 } = {}) {
     return {
         id,
@@ -3271,6 +4423,7 @@ function createAgentImageBlock({
         status,
         src,
         alt,
+        assetPath,
     };
 }
 
@@ -3311,6 +4464,193 @@ function isImageFile(file) {
     if (!(file instanceof File)) return false;
     if (typeof file.type === 'string' && file.type.startsWith('image/')) return true;
     return /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name || '');
+}
+
+function escapeRegExpLiteral(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getAgentComposerSkillDef(skillId = state.agentComposerSkillId) {
+    return AGENT_COMPOSER_SKILL_DEFS.find((skill) => skill.id === skillId) || null;
+}
+
+function ensureAgentComposerSkillTokenHost() {
+    if (!dom.agentComposerInput) return null;
+    let host = dom.agentComposerSkillTokens;
+    if (!(host instanceof HTMLElement) || !dom.agentComposerInput.contains(host)) {
+        host = document.createElement('span');
+        host.id = 'agentComposerSkillTokens';
+        host.className = 'agent-composer-skill-tokens';
+        host.setAttribute('contenteditable', 'false');
+        host.hidden = true;
+        dom.agentComposerInput.prepend(host);
+        dom.agentComposerSkillTokens = host;
+    }
+    return host;
+}
+
+function getAgentComposerInputText() {
+    if (!dom.agentComposerInput) return '';
+    const clone = dom.agentComposerInput.cloneNode(true);
+    clone.querySelector?.('#agentComposerSkillTokens')?.remove();
+    return String(clone.textContent || '').replace(/\u00a0/g, ' ');
+}
+
+function setAgentComposerInputText(text, { focus = true } = {}) {
+    if (!dom.agentComposerInput) return;
+    const host = ensureAgentComposerSkillTokenHost();
+    Array.from(dom.agentComposerInput.childNodes).forEach((node) => {
+        if (node !== host) {
+            node.remove();
+        }
+    });
+    if (host && host.parentNode !== dom.agentComposerInput) {
+        dom.agentComposerInput.prepend(host);
+    }
+    const nextText = String(text || '');
+    if (nextText) {
+        dom.agentComposerInput.append(document.createTextNode(nextText));
+    }
+    syncAgentComposerInputEmptyState();
+    if (focus) {
+        placeAgentComposerCaretAtEnd();
+    }
+}
+
+function syncAgentComposerInputEmptyState() {
+    if (!dom.agentComposerInput) return;
+    dom.agentComposerInput.classList.toggle('is-empty', !state.agentComposerSkillId && getAgentComposerInputText().trim().length === 0);
+}
+
+function placeAgentComposerCaretAtEnd() {
+    if (!dom.agentComposerInput || !document.createRange || !window.getSelection) return;
+    dom.agentComposerInput.focus();
+    const range = document.createRange();
+    range.selectNodeContents(dom.agentComposerInput);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+}
+
+function getAgentComposerSkillAliasPattern() {
+    const aliases = AGENT_COMPOSER_SKILL_DEFS
+        .flatMap((skill) => skill.aliases || [skill.value])
+        .sort((a, b) => b.length - a.length)
+        .map(escapeRegExpLiteral);
+    return aliases.length > 0 ? aliases.join('|') : '$.';
+}
+
+function extractAgentComposerSkillText(text) {
+    const source = String(text || '');
+    const pattern = getAgentComposerSkillAliasPattern();
+    const match = new RegExp(`(^|\\s)(${pattern})(?=\\s|$)`, 'i').exec(source);
+    if (!match) {
+        return { skill: null, text: source };
+    }
+    const alias = String(match[2] || '').toLowerCase();
+    const skill = AGENT_COMPOSER_SKILL_DEFS.find((candidate) => (
+        [candidate.value, ...(candidate.aliases || [])]
+            .some((value) => String(value).toLowerCase() === alias)
+    )) || null;
+    const leading = match[1] || '';
+    const start = match.index + leading.length;
+    const end = start + String(match[2] || '').length;
+    const nextText = `${source.slice(0, start)}${source.slice(end)}`.replace(/[ \t]{2,}/g, ' ').trimStart();
+    return { skill, text: nextText };
+}
+
+function parseAgentComposerSkillText(text) {
+    let nextText = String(text || '');
+    let selectedSkill = null;
+    let changed = false;
+
+    while (true) {
+        const result = extractAgentComposerSkillText(nextText);
+        if (!result.skill) break;
+        selectedSkill = result.skill;
+        nextText = result.text;
+        changed = true;
+    }
+
+    return { skill: selectedSkill, text: nextText, changed };
+}
+
+function isAgentComposerSkillTokenMounted() {
+    return dom.agentComposerInput instanceof HTMLElement
+        && dom.agentComposerSkillTokens instanceof HTMLElement
+        && dom.agentComposerInput.contains(dom.agentComposerSkillTokens);
+}
+
+function renderAgentComposerSkillControls() {
+    const selectedSkill = getAgentComposerSkillDef();
+    const hasSkill = Boolean(selectedSkill);
+    const tokenHost = ensureAgentComposerSkillTokenHost();
+    dom.agentComposerSkillToolbar?.querySelectorAll('[data-agent-skill-insert]').forEach((button) => {
+        if (!(button instanceof HTMLButtonElement)) return;
+        const skill = getAgentComposerSkillDef(button.dataset.agentSkillInsert);
+        const isActive = Boolean(selectedSkill && skill?.id === selectedSkill.id);
+        button.disabled = hasSkill;
+        button.classList.toggle('is-active', isActive);
+        button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        if (skill) {
+            button.textContent = t(skill.labelKey);
+        }
+    });
+    if (!tokenHost) return;
+    tokenHost.hidden = !selectedSkill;
+    tokenHost.innerHTML = selectedSkill ? `
+        <span
+            role="button"
+            tabindex="0"
+            class="agent-composer-skill-token"
+            data-agent-skill-remove="${escapeHtml(selectedSkill.id)}"
+            aria-label="${escapeHtml(t('agent.removeSkill', { name: selectedSkill.value }))}"
+            title="${escapeHtml(t('agent.removeSkill', { name: selectedSkill.value }))}"
+        >
+            <span>${escapeHtml(selectedSkill.value)}</span>
+            <span class="agent-composer-skill-token-remove" aria-hidden="true">×</span>
+        </span>
+    ` : '';
+    syncAgentComposerInputEmptyState();
+}
+
+function setAgentComposerSkill(skillId) {
+    const skill = getAgentComposerSkillDef(skillId);
+    state.agentComposerSkillId = skill?.id || '';
+    renderAgentComposerSkillControls();
+}
+
+function clearAgentComposerSkill() {
+    setAgentComposerSkill('');
+}
+
+function syncAgentComposerSkillFromInput() {
+    if (!dom.agentComposerInput) return;
+    const previousSkillId = state.agentComposerSkillId;
+    const tokenWasRemoved = Boolean(previousSkillId) && !isAgentComposerSkillTokenMounted();
+    const result = parseAgentComposerSkillText(getAgentComposerInputText());
+
+    if (result.skill) {
+        state.agentComposerSkillId = result.skill.id;
+    } else if (tokenWasRemoved) {
+        state.agentComposerSkillId = '';
+    }
+
+    const stateChanged = previousSkillId !== state.agentComposerSkillId;
+    if (!result.changed && !stateChanged) return;
+
+    if (result.changed) {
+        setAgentComposerInputText(result.text, { focus: true });
+    }
+    renderAgentComposerSkillControls();
+}
+
+function buildAgentComposerPromptText(rawPrompt) {
+    const prompt = String(rawPrompt || '').trim();
+    const skill = getAgentComposerSkillDef();
+    if (!skill) return prompt;
+    return `${skill.value} ${prompt}`;
 }
 
 function renderAgentComposerAttachments() {
@@ -3378,11 +4718,13 @@ function createAgentMessageHandle(messageId) {
         finish() {
             updateAgentMessageById(messageId, (message) => {
                 message.isComplete = true;
+                message.isLoading = false;
             });
         },
         fail(errorText) {
             updateAgentMessageById(messageId, (message) => {
                 message.text = String(errorText ?? t('messages.agentExecutionFailed'));
+                message.isLoading = false;
                 message.blocks = (message.blocks || []).map((block) => (
                     block.type === 'progress'
                         ? { ...block, indeterminate: false, statusText: t('common.failed') }
@@ -3428,7 +4770,7 @@ function createAgentSessionHandle(sessionId, attemptId) {
         fail(errorText) {
             updateAgentSessionById(sessionId, (session) => {
                 const activeAttempt = getAgentSessionActiveAttempt(session);
-                const failedBlocks = (activeAttempt?.blocks || []).map((block) => (
+                const failedBlocks = getAgentAttemptStepBlocks(activeAttempt).map((block) => (
                     block.type === 'progress'
                         ? { ...block, indeterminate: false, statusText: t('common.failed') }
                         : (block.type === 'image' || block.type === 'viewer3d')
@@ -3440,6 +4782,7 @@ function createAgentSessionHandle(sessionId, attemptId) {
                     text: String(errorText ?? t('messages.agentExecutionFailed')),
                     status: 'failed',
                     blocks: failedBlocks,
+                    ...(Array.isArray(activeAttempt?.steps) ? { steps: failedBlocks } : {}),
                 });
             });
         },
@@ -3451,10 +4794,12 @@ function openAgentAssistantMessage({
     text = '',
     blocks = [],
     promptSuggestions = null,
+    isLoading = false,
 } = {}) {
     const message = createAgentMessage('assistant', text, workflow);
     message.blocks = Array.isArray(blocks) ? blocks : [];
     message.promptSuggestions = Array.isArray(promptSuggestions) ? promptSuggestions : null;
+    message.isLoading = Boolean(isLoading);
     state.agentMessages.push(message);
     renderAgentMessages({ autoScroll: 'always' });
     schedulePersistAgentConversations();
@@ -3589,7 +4934,7 @@ async function syncAgent3DBlocks() {
     const viewerBlocks = [];
     for (const item of state.agentMessages) {
         const blocks = item?.kind === 'session'
-            ? (getAgentSessionActiveAttempt(item)?.blocks || [])
+            ? getAgentAttemptStepBlocks(getAgentSessionActiveAttempt(item))
             : (item.blocks || []);
         for (const block of blocks) {
             if (!isReadyAgentViewer3DBlock(block)) continue;
@@ -3615,20 +4960,124 @@ async function syncAgent3DBlocks() {
     }
 }
 
-function renderAgentProgressBlock(block) {
+function renderAgentProgressBlock(block, context = {}) {
     const progress = Math.max(0, Math.min(1, Number(block.value) || 0));
     const percentText = block.indeterminate ? t('agent.promptProcessing') : `${Math.round(progress * 100)}%`;
-    return `
-        <section class="agent-block agent-block-progress" data-agent-block-id="${block.id}">
+    const images = Array.isArray(block.images) ? block.images : [];
+    const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(block.selectedIndex) || 0));
+    const selectedImage = images[selectedIndex] || null;
+    const actions = Array.isArray(block.actions) ? block.actions : [];
+    const isApplied = Boolean(block.applied);
+    const isStepBlock = Boolean(block.stepKey);
+    const showContinue = isStepBlock && shouldShowAgentPipelineContinue(context);
+    const isOpen = !isStepBlock || Boolean(block.expanded || block.isCurrent || block.applied || selectedImage || actions.length > 0 || showContinue);
+    const stepStateLabel = isApplied
+        ? t('agent.pipelineSteps.applied')
+        : block.isCurrent
+            ? t('agent.pipelineSteps.current')
+            : '';
+    const content = `
+            ${isStepBlock ? '' : `
             <div class="agent-block-header">
                 <span class="agent-block-title">${escapeHtml(block.title || t('agent.blocks.progress'))}</span>
                 <span class="agent-block-meta">${percentText}</span>
             </div>
+            `}
             <div class="agent-progress-track ${block.indeterminate ? 'is-indeterminate' : ''}">
                 <div class="agent-progress-fill" style="width:${Math.round(progress * 100)}%"></div>
             </div>
             ${block.statusText ? `<div class="agent-block-status">${escapeHtml(block.statusText)}</div>` : ''}
+            ${selectedImage ? `
+                <div class="agent-step-gallery ${isApplied ? 'is-applied' : ''}" data-agent-step-gallery="${block.id}">
+                    <div class="agent-step-gallery-main">
+                        <div class="agent-step-gallery-image">
+                            <div class="agent-image-frame is-ready">
+                                <img src="${escapeHtml(selectedImage.src)}" alt="${escapeHtml(selectedImage.alt || selectedImage.title || block.title || t('agent.blocks.image'))}" loading="lazy">
+                                ${images.length > 1 ? `<span class="agent-step-gallery-count">${selectedIndex + 1} / ${images.length}</span>` : ''}
+                                ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-prev" data-agent-step-gallery-nav="prev" data-agent-block-id="${block.id}" ${!isApplied && selectedIndex > 0 ? '' : 'disabled'} aria-label="Previous image">‹</button>` : ''}
+                                ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-next" data-agent-step-gallery-nav="next" data-agent-block-id="${block.id}" ${!isApplied && selectedIndex < images.length - 1 ? '' : 'disabled'} aria-label="Next image">›</button>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    ${renderAgentStepImageMetadata(selectedImage)}
+                </div>
+            ` : ''}
+            ${actions.length > 0 ? `
+                <div class="agent-step-actions">
+                    ${actions.map((action) => `
+                        <button type="button" class="agent-inline-btn agent-step-action-btn" data-agent-step-action="${escapeHtml(action)}" data-agent-block-id="${block.id}" ${isApplied ? 'disabled' : ''}>${escapeHtml(t(`agent.actions.${action}`))}</button>
+                    `).join('')}
+                </div>
+            ` : ''}
+            ${showContinue ? `
+                <div class="agent-step-continue">
+                    <button type="button" class="agent-inline-btn agent-step-continue-btn" data-agent-pipeline-continue="${escapeHtml(block.stepKey)}" data-agent-block-id="${block.id}">${escapeHtml(t('agent.pipelineSteps.continueAction'))}</button>
+                </div>
+            ` : ''}
+    `;
+    if (isStepBlock) {
+        return `
+            <details class="agent-block agent-block-progress agent-step-block ${isApplied ? 'is-applied' : ''} ${block.isCurrent ? 'is-current' : ''}" data-agent-block-id="${block.id}" data-agent-session-id="${escapeHtml(context.sessionId || '')}" data-agent-attempt-id="${escapeHtml(context.attemptId || '')}" data-agent-step-key="${escapeHtml(block.stepKey || '')}" ${isOpen ? 'open' : ''}>
+                <summary class="agent-block-header agent-step-summary">
+                    <span class="agent-block-title">${escapeHtml(block.title || t('agent.blocks.progress'))}</span>
+                    <span class="agent-step-summary-meta">
+                        ${stepStateLabel ? `<span class="agent-step-state">${escapeHtml(stepStateLabel)}</span>` : ''}
+                        <span class="agent-block-meta">${percentText}</span>
+                    </span>
+                </summary>
+                <div class="agent-step-body">
+                    ${content}
+                </div>
+            </details>
+        `;
+    }
+    return `
+        <section class="agent-block agent-block-progress" data-agent-block-id="${block.id}" data-agent-session-id="${escapeHtml(context.sessionId || '')}" data-agent-attempt-id="${escapeHtml(context.attemptId || '')}" data-agent-step-key="${escapeHtml(block.stepKey || '')}">
+            ${content}
         </section>
+    `;
+}
+
+function renderAgentStepImageMetadata(image) {
+    const metadata = image?.metadata && typeof image.metadata === 'object' ? image.metadata : null;
+    if (!metadata) return '';
+    if (metadata.kind === 'components_3d') {
+        const glbPaths = Array.isArray(metadata.glbPaths)
+            ? metadata.glbPaths.map((item) => String(item || '').trim()).filter(Boolean)
+            : [];
+        const details = [
+            metadata.label ? String(metadata.label) : '',
+            glbPaths.length > 0 ? t('agent.pipelineSteps.components3dAssets', { count: glbPaths.length }) : '',
+        ].filter(Boolean);
+        return `
+        <div class="agent-step-metadata">
+            ${details.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}
+            ${glbPaths.slice(0, 2).map((item) => `<span>${escapeHtml(item)}</span>`).join('')}
+        </div>
+    `;
+    }
+    if (metadata.kind === 'insert_scene') {
+        const objectCount = Number(metadata.objectCount) || 0;
+        return `
+        <div class="agent-step-metadata">
+            <span>${escapeHtml(t('agent.pipelineSteps.insertSceneAsset', { count: objectCount }))}</span>
+            ${metadata.blendPath ? `<span>${escapeHtml(metadata.blendPath)}</span>` : ''}
+        </div>
+    `;
+    }
+    if (metadata.kind !== 'layout_bbox') return '';
+    const bboxData = Array.isArray(metadata.bboxData) ? metadata.bboxData : [];
+    const labels = bboxData
+        .map((item) => String(item?.label || '').trim())
+        .filter(Boolean)
+        .slice(0, 4);
+    const detectionCount = Number(metadata.detectionCount) || bboxData.length;
+    return `
+        <div class="agent-step-metadata">
+            <span>${escapeHtml(t('agent.pipelineSteps.layoutDetections', { count: detectionCount }))}</span>
+            ${metadata.bboxJsonPath ? `<span>${escapeHtml(metadata.bboxJsonPath)}</span>` : ''}
+            ${labels.length > 0 ? `<span>${escapeHtml(labels.join(' / '))}</span>` : ''}
+        </div>
     `;
 }
 
@@ -3668,16 +5117,56 @@ function renderAgentViewer3DBlock(block) {
     `;
 }
 
-function renderAgentBlocks(blocks) {
+function renderAgentBlocks(blocks, context = {}) {
     if (!Array.isArray(blocks) || blocks.length === 0) return '';
+    const allStepBlocks = blocks.every((block) => block?.type === 'progress' && block.stepKey);
+    if (allStepBlocks) {
+        return renderAgentStepBlocks(blocks, context);
+    }
     return `
         <div class="agent-message-blocks">
             ${blocks.map((block) => {
-                if (block.type === 'progress') return renderAgentProgressBlock(block);
+                if (block.type === 'progress') return renderAgentProgressBlock(block, context);
                 if (block.type === 'image') return renderAgentImageBlock(block);
                 if (block.type === 'viewer3d') return renderAgentViewer3DBlock(block);
                 return '';
             }).join('')}
+        </div>
+    `;
+}
+
+function shouldShowAgentStepBlock(block) {
+    return Boolean(
+        block?.applied
+        || block?.isCurrent
+        || (Array.isArray(block?.images) && block.images.length > 0)
+        || (Array.isArray(block?.actions) && block.actions.length > 0)
+    );
+}
+
+function renderAgentStepBlocks(blocks, context = {}) {
+    let anchorIndex = -1;
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        if (shouldShowAgentStepBlock(blocks[index])) {
+            anchorIndex = index;
+            break;
+        }
+    }
+    if (anchorIndex < 0) anchorIndex = 0;
+    const nextIndex = Math.min(blocks.length - 1, anchorIndex + 1);
+    const visibleBlocks = blocks.filter((block, index) => shouldShowAgentStepBlock(block) || index === nextIndex);
+    const hiddenBlocks = blocks.filter((block, index) => !visibleBlocks.includes(block) && index > nextIndex);
+    return `
+        <div class="agent-message-blocks agent-step-list">
+            ${visibleBlocks.map((block) => renderAgentProgressBlock(block, context)).join('')}
+            ${hiddenBlocks.length > 0 ? `
+                <details class="agent-step-overflow">
+                    <summary>${escapeHtml(t('agent.pipelineSteps.more'))}</summary>
+                    <div class="agent-step-overflow-list">
+                        ${hiddenBlocks.map((block) => renderAgentProgressBlock(block, context)).join('')}
+                    </div>
+                </details>
+            ` : ''}
         </div>
     `;
 }
@@ -3754,12 +5243,16 @@ function renderAgentPromptSuggestions(promptSuggestions) {
 }
 
 function renderAgentMessageItem(message) {
+    const isAssistant = message.role === 'assistant';
+    const isLoading = isAssistant && message.isLoading;
+    const messageText = String(message.text || '');
     return `
-        <div class="agent-message ${message.role === 'user' ? 'is-user' : 'is-assistant'}">
+        <div class="agent-message ${message.role === 'user' ? 'is-user' : 'is-assistant'} ${isLoading ? 'is-loading' : ''}">
             <div class="agent-message-bubble">
-                ${message.role === 'user' ? '' : `<span class="agent-message-role">${escapeHtml(t('common.agent'))}</span>`}
+                ${isAssistant ? `<span class="agent-message-role">${escapeHtml(t('common.agent'))}</span>` : ''}
+                ${isLoading ? '<span class="agent-message-loading-spinner" aria-hidden="true"></span>' : ''}
                 ${renderAgentAttachments(message.attachments)}
-                <div class="agent-message-text">${escapeHtml(message.text)}</div>
+                ${messageText ? `<div class="agent-message-text">${escapeHtml(messageText)}</div>` : ''}
                 ${renderAgentBlocks(message.blocks)}
                 ${renderAgentPromptSuggestions(message.promptSuggestions)}
             </div>
@@ -3881,7 +5374,7 @@ function renderAgentSessionItem(session) {
                         </div>
                     </div>
                     <div class="agent-message-text">${escapeHtml(attempt?.text || '')}</div>
-                    ${renderAgentBlocks(attempt?.blocks)}
+                    ${renderAgentBlocks(getAgentAttemptStepBlocks(attempt), { sessionId: session.id, attemptId: attempt?.id || '' })}
                     ${renderAgentPromptSuggestions(attempt?.promptSuggestions)}
                     <div class="agent-session-footer">
                         ${isArchivedExpanded ? '' : `
@@ -4077,6 +5570,32 @@ function renderAgentMessages({ autoScroll = 'preserve-or-pin-bottom' } = {}) {
     void syncAgent3DBlocks();
 }
 
+function syncAgentWorkbenchModeTabs() {
+    [dom.agentWorkbenchModeTabs, dom.agentWorkbenchCollapsedModeTabs].forEach((tabGroup) => {
+        tabGroup?.querySelectorAll('[data-mode]').forEach((button) => {
+            const isActive = button.dataset.mode === state.agentWorkbenchMode;
+            button.classList.toggle('active', isActive);
+            button.setAttribute('aria-pressed', String(isActive));
+        });
+    });
+    dom.agentWorkbenchPanels.forEach((panel) => {
+        const isActive = panel instanceof HTMLElement && panel.dataset.modePanel === state.agentWorkbenchMode;
+        panel.classList.toggle('hidden', !isActive);
+    });
+}
+
+function syncAssetLibraryTabs() {
+    dom.assetLibraryTabs?.querySelectorAll('[data-asset-tab]').forEach((button) => {
+        const isActive = button.dataset.assetTab === state.agentAssetLibraryTab;
+        button.classList.toggle('active', isActive);
+        button.setAttribute('aria-pressed', String(isActive));
+    });
+    dom.assetLibraryPanels.forEach((panel) => {
+        const isActive = panel instanceof HTMLElement && panel.dataset.assetPanel === state.agentAssetLibraryTab;
+        panel.classList.toggle('hidden', !isActive);
+    });
+}
+
 function syncAgentWorkflowTabs() {
     dom.agentWorkflowTabs?.querySelectorAll('[data-workflow]').forEach((button) => {
         const isActive = button.dataset.workflow === state.agentWorkflow;
@@ -4086,6 +5605,8 @@ function syncAgentWorkflowTabs() {
 }
 
 function refreshAgentWorkbench() {
+    syncAgentWorkbenchModeTabs();
+    syncAssetLibraryTabs();
     syncAgentWorkflowTabs();
     renderAgentComposerAttachments();
     renderAgentMessages();
@@ -4093,9 +5614,13 @@ function refreshAgentWorkbench() {
 
 function syncAgentWorkbenchCollapsedState() {
     const collapsed = Boolean(state.agentWorkbenchCollapsed);
+    dom.agentWorkbenchShell?.classList.toggle('is-collapsed', collapsed);
     dom.agentWorkbench?.classList.toggle('is-collapsed', collapsed);
+    if (dom.agentWorkbenchCollapsedControls) {
+        dom.agentWorkbenchCollapsedControls.hidden = !collapsed;
+    }
     if (dom.btnToggleAgentWorkbench) {
-        dom.btnToggleAgentWorkbench.textContent = collapsed ? '›' : '‹';
+        dom.btnToggleAgentWorkbench.textContent = '‹';
         dom.btnToggleAgentWorkbench.setAttribute('aria-expanded', String(!collapsed));
         const label = collapsed ? t('agent.expandedTooltip') : t('agent.collapsedTooltip');
         dom.btnToggleAgentWorkbench.title = label;
@@ -4160,6 +5685,24 @@ function setAgentWorkbenchCollapsed(collapsed, persist = true) {
     scheduleAgentWorkbenchCollapseLayoutSync({ persist });
 }
 
+function setAgentWorkbenchMode(mode) {
+    if (!['conversation', 'asset-library'].includes(mode)) return;
+    state.agentWorkbenchMode = mode;
+    syncAgentWorkbenchModeTabs();
+    if (dom.agentWorkbench instanceof HTMLElement) {
+        dom.agentWorkbench.dataset.mode = mode;
+    }
+    if (mode === 'conversation') {
+        scheduleAgentMessageScrollbarSync();
+    }
+}
+
+function setAgentAssetLibraryTab(tab) {
+    if (!['scene', 'object', 'character', 'camera'].includes(tab)) return;
+    state.agentAssetLibraryTab = tab;
+    syncAssetLibraryTabs();
+}
+
 function setAgentWorkflow(workflowId, persist = true) {
     if (!AGENT_WORKFLOW_DEFS[workflowId]) return;
     state.agentWorkflow = workflowId;
@@ -4189,6 +5732,41 @@ function resetAgentConversation() {
 
 function handleAgentMessageListClick(event) {
     if (!(event.target instanceof Element)) return;
+    const pipelineContinueButton = event.target.closest('[data-agent-pipeline-continue]');
+    if (pipelineContinueButton instanceof HTMLElement) {
+        const context = getAgentStepBlockContextFromElement(pipelineContinueButton);
+        if (!context || !shouldShowAgentPipelineContinue(context)) return;
+        handleAgentStepAction(context, 'retry').catch((error) => {
+            console.warn('[Agent Step] continue failed', error);
+            showError(t('messages.agentOperationFailed', { message: error?.message || String(error) }));
+        });
+        return;
+    }
+    const stepGalleryNav = event.target.closest('[data-agent-step-gallery-nav]');
+    if (stepGalleryNav instanceof HTMLElement) {
+        const context = getAgentStepBlockContextFromElement(stepGalleryNav);
+        if (!context || context.block.applied) return;
+        const images = Array.isArray(context.block.images) ? context.block.images : [];
+        if (images.length <= 1) return;
+        const direction = stepGalleryNav.dataset.agentStepGalleryNav;
+        const currentIndex = Math.max(0, Math.min(images.length - 1, Number(context.block.selectedIndex) || 0));
+        const selectedIndex = direction === 'prev'
+            ? Math.max(0, currentIndex - 1)
+            : Math.min(images.length - 1, currentIndex + 1);
+        updateAgentStepSelectedIndex(context, selectedIndex);
+        return;
+    }
+    const stepActionButton = event.target.closest('[data-agent-step-action]');
+    if (stepActionButton instanceof HTMLElement) {
+        const context = getAgentStepBlockContextFromElement(stepActionButton);
+        const action = String(stepActionButton.dataset.agentStepAction || '').trim();
+        if (!context || !action) return;
+        handleAgentStepAction(context, action).catch((error) => {
+            console.warn('[Agent Step] action failed', error);
+            showError(t('messages.agentOperationFailed', { message: error?.message || String(error) }));
+        });
+        return;
+    }
     const resetButton = event.target.closest('[data-agent-viewer-reset]');
     if (resetButton instanceof HTMLElement) {
         const blockId = resetButton.dataset.agentViewerReset;
@@ -4242,22 +5820,72 @@ function handleAgentWorkflowClick(event) {
     if (!(button instanceof HTMLElement)) return;
     const workflowId = button.dataset.workflow;
     if (!workflowId) return;
-
-    if (workflowId === state.agentWorkflow && !state.agentWorkbenchCollapsed) {
-        syncAgentWorkflowTabs();
-        return;
-    }
-
-    if (state.agentWorkbenchCollapsed) {
-        setAgentWorkbenchCollapsed(false);
-    }
     setAgentWorkflow(workflowId);
 }
 
+function handleAgentWorkbenchModeClick(event) {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest('[data-mode]');
+    if (!(button instanceof HTMLElement)) return;
+    const mode = button.dataset.mode;
+    if (!mode) return;
+    if (state.agentWorkbenchCollapsed) {
+        setAgentWorkbenchCollapsed(false);
+    }
+    setAgentWorkbenchMode(mode);
+}
+
+async function handleProjectSessionButtonClick(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    await openProjectSessionPopover();
+}
+
+function handleAssetLibraryTabClick(event) {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest('[data-asset-tab]');
+    if (!(button instanceof HTMLElement)) return;
+    const tab = button.dataset.assetTab;
+    if (!tab) return;
+    setAgentAssetLibraryTab(tab);
+}
+
 function handleAgentComposerKeydown(event) {
+    if (
+        event.key === 'Backspace'
+        && state.agentComposerSkillId
+        && dom.agentComposerInput
+        && getAgentComposerInputText().length === 0
+    ) {
+        event.preventDefault();
+        clearAgentComposerSkill();
+        return;
+    }
     if (event.key !== 'Enter' || event.shiftKey) return;
     event.preventDefault();
     dom.agentComposer?.requestSubmit();
+}
+
+function handleAgentComposerInput() {
+    syncAgentComposerSkillFromInput();
+    syncAgentComposerInputEmptyState();
+}
+
+function handleAgentComposerSkillToolbarClick(event) {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest('[data-agent-skill-insert]');
+    if (!(button instanceof HTMLButtonElement)) return;
+    if (state.agentComposerSkillId) return;
+    setAgentComposerSkill(button.dataset.agentSkillInsert || '');
+    placeAgentComposerCaretAtEnd();
+}
+
+function handleAgentComposerSkillTokenClick(event) {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest('[data-agent-skill-remove]');
+    if (!(button instanceof HTMLElement)) return;
+    clearAgentComposerSkill();
+    placeAgentComposerCaretAtEnd();
 }
 
 function handleAgentComposerAttachmentClick(event) {
@@ -4467,6 +6095,188 @@ function startMockAgentResponse(workflowId, prompt, attachments = []) {
     });
 }
 
+function canUseServerCodexAgent() {
+    return getAgentRuntimeStatus().ready;
+}
+
+function getCodexAgentConversationId() {
+    if (state.agentCodexConversationId) {
+        return state.agentCodexConversationId;
+    }
+    const projectId = state.projectSession?.activeProjectId || 'local';
+    state.agentCodexConversationId = `project:${projectId}`;
+    return state.agentCodexConversationId;
+}
+
+function resetAgentCodexSessionBinding() {
+    state.agentCodexConversationId = '';
+    state.agentCodexThreadId = '';
+}
+
+function hasCodexTaskSignal(result) {
+    return Boolean(result?.task?.started);
+}
+
+function replaceAgentMessageWithSession(messageId, session) {
+    const index = getAgentMessageIndexById(messageId);
+    if (index < 0 || !session) return null;
+    state.agentMessages[index] = session;
+    renderAgentMessages({ autoScroll: 'preserve-or-pin-bottom' });
+    schedulePersistAgentConversations();
+    return session;
+}
+
+function createCodexTaskSessionFromResult({
+    workflowId,
+    prompt,
+    attachments,
+    result,
+} = {}) {
+    const task = result?.task || {};
+    const progressImages = Array.isArray(result?.images)
+        ? result.images
+            .map((image, index) => {
+                const assetPath = String(image?.relativePath || '');
+                if (!assetPath) return null;
+                return {
+                    title: image.id || `Image ${index + 1}`,
+                    src: projectApi.getAssetUrl(state.projectSession.user, state.projectSession.activeProjectId, assetPath),
+                    alt: prompt,
+                    assetPath,
+                    relativePath: assetPath,
+                    id: image.id || `Image ${index + 1}`,
+                    mimeType: image.mimeType || '',
+                    bytes: image.bytes || 0,
+                };
+            })
+            .filter(Boolean)
+        : [];
+    const progressBlock = createAgentProgressBlock({
+        title: task.title || 'Codex',
+        stepKey: 'main-image',
+        statusText: task.statusText || t('agent.blocks.progressDone'),
+        value: task.progress ?? 1,
+        indeterminate: false,
+        images: progressImages,
+        selectedIndex: 0,
+        applied: false,
+        actions: progressImages.length > 0 ? ['cancel', 'retry', 'apply'] : [],
+        isCurrent: progressImages.length > 0,
+        expanded: true,
+    });
+    const steps = createScenePipelineSteps({
+        mainImageBlock: progressBlock,
+    });
+    const attempt = createAgentGenerationAttempt({
+        workflow: workflowId,
+        text: result?.finalText || t('messages.agentExecutionFailed'),
+        blocks: steps,
+        steps,
+        status: 'complete',
+    });
+    const session = createAgentSession({
+        workflow: workflowId,
+        prompt,
+        attachments,
+        attempt,
+    });
+    const activeAttempt = session.attempts[0];
+    activeAttempt.pipelineState = deriveScenePipelineState(session, activeAttempt);
+    return session;
+}
+
+function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
+    const handle = openAgentAssistantMessage({
+        workflow: workflowId,
+        isLoading: true,
+    });
+
+    projectApi.sendCodexAgentMessage({
+        user: state.projectSession.user,
+        projectId: state.projectSession.activeProjectId,
+        conversationId: getCodexAgentConversationId(),
+        threadId: state.agentCodexThreadId,
+        prompt,
+        workflow: workflowId,
+    }).then((result) => {
+        state.agentCodexConversationId = result?.conversationId || state.agentCodexConversationId;
+        state.agentCodexThreadId = result?.threadId || state.agentCodexThreadId;
+        if (hasCodexTaskSignal(result)) {
+            replaceAgentMessageWithSession(handle.messageId, createCodexTaskSessionFromResult({
+                workflowId,
+                prompt,
+                attachments,
+                result,
+            }));
+            return;
+        }
+        handle.updateText(result?.finalText || t('messages.agentExecutionFailed'));
+        handle.finish();
+    }).catch((error) => {
+        handle.fail(t('messages.codexAgentFailed', {
+            message: error?.message || String(error),
+        }));
+    });
+
+    return handle;
+}
+
+async function handleAgentStepAction(context, action) {
+    if (!canUseServerCodexAgent()) return;
+    const currentImages = Array.isArray(context.block.images) ? context.block.images : [];
+    const selectedIndex = Math.max(0, Math.min(currentImages.length - 1, Number(context.block.selectedIndex) || 0));
+    patchAgentStepBlock(context, {
+        statusText: action === 'retry' ? t('common.generating') : context.block.statusText,
+        indeterminate: action === 'retry',
+    });
+    const result = await projectApi.sendCodexAgentStepAction({
+        user: state.projectSession.user,
+        projectId: state.projectSession.activeProjectId,
+        sessionId: context.sessionId,
+        stepKey: context.stepKey,
+        action,
+        prompt: context.session.prompt || context.attempt.text || '',
+        selectedIndex,
+        images: currentImages.map((image) => serializeAgentStepImage(image)),
+        sourceImages: [
+            serializeAgentStepSourceImage(context.attempt, 'main-image'),
+            serializeAgentStepSourceImage(context.attempt, 'front-view'),
+            serializeAgentStepSourceImage(context.attempt, 'top-view'),
+            serializeAgentStepSourceImage(context.attempt, 'layout'),
+            serializeAgentStepSourceImage(context.attempt, 'components-3d'),
+        ].filter(Boolean),
+    });
+    const patch = result?.blockPatch || {};
+    const nextImages = Array.isArray(patch.images)
+        ? patch.images.map((image, index) => {
+            const assetPath = String(image?.relativePath || image?.assetPath || '');
+            return {
+                id: image?.id || image?.title || `Image ${index + 1}`,
+                title: image?.title || image?.id || `Image ${index + 1}`,
+                relativePath: assetPath,
+                assetPath,
+                mimeType: image?.mimeType || '',
+                bytes: image?.bytes || 0,
+                metadata: image?.metadata && typeof image.metadata === 'object' ? image.metadata : undefined,
+                src: assetPath
+                    ? projectApi.getAssetUrl(state.projectSession.user, state.projectSession.activeProjectId, assetPath)
+                    : image?.src || '',
+                alt: context.session.prompt || context.attempt.text || '',
+            };
+        })
+        : currentImages;
+    patchAgentStepBlock(context, {
+        ...patch,
+        images: nextImages,
+    });
+    if (action === 'apply') {
+        const nextContext = advanceAgentPipelineAfterStepApply(context);
+        if (nextContext) {
+            await handleAgentStepAction(nextContext, 'retry');
+        }
+    }
+}
+
 async function handleAgentSessionAction(sessionId, action) {
     const index = getAgentItemIndexById(sessionId);
     if (index < 0) return;
@@ -4529,22 +6339,29 @@ async function handleAgentSessionAction(sessionId, action) {
 }
 
 function submitAgentPrompt(promptText, attachments = []) {
-    const prompt = String(promptText || '').trim();
+    const rawPrompt = String(promptText || '');
+    const prompt = rawPrompt.trim();
     if (!prompt && attachments.length === 0) return;
     const attachmentFallback = t('messages.imageInput');
+    const effectivePrompt = prompt ? rawPrompt.trimStart() : attachmentFallback;
 
-    const userMessage = createAgentMessage('user', prompt || attachmentFallback);
+    const userMessage = createAgentMessage('user', effectivePrompt);
     userMessage.attachments = attachments;
     state.agentMessages.push(userMessage);
     renderAgentMessages({ autoScroll: 'always' });
     schedulePersistAgentConversations();
-    startMockAgentResponse(state.agentWorkflow, prompt || attachmentFallback, attachments);
+    if (canUseServerCodexAgent()) {
+        startServerCodexAgentResponse(state.agentWorkflow, effectivePrompt, attachments);
+        return;
+    }
+    startMockAgentResponse(state.agentWorkflow, effectivePrompt, attachments);
 }
 
 function handleAgentComposerSubmit(event) {
     event.preventDefault();
     if (!dom.agentComposerInput) return;
-    const prompt = dom.agentComposerInput.value.trim();
+    syncAgentComposerSkillFromInput();
+    const prompt = buildAgentComposerPromptText(getAgentComposerInputText());
     const attachments = state.agentPendingImages.map((file, index) => ({
         id: `attachment-${Date.now()}-${index}`,
         name: file.name,
@@ -4554,9 +6371,16 @@ function handleAgentComposerSubmit(event) {
     if (!prompt && attachments.length === 0) return;
 
     submitAgentPrompt(prompt, attachments);
-    dom.agentComposerInput.value = '';
+    setAgentComposerInputText('', { focus: false });
+    clearAgentComposerSkill();
     state.agentPendingImages = [];
     renderAgentComposerAttachments();
+}
+
+function handleAgentComposerFocusIn() {
+    if (state.agentWorkbenchMode !== 'conversation') {
+        setAgentWorkbenchMode('conversation');
+    }
 }
 
 function scheduleAgentWorkbenchResizeWidth(width) {
@@ -6191,7 +8015,12 @@ function showLoading(show, text = t('loading.default'), progress = 0, options = 
             dom.loadingOverlay.classList.remove('hidden');
             dom.loadingOverlay.classList.toggle('loading-overlay-passive', options?.passive === true);
             const loadingText = dom.loadingOverlay.querySelector('.loading-text');
+            const loadingDetail = dom.loadingOverlay.querySelector('.loading-detail');
             if (loadingText) loadingText.textContent = text;
+            if (loadingDetail) {
+                loadingDetail.textContent = options?.detail || '';
+                loadingDetail.toggleAttribute('hidden', !options?.detail);
+            }
             if (dom.progressFill) dom.progressFill.style.width = `${progress}%`;
             if (dom.progressText) dom.progressText.textContent = `${Math.round(progress)}%`;
         } else {
@@ -6205,6 +8034,14 @@ function setBootLoadingVisible(visible) {
     if (!dom.bootLoadingOverlay) return;
     dom.bootLoadingOverlay.classList.toggle('hidden', !visible);
     dom.bootLoadingOverlay.setAttribute('aria-busy', visible ? 'true' : 'false');
+}
+
+function setBootLoadingStatus(detail = t('loading.bootPreparing')) {
+    if (!dom.bootLoadingOverlay) return;
+    const loadingText = dom.bootLoadingOverlay.querySelector('.loading-text');
+    const loadingDetail = dom.bootLoadingOverlay.querySelector('.loading-detail');
+    if (loadingText) loadingText.textContent = t('canvas.loading');
+    if (loadingDetail) loadingDetail.textContent = detail;
 }
 
 /**
@@ -9146,6 +10983,7 @@ async function openServerProject(projectId) {
         });
         state.projectSession.activeProjectId = project?.id || projectId;
         state.projectSession.activeProjectName = project?.name || projectId;
+        resetAgentCodexSessionBinding();
         markWorkspaceTargetMigrationRequired('server');
         state.workspace = {
             ...state.workspace,
@@ -9162,6 +11000,7 @@ async function openServerProject(projectId) {
         closeProjectBrowserModal();
         syncProjectSessionButton();
         updateWorkspaceStatusIndicator();
+        void refreshProjectBrowserCodexAuthStatus();
         showLoading(false);
         showInfo(t('projectSession.openedProject', {
             name: state.projectSession.activeProjectName,
@@ -9184,7 +11023,9 @@ async function createServerProjectFromCurrentScene(options = {}) {
     } = options;
     const errorElement = nameInput === dom.projectBrowserSaveAsName
         ? dom.projectBrowserSaveAsNameError
-        : dom.projectSessionNewProjectNameError;
+        : nameInput === dom.projectCreateName
+            ? dom.projectCreateNameError
+            : dom.projectSessionNewProjectNameError;
     clearProjectNameConflictState(nameInput, errorElement);
     const projectName = String(nameInput?.value || '').trim() || getProjectSessionDefaultProjectName();
     if (reopenModalOnError === 'post-login') {
@@ -9256,6 +11097,7 @@ async function createServerProjectFromCurrentScene(options = {}) {
         });
         state.projectSession.activeProjectId = project?.id || '';
         state.projectSession.activeProjectName = project?.name || projectName;
+        resetAgentCodexSessionBinding();
         applyWorkspaceAssetWritesToLoadedModels(assetWrites);
         state.forceFullServerAssetMigration = false;
         state.workspace = {
@@ -9276,6 +11118,7 @@ async function createServerProjectFromCurrentScene(options = {}) {
             closeProjectBrowserModal();
         }
         updateWorkspaceStatusIndicator();
+        void refreshProjectBrowserCodexAuthStatus();
         showLoading(false);
         showInfo(t('messages.projectSavedAsCurrent', { name: state.projectSession.activeProjectName }));
         console.debug('[ProjectSession] createServerProjectFromCurrentScene:complete', {
@@ -9298,13 +11141,20 @@ async function createServerProjectFromCurrentScene(options = {}) {
             }
         } else if (reopenModalOnError === 'project-browser-saveas' && dom.projectBrowserSaveAsName) {
             dom.projectBrowserSaveAsName.value = projectName;
+        } else if (reopenModalOnError === 'project-create' && dom.projectCreateName) {
+            openProjectCreateDialog();
+            dom.projectCreateName.value = projectName;
         }
         const reopenedInput = reopenModalOnError === 'project-browser-saveas'
             ? dom.projectBrowserSaveAsName
-            : dom.projectSessionNewProjectName;
+            : reopenModalOnError === 'project-create'
+                ? dom.projectCreateName
+                : dom.projectSessionNewProjectName;
         const reopenedErrorElement = reopenModalOnError === 'project-browser-saveas'
             ? dom.projectBrowserSaveAsNameError
-            : dom.projectSessionNewProjectNameError;
+            : reopenModalOnError === 'project-create'
+                ? dom.projectCreateNameError
+                : dom.projectSessionNewProjectNameError;
         if (reopenedInput) {
             reopenedInput.value = projectName;
         }
@@ -9362,6 +11212,7 @@ async function deleteAdminUser(user) {
 
 function logoutProjectSession() {
     clearActiveServerProjectAssetCaches();
+    resetAgentCodexSessionBinding();
     setPendingWorkspaceTargetAction(null);
     state.forceFullWorkspaceAssetMigration = false;
     state.forceFullServerAssetMigration = false;
@@ -11542,12 +13393,12 @@ function initEventListeners() {
     initPanelWheelScroll();
     dom.btnToggleAgentWorkbench?.addEventListener('click', () => setAgentWorkbenchCollapsed(!state.agentWorkbenchCollapsed));
     dom.agentWorkbenchResizer?.addEventListener('mousedown', beginAgentWorkbenchResize);
+    dom.agentWorkbenchModeTabs?.addEventListener('click', handleAgentWorkbenchModeClick);
+    dom.agentWorkbenchCollapsedModeTabs?.addEventListener('click', handleAgentWorkbenchModeClick);
     dom.agentWorkflowTabs?.addEventListener('click', handleAgentWorkflowClick);
-    dom.btnUserSession?.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        await openProjectSessionPopover();
-    });
+    dom.assetLibraryTabs?.addEventListener('click', handleAssetLibraryTabClick);
+    dom.btnUserSession?.addEventListener('click', handleProjectSessionButtonClick);
+    dom.btnCollapsedUserSession?.addEventListener('click', handleProjectSessionButtonClick);
     dom.btnLoginModalClose?.addEventListener('click', closeLoginModal);
     dom.btnProjectSessionClose?.addEventListener('click', closePostLoginProjectModal);
     dom.btnProjectSessionLoginCancel?.addEventListener('click', closeLoginModal);
@@ -11597,13 +13448,53 @@ function initEventListeners() {
         showInfo(t('projectSession.keptWithoutCreating'));
     });
     dom.projectBrowserProjectGrid?.addEventListener('click', (event) => {
+        const deleteButton = event.target.closest?.('[data-project-delete]');
+        if (deleteButton instanceof HTMLElement) {
+            const projectId = String(deleteButton.dataset.projectDelete || '').trim();
+            if (projectId) {
+                void deleteProjectFromBrowser(projectId);
+            }
+            return;
+        }
+        const renameButton = event.target.closest?.('[data-project-rename-start]');
+        if (renameButton instanceof HTMLElement) {
+            const projectId = String(renameButton.dataset.projectRenameStart || '').trim();
+            if (projectId) {
+                startProjectRename(projectId);
+            }
+            return;
+        }
         const button = event.target.closest?.('[data-project-open]');
         if (!(button instanceof HTMLElement)) return;
         const projectId = String(button.dataset.projectOpen || '').trim();
         if (!projectId) return;
         void openServerProject(projectId);
     });
+    dom.projectBrowserProjectGrid?.addEventListener('input', (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.dataset.projectRenameInput) return;
+        state.projectSession.renamingProjectName = input.value;
+        state.projectSession.renamingProjectError = '';
+        input.classList.remove('has-error');
+    });
+    dom.projectBrowserProjectGrid?.addEventListener('keydown', (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.dataset.projectRenameInput) return;
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            void commitProjectRename(input.dataset.projectRenameInput);
+        } else if (event.key === 'Escape') {
+            event.preventDefault();
+            cancelProjectRename();
+        }
+    });
+    dom.projectBrowserProjectGrid?.addEventListener('focusout', (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.dataset.projectRenameInput) return;
+        void commitProjectRename(input.dataset.projectRenameInput);
+    });
     dom.btnProjectBrowserClose?.addEventListener('click', closeProjectBrowserModal);
+    dom.btnProjectBrowserCreateNew?.addEventListener('click', openProjectCreateDialog);
     dom.btnProjectBrowserSaveAs?.addEventListener('click', openProjectBrowserSaveAsPanel);
     dom.projectBrowserSaveAsName?.addEventListener('input', () => {
         clearProjectNameConflictState(dom.projectBrowserSaveAsName, dom.projectBrowserSaveAsNameError);
@@ -11616,6 +13507,37 @@ function initEventListeners() {
         });
         if (saved) {
             closeProjectBrowserSaveAsPanel();
+        }
+    });
+    dom.btnProjectBrowserEditCodexAuth?.addEventListener('click', openProjectBrowserCodexAuthEditor);
+    dom.btnProjectBrowserSaveCodexAuth?.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+    });
+    dom.btnProjectBrowserSaveCodexAuth?.addEventListener('click', () => {
+        void saveProjectBrowserCodexAuth();
+    });
+    dom.projectBrowserCodexAuthKey?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        void saveProjectBrowserCodexAuth();
+    });
+    dom.projectBrowserCodexAuthKey?.addEventListener('blur', () => {
+        if (!state.projectSession.codexAuthEditing || state.projectSession.codexAuthSaving) return;
+        closeProjectBrowserCodexAuthEditor();
+    });
+    dom.projectCreateName?.addEventListener('input', () => {
+        clearProjectNameConflictState(dom.projectCreateName, dom.projectCreateNameError);
+    });
+    dom.btnProjectCreateClose?.addEventListener('click', closeProjectCreateDialog);
+    dom.btnProjectCreateCancel?.addEventListener('click', closeProjectCreateDialog);
+    dom.btnProjectCreateConfirm?.addEventListener('click', async () => {
+        const saved = await createServerProjectFromCurrentScene({
+            nameInput: dom.projectCreateName,
+            closeModal: false,
+            reopenModalOnError: 'project-create',
+        });
+        if (saved) {
+            closeProjectCreateDialog();
         }
     });
     dom.btnProjectBrowserLogout?.addEventListener('click', () => {
@@ -11649,7 +13571,12 @@ function initEventListeners() {
     });
     dom.agentMessageScroll?.addEventListener('scroll', syncAgentMessageScrollbar);
     dom.agentMessageScrollbar?.addEventListener('mousedown', beginAgentMessageScrollbarDrag);
+    dom.agentComposer?.addEventListener('submit', handleAgentComposerSubmit);
+    dom.agentComposerSkillToolbar?.addEventListener('click', handleAgentComposerSkillToolbarClick);
+    dom.agentComposerSkillTokens?.addEventListener('click', handleAgentComposerSkillTokenClick);
+    dom.agentComposerInput?.addEventListener('input', handleAgentComposerInput);
     dom.agentComposerInput?.addEventListener('keydown', handleAgentComposerKeydown);
+    dom.agentComposerInput?.addEventListener('focusin', handleAgentComposerFocusIn);
     dom.agentComposerAttachments?.addEventListener('click', handleAgentComposerAttachmentClick);
     dom.agentMessageList?.addEventListener('click', handleAgentMessageListClick);
     dom.btnAgentAddImage?.addEventListener('click', openAgentImagePicker);
@@ -12018,6 +13945,10 @@ function initEventListeners() {
             closePostLoginProjectModal();
             return;
         }
+        if (e.key === 'Escape' && dom.projectCreateModal && !dom.projectCreateModal.classList.contains('hidden')) {
+            closeProjectCreateDialog();
+            return;
+        }
         if (e.key === 'Escape' && dom.projectBrowserModal && !dom.projectBrowserModal.classList.contains('hidden')) {
             if (dom.projectBrowserSaveAsPanel && !dom.projectBrowserSaveAsPanel.classList.contains('hidden')) {
                 closeProjectBrowserSaveAsPanel();
@@ -12058,6 +13989,7 @@ function initEventListeners() {
  */
 async function init() {
     setBootLoadingVisible(true);
+    setBootLoadingStatus(t('loading.bootPreparing'));
     console.log(`[Editor ${state.VERSION}] Initializing...`);
     console.log(`[Editor ${state.VERSION}] Version: ${state.VERSION}`);
     console.log(`[Editor ${state.VERSION}] Checking DOM elements...`);
@@ -12066,6 +13998,7 @@ async function init() {
     if (dom.versionLabel) {
         dom.versionLabel.textContent = state.VERSION;
     }
+    setBootLoadingStatus(t('loading.bootRestoringPreferences'));
     initLanguage();
     initTheme();
     const savedUser = localStorage.getItem(PROJECT_SESSION_USER_STORAGE_KEY) || '';
@@ -12077,6 +14010,7 @@ async function init() {
     updateWorkspaceStatusIndicator();
     window.addEventListener('online', updateWorkspaceStatusIndicator);
     window.addEventListener('offline', updateWorkspaceStatusIndicator);
+    setBootLoadingStatus(t('loading.bootInitializingWorkbench'));
     initializeAgentWorkbench();
     syncClearScreenState();
     initializeCameraPreviewControls();
@@ -12098,6 +14032,7 @@ async function init() {
     }
 
     // 动态导入 EditorApp
+    setBootLoadingStatus(t('loading.bootLoadingEditorApp'));
     console.log(`[Editor ${state.VERSION}] Loading EditorApp module...`);
     try {
         const { editorApp } = await import('../src/editor/editor-app.js');
@@ -12110,6 +14045,7 @@ async function init() {
     }
 
     // 初始化编辑器应用
+    setBootLoadingStatus(t('loading.bootInitializingWebGpu'));
     const success = await app.init();
     if (!success) {
         showError(t('messages.editorInitFailed'));
@@ -12128,6 +14064,7 @@ async function init() {
     );
 
     // 注册模型变化回调
+    setBootLoadingStatus(t('loading.bootConnectingEditor'));
     app.onModelsChanged((models) => {
         updateModelList();
         if (state.selectedModelId) {
@@ -12220,6 +14157,7 @@ async function init() {
     setExportMode(state.exportMode);
 
     // 初始化事件监听
+    setBootLoadingStatus(t('loading.bootFinalizingUi'));
     initEventListeners();
     initializeSidebarLayout();
     syncLeftSidebarCollapsedState();

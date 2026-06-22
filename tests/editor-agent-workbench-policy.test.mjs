@@ -39,7 +39,7 @@ test('agent collapse defers layout-heavy sync outside the click frame', () => {
     const applyStart = source.indexOf('function applyAgentWorkbenchWidth', scheduleStart);
     const scheduleBody = source.slice(scheduleStart, applyStart);
     const setStart = source.indexOf('function setAgentWorkbenchCollapsed');
-    const workflowStart = source.indexOf('function setAgentWorkflow', setStart);
+    const workflowStart = source.indexOf('function setAgentWorkbenchMode', setStart);
     const setBody = source.slice(setStart, workflowStart);
 
     assert.match(source, /let agentWorkbenchCollapseSyncRaf = 0;/);
@@ -62,7 +62,7 @@ test('agent collapse defers layout-heavy sync outside the click frame', () => {
     assert.doesNotMatch(css, /body\.agent-workbench-toggling #agent-workbench\s*\{[\s\S]*backdrop-filter:\s*none/);
 });
 
-test('agent workflow tabs keep a fixed width and resize mode disables expensive workbench filters', () => {
+test('agent workbench layout tokens and message column sizing remain pinned', () => {
     const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
 
     assert.match(css, /--agent-workflow-tab-width:\s*44px;/);
@@ -73,11 +73,6 @@ test('agent workflow tabs keep a fixed width and resize mode disables expensive 
     assert.match(css, /--agent-workbench-topbar-gap:\s*8px;/);
     assert.match(css, /--agent-output-right-gap:\s*18px;/);
     assert.match(css, /--agent-output-asset-max-width:\s*320px;/);
-    assert.match(
-        css,
-        /body\.agent-workbench-resizing #agent-workbench\s*\{[\s\S]*will-change:\s*width;[\s\S]*backdrop-filter:\s*none;[\s\S]*-webkit-backdrop-filter:\s*none;[\s\S]*\}/
-    );
-    assert.doesNotMatch(css, /body\.agent-workbench-toggling #agent-workbench\s*\{[\s\S]*backdrop-filter:\s*none/);
     assert.match(
         css,
         /\.agent-workflow-tabs\s*\{[\s\S]*flex:\s*1 1 auto;[\s\S]*display:\s*flex;[\s\S]*justify-content:\s*flex-start;[\s\S]*gap:\s*var\(--agent-workflow-tab-gap\);[\s\S]*margin-right:\s*var\(--agent-output-right-gap\);[\s\S]*order:\s*1;[\s\S]*\}/
@@ -144,43 +139,35 @@ test('agent workflow tabs keep a fixed width and resize mode disables expensive 
     );
     assert.match(
         css,
+        /\.agent-step-gallery-main\s*\{[\s\S]*display:\s*block;[\s\S]*width:\s*100%;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-gallery \.agent-image-frame\s*\{[\s\S]*position:\s*relative;[\s\S]*width:\s*100%;[\s\S]*max-width:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-gallery-nav\s*\{[\s\S]*position:\s*absolute;[\s\S]*top:\s*50%;[\s\S]*transform:\s*translateY\(-50%\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-gallery-count\s*\{[\s\S]*position:\s*absolute;[\s\S]*right:\s*8px;[\s\S]*top:\s*8px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-actions\s*\{[\s\S]*width:\s*100%;[\s\S]*max-width:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-actions\s*\{[\s\S]*justify-content:\s*flex-end;[\s\S]*gap:\s*8px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
         /\.agent-block\.agent-block-image \.agent-block-header,[\s\S]*\.agent-block\.agent-block-image \.agent-block-status,[\s\S]*\.agent-block\.agent-block-viewer3d \.agent-block-header,[\s\S]*\.agent-block\.agent-block-viewer3d \.agent-block-status\s*\{[\s\S]*padding-left:\s*10px;[\s\S]*padding-right:\s*10px;[\s\S]*\}/
     );
     assert.match(
         css,
         /\.agent-composer-dock\s*\{[\s\S]*padding:\s*10px var\(--agent-workbench-content-inset-x\) 12px;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-workbench-toggle\s*\{[\s\S]*width:\s*var\(--agent-control-slot-width\);[\s\S]*height:\s*var\(--agent-control-slot-height\);[\s\S]*margin-bottom:\s*10px;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-workbench-topbar\s*\{[\s\S]*align-items:\s*flex-start;[\s\S]*padding:\s*10px var\(--agent-workbench-content-inset-x\);[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-workflow-tabs\s*\{[\s\S]*width:\s*auto;[\s\S]*align-items:\s*flex-start;[\s\S]*gap:\s*10px;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-workflow-tab\s*\{[\s\S]*flex:\s*0 0 var\(--agent-workflow-tab-width\);[\s\S]*width:\s*var\(--agent-workflow-tab-width\);[\s\S]*height:\s*var\(--agent-workflow-tab-width\);[\s\S]*aspect-ratio:\s*1 \/ 1;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-workbench-body\s*\{[\s\S]*display:\s*flex;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-message-pane,[\s\S]*#agent-workbench\.is-collapsed #btnAgentSend\s*\{[\s\S]*display:\s*none;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-composer-dock\s*\{[\s\S]*margin-top:\s*auto;[\s\S]*padding:\s*10px var\(--agent-workbench-content-inset-x\) 12px;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-composer-actions\s*\{[\s\S]*justify-content:\s*flex-start;[\s\S]*\}/
     );
 });
 
@@ -195,7 +182,84 @@ test('left sidebar shares the bottom timeline panel surface treatment', () => {
     assert.doesNotMatch(css, /--left-sidebar-bg|--scene-canvas-bg-color/);
 });
 
-test('project session button renders as a composer avatar with dynamic gradients', () => {
+test('agent workbench keeps composer docked at bottom, collapses to three floating entry points, and expands from collapsed mode clicks', () => {
+    const html = readFileSync(new URL('../public/editor.html', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(
+        html,
+        /<div class="agent-workbench-topbar">[\s\S]*id="agentWorkbenchModeTabs"[\s\S]*agent-workbench-mode-icon[\s\S]*agent-workbench-mode-label[\s\S]*id="btnToggleAgentWorkbench"[\s\S]*<div class="agent-workbench-body">[\s\S]*data-mode-panel="conversation"[\s\S]*data-mode-panel="asset-library"[\s\S]*<div id="agentComposerDock" class="agent-composer-dock">/
+    );
+    assert.doesNotMatch(html, /agent-composer-dock-topbar/);
+    assert.match(
+        css,
+        /\.agent-workbench-body\s*\{[\s\S]*flex:\s*1 1 auto;[\s\S]*display:\s*flex;[\s\S]*flex-direction:\s*column;[\s\S]*overflow:\s*hidden;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench\.is-collapsed\s*\{[\s\S]*background:\s*transparent;[\s\S]*box-shadow:\s*none;[\s\S]*backdrop-filter:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench\.is-collapsed \.agent-workbench-toggle\s*\{[\s\S]*display:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench\.is-collapsed \.agent-workbench-topbar,[\s\S]*#agent-workbench\.is-collapsed \.agent-workbench-body\s*\{[\s\S]*display:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-collapsed-controls\s*\{[\s\S]*position:\s*absolute;[\s\S]*inset:\s*0;[\s\S]*display:\s*none;[\s\S]*flex-direction:\s*column;[\s\S]*justify-content:\s*flex-start;[\s\S]*pointer-events:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-collapsed-controls\[hidden\]\s*\{[\s\S]*display:\s*none !important;[\s\S]*pointer-events:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench-shell\.is-collapsed \.agent-workbench-collapsed-controls:not\(\[hidden\]\)\s*\{[\s\S]*display:\s*flex;[\s\S]*pointer-events:\s*auto;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-collapsed-mode-tabs\s*\{[\s\S]*width:\s*100%;[\s\S]*display:\s*flex;[\s\S]*flex-direction:\s*column;[\s\S]*align-items:\s*center;[\s\S]*gap:\s*10px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench-shell\.is-collapsed \.agent-workbench-collapsed-controls \.agent-workbench-mode-tab\s*\{[\s\S]*width:\s*var\(--agent-control-slot-width\);[\s\S]*height:\s*var\(--agent-control-slot-height\);[\s\S]*background:\s*color-mix\(in srgb, var\(--panel-bg\) 22%, transparent\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench-shell\.is-collapsed \.agent-workbench-collapsed-controls \.agent-user-avatar-btn\s*\{[\s\S]*width:\s*var\(--agent-control-slot-width\);[\s\S]*height:\s*var\(--agent-control-slot-height\);[\s\S]*flex:\s*0 0 var\(--agent-control-slot-height\);[\s\S]*margin-right:\s*0;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench-shell\.is-collapsed \.agent-workbench-collapsed-controls \.agent-workbench-mode-label\s*\{[\s\S]*display:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-collapsed-controls-bottom\s*\{[\s\S]*margin-top:\s*auto;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench-shell\.is-collapsed \.agent-workbench-resizer\s*\{[\s\S]*pointer-events:\s*none;[\s\S]*opacity:\s*0;[\s\S]*\}/
+    );
+    assert.match(
+        html,
+        /id="agentWorkbenchCollapsedControls"[\s\S]*id="agentWorkbenchCollapsedModeTabs"[\s\S]*data-mode="conversation"[\s\S]*data-mode="asset-library"[\s\S]*id="btnCollapsedUserSession"/
+    );
+    assert.doesNotMatch(html, /id="btnExpandAgentWorkbench"/);
+    assert.match(
+        source,
+        /function handleAgentWorkbenchModeClick\(event\) \{[\s\S]*if \(state\.agentWorkbenchCollapsed\) \{[\s\S]*setAgentWorkbenchCollapsed\(false\);[\s\S]*\}[\s\S]*setAgentWorkbenchMode\(mode\);[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /function syncAgentWorkbenchCollapsedState\(\) \{[\s\S]*dom\.agentWorkbenchShell\?\.classList\.toggle\('is-collapsed', collapsed\);[\s\S]*dom\.agentWorkbench\?\.classList\.toggle\('is-collapsed', collapsed\);[\s\S]*\}/
+    );
+});
+
+test('project session button stays in the composer action row with dynamic gradients', () => {
     const html = readFileSync(new URL('../public/editor.html', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
     const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
@@ -206,7 +270,7 @@ test('project session button renders as a composer avatar with dynamic gradients
     );
     assert.match(
         css,
-        /\.agent-user-avatar-btn\s*\{[\s\S]*width:\s*var\(--agent-control-slot-width\);[\s\S]*height:\s*var\(--agent-control-slot-height\);[\s\S]*margin-right:\s*auto;[\s\S]*border:\s*0;[\s\S]*background:\s*transparent;[\s\S]*\}/
+        /\.agent-user-avatar-btn\s*\{[\s\S]*width:\s*var\(--agent-control-slot-width\);[\s\S]*height:\s*var\(--agent-control-slot-height\);[\s\S]*margin-right:\s*auto;[\s\S]*border:\s*0;[\s\S]*background:\s*transparent;[\s\S]*flex:\s*0 0 var\(--agent-control-slot-width\);[\s\S]*\}/
     );
     assert.match(
         css,
@@ -228,4 +292,43 @@ test('project session button renders as a composer avatar with dynamic gradients
         source,
         /function syncProjectSessionButton\(\) \{[\s\S]*style\.setProperty\('--agent-user-avatar-start', gradient\.start\);[\s\S]*style\.setProperty\('--agent-user-avatar-end', gradient\.end\);[\s\S]*querySelector\('\.agent-user-avatar-text'\)[\s\S]*\}/
     );
+});
+
+test('agent composer exposes single-select skill chips above the prompt input', () => {
+    const html = readFileSync(new URL('../public/editor.html', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(html, /id="agentComposerSkillToolbar"[^>]+class="agent-composer-skill-toolbar"[^>]+data-i18n-attrs="aria-label:agent\.skillToolbar"/);
+    assert.match(html, /data-agent-skill-insert="scene"[^>]+data-i18n="agent\.skills\.scene"/);
+    assert.match(html, /data-agent-skill-insert="object"[^>]+data-i18n="agent\.skills\.object"/);
+    assert.match(html, /data-agent-skill-insert="character"[^>]+data-i18n="agent\.skills\.character"/);
+    assert.match(html, /data-agent-skill-insert="camera"[^>]+data-i18n="agent\.skills\.camera"/);
+    assert.match(html, /<div class="agent-composer-prompt-surface">[\s\S]*id="agentComposerInput"[\s\S]*contenteditable="plaintext-only"[\s\S]*data-i18n-placeholder="agent\.inputPlaceholder"[\s\S]*id="agentComposerSkillTokens" class="agent-composer-skill-tokens" contenteditable="false" hidden/);
+
+    assert.match(source, /const AGENT_COMPOSER_SKILL_DEFS = \[[\s\S]*value:\s*'\$scene-skill'[\s\S]*value:\s*'\$object-skill'[\s\S]*value:\s*'\$character-skill'[\s\S]*value:\s*'\$camera-skill'/);
+    assert.match(source, /aliases:\s*\['\$camera-skill', 'camera-skill'\]/);
+    assert.match(source, /agentComposerSkillId:\s*'',/);
+    assert.match(source, /function extractAgentComposerSkillText\(text\)/);
+    assert.match(source, /function parseAgentComposerSkillText\(text\)/);
+    assert.match(source, /function isAgentComposerSkillTokenMounted\(\)/);
+    assert.match(source, /function getAgentComposerInputText\(\)/);
+    assert.match(source, /function setAgentComposerInputText\(text, \{ focus = true \} = \{\}\)/);
+    assert.match(source, /function renderAgentComposerSkillControls\(\)/);
+    assert.match(source, /button\.disabled = hasSkill;/);
+    assert.match(source, /button\.classList\.toggle\('is-active', isActive\);/);
+    assert.match(source, /const tokenWasRemoved = Boolean\(previousSkillId\) && !isAgentComposerSkillTokenMounted\(\);/);
+    assert.match(source, /if \(result\.skill\) \{\s*state\.agentComposerSkillId = result\.skill\.id;\s*\} else if \(tokenWasRemoved\) \{\s*state\.agentComposerSkillId = '';\s*\}/);
+    assert.match(source, /function buildAgentComposerPromptText\(rawPrompt\)[\s\S]*return `\$\{skill\.value\} \$\{prompt\}`;/);
+    assert.match(source, /const effectivePrompt = prompt \? rawPrompt\.trimStart\(\) : attachmentFallback;/);
+    assert.match(source, /dom\.agentComposerInput\?\.addEventListener\('input', handleAgentComposerInput\);/);
+    assert.match(source, /dom\.agentComposerSkillToolbar\?\.addEventListener\('click', handleAgentComposerSkillToolbarClick\);/);
+    assert.match(source, /event\.key === 'Backspace'[\s\S]*clearAgentComposerSkill\(\);/);
+
+    assert.match(css, /\.agent-composer-skill-toolbar\s*\{[\s\S]*grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\);/);
+    assert.match(css, /\.agent-composer-skill-btn\.is-active\s*\{[\s\S]*border-color:\s*var\(--accent\);/);
+    assert.match(css, /\.agent-composer-skill-btn:disabled:not\(\.is-active\)\s*\{[\s\S]*opacity:\s*0\.36;/);
+    assert.match(css, /\.agent-composer-input\s*\{[\s\S]*white-space:\s*pre-wrap;[\s\S]*word-break:\s*break-word;/);
+    assert.match(css, /\.agent-composer-skill-tokens\s*\{[\s\S]*display:\s*inline-flex;[\s\S]*align-items:\s*center;[\s\S]*height:\s*18px;/);
+    assert.match(css, /\.agent-composer-skill-token\s*\{[\s\S]*height:\s*18px;[\s\S]*min-height:\s*0;[\s\S]*border-radius:\s*999px;[\s\S]*vertical-align:\s*baseline;/);
 });

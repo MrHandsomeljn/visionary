@@ -121,6 +121,19 @@ function createPersistableAttachment(attachment, assetPath = '') {
 
 function clonePersistableBlock(block, assetPath = '') {
     const base = { ...block };
+    if (block?.type === 'progress' && Array.isArray(block.images)) {
+        base.images = block.images.map((image) => {
+            const nextImage = { ...image };
+            delete nextImage.src;
+            if (!nextImage.assetPath && nextImage.relativePath) {
+                nextImage.assetPath = nextImage.relativePath;
+            }
+            if (!nextImage.relativePath && nextImage.assetPath) {
+                nextImage.relativePath = nextImage.assetPath;
+            }
+            return nextImage;
+        });
+    }
     if (block?.type === 'image') {
         delete base.src;
         if (assetPath) base.assetPath = assetPath;
@@ -130,6 +143,13 @@ function clonePersistableBlock(block, assetPath = '') {
         if (assetPath) base.assetPath = assetPath;
     }
     return base;
+}
+
+function getAttemptStepBlocks(attempt) {
+    if (Array.isArray(attempt?.steps) && attempt.steps.length > 0) {
+        return attempt.steps;
+    }
+    return Array.isArray(attempt?.blocks) ? attempt.blocks : [];
 }
 
 function toUnixSeconds(isoString) {
@@ -306,6 +326,12 @@ export class AgentSessionStore {
             savedAt: new Date().toISOString(),
             storageMode: this.storageMode || 'detached',
             assetRoot: AGENT_HISTORY_ASSET_DIR,
+            stepStates: snapshot?.stepStates && typeof snapshot.stepStates === 'object'
+                ? JSON.parse(JSON.stringify(snapshot.stepStates))
+                : {},
+            pipelineStates: snapshot?.pipelineStates && typeof snapshot.pipelineStates === 'object'
+                ? JSON.parse(JSON.stringify(snapshot.pipelineStates))
+                : {},
             references: {
                 style: 'openai-responses-message-envelope-with-visionary-content-extensions',
                 links: [...OPENAI_CONVERSATION_REFERENCE_LINKS],
@@ -401,9 +427,15 @@ export class AgentSessionStore {
                 const assetPath = await this.persistBlockAsset(block, context);
                 blocks.push(clonePersistableBlock(block, assetPath));
             }
+            const steps = [];
+            for (const block of attempt.steps || []) {
+                const assetPath = await this.persistBlockAsset(block, context);
+                steps.push(clonePersistableBlock(block, assetPath));
+            }
             const serializedAttempt = {
                 ...attempt,
                 blocks,
+                ...(Array.isArray(attempt.steps) ? { steps } : {}),
             };
             attempts.push(serializedAttempt);
             openaiMessages.push(
@@ -549,7 +581,7 @@ export class AgentSessionStore {
                 text: attempt.text,
             });
         }
-        for (const block of cloneArray(attempt?.blocks)) {
+        for (const block of cloneArray(getAttemptStepBlocks(attempt))) {
             if (block.type === 'progress') {
                 content.push({
                     type: 'visionary_progress',
@@ -559,6 +591,18 @@ export class AgentSessionStore {
                     status_text: block.statusText || '',
                     value: Number(block.value || 0),
                 });
+                for (const [index, image] of cloneArray(block.images).entries()) {
+                    content.push({
+                        type: 'visionary_output_image',
+                        block_id: block.id || '',
+                        title: image.title || image.id || block.title || '',
+                        status: block.applied ? 'applied' : 'ready',
+                        asset_path: image.assetPath || image.relativePath || '',
+                        alt: image.alt || block.title || '',
+                        gallery_index: index,
+                        selected: index === (Number(block.selectedIndex) || 0),
+                    });
+                }
                 continue;
             }
             if (block.type === 'image') {

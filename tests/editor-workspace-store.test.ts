@@ -270,6 +270,17 @@ function createSceneManifest(label: string): SceneManifest {
   };
 }
 
+function createEmptySceneLoadApp() {
+  return {
+    getModels: () => [],
+    getModelManager: () => ({
+      setModelPosition() {},
+      setModelRotation() {},
+      setModelScale() {},
+    }),
+  };
+}
+
 test('workspace metadata reflects selected writable workspace', async () => {
   const directory = new MockDirectoryHandle('workspace-A');
   (globalThis as any).window = {
@@ -285,6 +296,61 @@ test('workspace metadata reflects selected writable workspace', async () => {
     permission: 'readwrite',
     writable: true,
   });
+});
+
+test('SceneFS accepts an initialized blank assets manifest', async () => {
+  const sceneFs = new SceneFS();
+  const result = await sceneFs.loadScene(createEmptySceneLoadApp() as any, {
+    sceneData: {
+      version: 2,
+      meta: {
+        app: 'VisionaryEditor',
+        createdAt: '2026-06-09T00:00:00.000Z',
+      },
+      assets: [],
+    },
+  });
+
+  assert.equal(result.loadedAssetCount, 0);
+  assert.equal(result.failedAssetCount, 0);
+  assert.equal(result.totalAssetCount, 0);
+  assert.deepEqual(result.manifest?.assets, []);
+});
+
+test('SceneFS accepts a blank unified scenes manifest', async () => {
+  const sceneFs = new SceneFS();
+  const result = await sceneFs.loadScene(createEmptySceneLoadApp() as any, {
+    sceneData: {
+      scenes: [
+        { models: [] },
+        { models: [] },
+      ],
+      meta: {
+        app: 'VisionaryEditor',
+        createdAt: '2026-06-09T00:00:00.000Z',
+      },
+    },
+  });
+
+  assert.equal(result.loadedAssetCount, 0);
+  assert.equal(result.failedAssetCount, 0);
+  assert.equal(result.totalAssetCount, 0);
+  assert.deepEqual(result.manifest?.assets, []);
+});
+
+test('SceneFS still rejects non-empty manifests with no loadable assets', async () => {
+  const sceneFs = new SceneFS();
+  await assert.rejects(
+    () => sceneFs.loadScene(createEmptySceneLoadApp() as any, {
+      sceneData: {
+        version: 2,
+        assets: [
+          { type: 'ply' },
+        ],
+      },
+    }),
+    /Unsupported scene data format/,
+  );
 });
 
 test('saveWorkspaceSnapshot writes temp manifest before scene.json commit', async () => {

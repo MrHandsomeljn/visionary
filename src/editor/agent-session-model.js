@@ -16,6 +16,10 @@ function cloneBlocks(blocks = []) {
         : [];
 }
 
+function cloneSteps(steps = []) {
+    return cloneBlocks(steps);
+}
+
 function normalizeArchiveSummary(summary = {}, fallbackLabel = '') {
     return {
         label: String(summary.label || fallbackLabel || ''),
@@ -53,20 +57,31 @@ export function createAgentGenerationAttempt({
     workflow = 'scene-build',
     text = '',
     blocks = [],
+    steps = null,
     status = 'running',
     promptSuggestions = null,
     createdAt = new Date().toISOString(),
 } = {}) {
+    const normalizedBlocks = cloneBlocks(blocks);
+    const normalizedSteps = Array.isArray(steps) ? cloneSteps(steps) : null;
     return {
         id,
         workflow,
         text,
-        blocks: cloneBlocks(blocks),
+        blocks: normalizedBlocks,
+        ...(normalizedSteps ? { steps: normalizedSteps } : {}),
         status,
         promptSuggestions: Array.isArray(promptSuggestions) ? [...promptSuggestions] : null,
         createdAt,
         updatedAt: createdAt,
     };
+}
+
+export function getAgentAttemptStepBlocks(attempt) {
+    if (Array.isArray(attempt?.steps) && attempt.steps.length > 0) {
+        return attempt.steps;
+    }
+    return Array.isArray(attempt?.blocks) ? attempt.blocks : [];
 }
 
 export function createAgentSession({
@@ -147,11 +162,15 @@ export function patchAgentSessionAttemptBlock(session, {
         ...session,
         attempts: (session.attempts || []).map((attempt) => {
             if (attempt.id !== attemptId) return attempt;
+            const patchBlockList = (blocks = []) => (
+                (blocks || []).map((block) => (
+                    block.id === blockId ? { ...block, ...patch } : block
+                ))
+            );
             return {
                 ...attempt,
-                blocks: (attempt.blocks || []).map((block) => (
-                    block.id === blockId ? { ...block, ...patch } : block
-                )),
+                blocks: patchBlockList(attempt.blocks || []),
+                ...(Array.isArray(attempt.steps) ? { steps: patchBlockList(attempt.steps) } : {}),
                 updatedAt: new Date().toISOString(),
             };
         }),
@@ -164,6 +183,7 @@ export function updateAgentSessionAttempt(session, {
     text,
     status,
     blocks,
+    steps,
     promptSuggestions,
 } = {}) {
     if (!session || session.kind !== 'session' || !attemptId) return session;
@@ -176,6 +196,7 @@ export function updateAgentSessionAttempt(session, {
                 ...(text !== undefined ? { text: String(text ?? '') } : {}),
                 ...(status !== undefined ? { status } : {}),
                 ...(blocks !== undefined ? { blocks: cloneBlocks(blocks) } : {}),
+                ...(steps !== undefined ? { steps: cloneSteps(steps) } : {}),
                 ...(promptSuggestions !== undefined
                     ? {
                         promptSuggestions: Array.isArray(promptSuggestions)

@@ -11,6 +11,17 @@ test('editor exposes a leading user-session button and modal-based login/project
     assert.match(html, /id="postLoginProjectModal"/);
     assert.match(html, /id="projectBrowserModal"/);
     assert.match(html, /id="projectBrowserProjectGrid"/);
+    assert.match(html, /class="project-browser-summary-row"/);
+    assert.match(html, /id="projectBrowserCodexAuthInline" class="project-browser-auth-inline"/);
+    assert.match(html, /id="projectBrowserCodexAuthStatus"/);
+    assert.match(html, /id="projectBrowserAgentRuntimeStatus" class="project-browser-agent-runtime-status"/);
+    assert.match(html, /id="btnProjectBrowserEditCodexAuth"[^>]+data-i18n-attrs="title:projectSession\.codexAuthEditAction;aria-label:projectSession\.codexAuthEditAction"/);
+    assert.match(html, /id="projectBrowserCodexAuthKey"[^>]+class="project-browser-auth-inline-input"[^>]+data-i18n-placeholder="projectSession\.codexAuthPlaceholder"[^>]+hidden/);
+    assert.match(html, /id="btnProjectBrowserSaveCodexAuth"[^>]+class="project-browser-auth-submit-btn"[^>]+data-i18n-attrs="title:projectSession\.codexAuthSubmitAction;aria-label:projectSession\.codexAuthSubmitAction"[^>]+hidden/);
+    assert.match(html, /id="btnProjectBrowserCreateNew"[^>]+data-i18n="projectSession\.createNewProjectAction"[^>]*>创建新项目<\/button>/);
+    assert.match(html, /id="projectCreateModal"/);
+    assert.match(html, /for="projectCreateName"[^>]+data-i18n="projectSession\.createProjectNameLabel"[^>]*>新项目名称<\/label>/);
+    assert.doesNotMatch(html, /for="projectCreateName"[^>]*>另存为项目名<\/label>/);
     assert.match(html, /id="btnProjectBrowserSaveAs"/);
     assert.match(html, /id="btnProjectBrowserLogout"/);
     assert.match(html, /id="adminProjectModal"/);
@@ -34,7 +45,38 @@ test('editor wires project session state and project api client into the main co
     assert.match(source, /function openProjectBrowserModal\(\)/);
     assert.match(source, /function openAdminProjectModal\(\)/);
     assert.match(source, /function syncProjectSessionModalLabels\(\)/);
+    assert.match(source, /btnProjectBrowserCreateNew:\s*document\.getElementById\('btnProjectBrowserCreateNew'\),/);
+    assert.match(source, /projectBrowserCodexAuthStatus:\s*document\.getElementById\('projectBrowserCodexAuthStatus'\),/);
+    assert.match(source, /projectBrowserAgentRuntimeStatus:\s*document\.getElementById\('projectBrowserAgentRuntimeStatus'\),/);
+    assert.match(source, /projectBrowserCodexAuthKey:\s*document\.getElementById\('projectBrowserCodexAuthKey'\),/);
+    assert.match(source, /btnProjectBrowserEditCodexAuth:\s*document\.getElementById\('btnProjectBrowserEditCodexAuth'\),/);
+    assert.match(source, /btnProjectBrowserSaveCodexAuth:\s*document\.getElementById\('btnProjectBrowserSaveCodexAuth'\),/);
+    assert.match(source, /createNewProjectAction:\s*'创建新项目',/);
+    assert.match(source, /createNewProjectAction:\s*'Create New Project',/);
+    assert.match(source, /createProjectNameLabel:\s*'新项目名称',/);
+    assert.match(source, /createProjectNameLabel:\s*'New project name',/);
+    assert.match(source, /codexAuthSaveAction:\s*'保存 Auth',/);
+    assert.match(source, /codexAuthSaveAction:\s*'Save Auth',/);
+    assert.match(source, /codexAuthEditAction:\s*'编辑 Codex Auth',/);
+    assert.match(source, /codexAuthEditAction:\s*'Edit Codex Auth',/);
+    assert.match(source, /agentRuntimeCodex:\s*'Codex',/);
+    assert.match(source, /agentRuntimeCodex:\s*'Codex',/);
+    assert.match(source, /agentRuntimeDemo:\s*'Demo',/);
+    assert.match(source, /agentRuntimeNoAuth:\s*'Codex Auth 未配置，当前使用 Demo Agent',/);
+    assert.match(source, /agentRuntimeNoAuth:\s*'Codex Auth is not configured, using Demo Agent',/);
+    assert.match(source, /setElementText\(dom\.btnProjectBrowserCreateNew, t\('projectSession\.createNewProjectAction'\)\);/);
+    assert.match(source, /function renderProjectBrowserCodexAuthStatus\(\)/);
+    assert.match(source, /function getAgentRuntimeStatus\(\)/);
+    assert.match(source, /function openProjectBrowserCodexAuthEditor\(\)/);
+    assert.match(source, /function closeProjectBrowserCodexAuthEditor\(\)/);
+    assert.match(source, /async function refreshProjectBrowserCodexAuthStatus\(\)/);
+    assert.match(source, /async function saveProjectBrowserCodexAuth\(\)/);
     assert.match(source, /function renderProjectBrowserProjectGrid\(\)/);
+    assert.match(source, /function formatProjectUpdatedAt\(updatedAt\)/);
+    assert.match(source, /function formatProjectSize\(sizeBytes\)/);
+    assert.match(source, /function startProjectRename\(projectId\)/);
+    assert.match(source, /async function commitProjectRename\(projectId\)/);
+    assert.match(source, /async function deleteProjectFromBrowser\(projectId\)/);
     assert.match(source, /function renderAdminUserList\(\)/);
     assert.match(source, /function renderAdminProjectGrid\(\)/);
 });
@@ -86,6 +128,7 @@ test('server-backed project flow uploads assets and rewrites server asset urls o
     assert.match(clientSource, /getAssetUrl\(user, projectId, relativePath\)/);
     assert.match(clientSource, /async loadAssetIndex\(user, projectId\)/);
     assert.match(clientSource, /async writeAsset\(\{ user, projectId, relativePath, content \}\)/);
+    assert.match(clientSource, /async renameProject\(\{ user, projectId, name \}\)/);
 });
 
 test('opening a persisted server project rejects empty restore results for non-empty manifests', async () => {
@@ -125,6 +168,7 @@ test('duplicate project names are surfaced inline on project name inputs instead
 
     assert.match(html, /id="projectSessionNewProjectNameError" class="project-session-inline-error hidden"/);
     assert.match(html, /id="projectBrowserSaveAsNameError" class="project-session-inline-error hidden"/);
+    assert.match(html, /id="projectCreateNameError" class="project-session-inline-error hidden"/);
     assert.match(css, /\.project-session-inline-error \{/);
     assert.match(css, /\.project-session-input\.has-error \{/);
     assert.match(source, /function setProjectNameConflictState\(input, errorElement\)/);
@@ -132,15 +176,90 @@ test('duplicate project names are surfaced inline on project name inputs instead
     assert.match(source, /if \(isDuplicateProjectNameError\(error\)\) \{\s*setProjectNameConflictState\(reopenedInput, reopenedErrorElement\);\s*return false;\s*\}/s);
     assert.match(source, /dom\.projectSessionNewProjectName\?\.addEventListener\('input', \(\) => \{\s*clearProjectNameConflictState\(dom\.projectSessionNewProjectName, dom\.projectSessionNewProjectNameError\);\s*\}\);/s);
     assert.match(source, /dom\.projectBrowserSaveAsName\?\.addEventListener\('input', \(\) => \{\s*clearProjectNameConflictState\(dom\.projectBrowserSaveAsName, dom\.projectBrowserSaveAsNameError\);\s*\}\);/s);
+    assert.match(source, /dom\.projectCreateName\?\.addEventListener\('input', \(\) => \{\s*clearProjectNameConflictState\(dom\.projectCreateName, dom\.projectCreateNameError\);\s*\}\);/s);
 });
 
 test('project browser save-as panel only closes after a successful save', async () => {
     const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
 
+    assert.match(source, /function openProjectBrowserSaveAsPanel\(\{ preferDefaultName = false \} = \{\}\)/);
     assert.match(source, /const saved = await createServerProjectFromCurrentScene\(\{\s*nameInput: dom\.projectBrowserSaveAsName,\s*closeModal: false,\s*\}\);/s);
     assert.match(source, /if \(saved\) \{\s*closeProjectBrowserSaveAsPanel\(\);\s*\}/s);
     assert.match(source, /return true;\s*\} catch \(error\) \{/s);
     assert.match(source, /if \(isDuplicateProjectNameError\(error\)\) \{\s*setProjectNameConflictState\(reopenedInput, reopenedErrorElement\);\s*return false;\s*\}/s);
+});
+
+test('project browser create-new opens a stacked dialog with its own project-name field', async () => {
+    const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(source, /projectCreateModal:\s*document\.getElementById\('projectCreateModal'\),/);
+    assert.match(source, /projectCreateName:\s*document\.getElementById\('projectCreateName'\),/);
+    assert.match(source, /projectCreateNameError:\s*document\.getElementById\('projectCreateNameError'\),/);
+    assert.match(source, /function openProjectCreateDialog\(\) \{[\s\S]*dom\.projectCreateModal\?\.classList\.remove\('hidden'\);[\s\S]*dom\.projectCreateName\.value = getProjectSessionDefaultProjectName\(\);/);
+    assert.match(source, /function closeProjectCreateDialog\(\) \{[\s\S]*dom\.projectCreateModal\?\.classList\.add\('hidden'\);[\s\S]*\}/);
+    assert.match(source, /dom\.btnProjectBrowserCreateNew\?\.addEventListener\('click', openProjectCreateDialog\);/);
+    assert.match(source, /dom\.btnProjectCreateConfirm\?\.addEventListener\('click', async \(\) => \{[\s\S]*nameInput: dom\.projectCreateName,[\s\S]*reopenModalOnError: 'project-create',[\s\S]*if \(saved\) \{[\s\S]*closeProjectCreateDialog\(\);/);
+    assert.match(source, /reopenModalOnError === 'project-create'[\s\S]*dom\.projectCreateName/);
+    assert.match(source, /reopenModalOnError === 'project-create'[\s\S]*dom\.projectCreateNameError/);
+    assert.match(source, /if \(e\.key === 'Escape' && dom\.projectCreateModal && !dom\.projectCreateModal\.classList\.contains\('hidden'\)\) \{[\s\S]*closeProjectCreateDialog\(\);[\s\S]*return;/);
+});
+
+test('project browser cards expose delete actions and inline rename editing', async () => {
+    const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const css = await readFile(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const serverSource = await readFile(new URL('../src/server/project-api.ts', import.meta.url), 'utf8');
+
+    assert.match(serverSource, /method === 'PATCH'[\s\S]*storage\.renameProject\(\{/);
+    assert.match(source, /deleteAction:\s*'删除',/);
+    assert.match(source, /renameProjectAria:\s*'重命名项目 \{name\}',/);
+    assert.match(source, /invalidProjectName:\s*'项目名称包含不支持的字符，无法作为服务器端项目名称',/);
+    assert.match(source, /data-project-rename-start="\$\{escapeHtml\(projectId\)\}"/);
+    assert.match(source, /data-project-rename-input="\$\{escapeHtml\(projectId\)\}"/);
+    assert.match(source, /data-project-delete="\$\{escapeHtml\(projectId\)\}"/);
+    assert.match(source, /project-browser-project-card-meta/);
+    assert.match(source, /escapeHtml\(formatProjectUpdatedAt\(project\.updatedAt\)\)/);
+    assert.match(source, /escapeHtml\(formatProjectSize\(project\.sizeBytes\)\)/);
+    assert.match(source, /dom\.projectBrowserProjectGrid\?\.addEventListener\('click', \(event\) => \{[\s\S]*data-project-delete[\s\S]*deleteProjectFromBrowser\(projectId\);[\s\S]*data-project-rename-start[\s\S]*startProjectRename\(projectId\);/);
+    assert.match(source, /dom\.projectBrowserProjectGrid\?\.addEventListener\('keydown', \(event\) => \{[\s\S]*event\.key === 'Enter'[\s\S]*commitProjectRename\(input\.dataset\.projectRenameInput\);/);
+    assert.match(source, /dom\.projectBrowserProjectGrid\?\.addEventListener\('focusout', \(event\) => \{[\s\S]*commitProjectRename\(input\.dataset\.projectRenameInput\);/);
+    assert.match(source, /if \(!nextName \|\| nextName === project\.name\) \{[\s\S]*cancelProjectRename\(\);[\s\S]*return;[\s\S]*\}/);
+    assert.match(source, /projectApi\.renameProject\(\{[\s\S]*user: state\.projectSession\.user,[\s\S]*projectId: project\.id,[\s\S]*name: nextName,[\s\S]*\}\)/);
+    assert.match(source, /if \(isInvalidProjectNameError\(error\)\) \{[\s\S]*setProjectRenameError\(project\.id, t\('projectSession\.invalidProjectName'\)\);/);
+    assert.match(source, /if \(state\.projectSession\.activeProjectId === project\.id\) \{[\s\S]*state\.projectSession\.activeProjectId = renamed\?\.id \|\| project\.id;[\s\S]*resetAgentCodexSessionBinding\(\);/);
+    assert.match(source, /projectApi\.deleteProject\(state\.projectSession\.user, project\.id\)/);
+    assert.match(source, /if \(state\.projectSession\.activeProjectId === project\.id\) \{[\s\S]*clearActiveServerProjectSelection\(\);/);
+    assert.match(css, /\.project-browser-project-rename-btn\s*\{/);
+    assert.match(css, /\.project-browser-project-card-meta\s*\{[\s\S]*justify-content:\s*space-between;/);
+    assert.match(css, /\.project-browser-project-card-size\s*\{[\s\S]*text-align:\s*right;/);
+    assert.match(css, /\.project-browser-project-card-size\s*\{[\s\S]*font-variant-numeric:\s*tabular-nums;/);
+    assert.match(css, /\.project-browser-project-action-btn\s*\{[\s\S]*display:\s*inline-flex;/);
+    assert.match(css, /\.project-browser-project-action-btn\s*\{[\s\S]*align-items:\s*center;/);
+    assert.match(css, /\.project-browser-project-action-btn\s*\{[\s\S]*font-size:\s*10\.5px;/);
+    assert.match(css, /\.project-browser-project-name-edit\.has-error\s*\{[\s\S]*animation:\s*project-name-error-flash/);
+});
+
+test('project browser exposes per-user Codex auth management without echoing raw keys', async () => {
+    const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const clientSource = await readFile(new URL('../src/editor/project-api-client.js', import.meta.url), 'utf8');
+    const css = await readFile(new URL('../public/editor.css', import.meta.url), 'utf8');
+
+    assert.match(clientSource, /async getCodexAuthStatus\(user\)/);
+    assert.match(clientSource, /fetch\(`\/api\/codex-auth\$\{buildQuery\(\{ user \}\)\}`\)/);
+    assert.match(clientSource, /async saveCodexAuth\(\{ user, apiKey \}\)/);
+    assert.match(source, /void refreshProjectBrowserCodexAuthStatus\(\);/);
+    assert.match(source, /projectApi\.getCodexAuthStatus\(state\.projectSession\.user\)/);
+    assert.match(source, /projectApi\.saveCodexAuth\(\{[\s\S]*user: state\.projectSession\.user,[\s\S]*apiKey,[\s\S]*\}\)/);
+    assert.match(source, /dom\.projectBrowserCodexAuthKey\.value = '';/);
+    assert.match(source, /dom\.btnProjectBrowserEditCodexAuth\?\.addEventListener\('click', openProjectBrowserCodexAuthEditor\);/);
+    assert.match(source, /dom\.btnProjectBrowserSaveCodexAuth\?\.addEventListener\('mousedown', \(event\) => \{[\s\S]*event\.preventDefault\(\);/);
+    assert.match(source, /dom\.btnProjectBrowserSaveCodexAuth\?\.addEventListener\('click', \(\) => \{[\s\S]*saveProjectBrowserCodexAuth\(\);/);
+    assert.match(source, /dom\.projectBrowserCodexAuthKey\?\.addEventListener\('keydown', \(event\) => \{[\s\S]*event\.key !== 'Enter'[\s\S]*saveProjectBrowserCodexAuth\(\);/);
+    assert.match(source, /dom\.projectBrowserCodexAuthKey\?\.addEventListener\('blur', \(\) => \{[\s\S]*closeProjectBrowserCodexAuthEditor\(\);/);
+    assert.match(css, /\.project-browser-summary-row\s*\{/);
+    assert.match(css, /\.project-browser-auth-inline\s*\{/);
+    assert.match(css, /\.project-browser-auth-inline-input\s*\{/);
+    assert.match(css, /\.project-browser-auth-submit-btn\[hidden\][\s\S]*display:\s*none !important;/);
+    assert.match(css, /\.project-browser-auth-status\.is-ready\s*\{/);
 });
 
 test('logout from an active dirty server project routes through explicit sync-or-discard handling', async () => {

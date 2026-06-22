@@ -6,6 +6,7 @@ import {
     buildAgentAssetPath,
     createAgentGenerationAttempt,
     createAgentSession,
+    getAgentAttemptStepBlocks,
     getAgentSessionActiveAttempt,
     resolveAgentSessionActionAvailability,
     resolveAgentSessionPagerItems,
@@ -31,6 +32,23 @@ test('creates a generation session with a single active attempt', () => {
     assert.equal(session.archiveState, 'active');
     assert.equal(session.collapsed, false);
     assert.equal(getAgentSessionActiveAttempt(session).text, '开始生成');
+});
+
+test('generation attempts can expose pipeline steps as the primary block model', () => {
+    const attempt = createAgentGenerationAttempt({
+        workflow: 'scene-build',
+        text: '多步骤生成',
+        blocks: [{ id: 'legacy-progress', type: 'progress', stepKey: 'legacy', value: 1 }],
+        steps: [
+            { id: 'step-main', type: 'progress', stepKey: 'main-image', value: 1, applied: true },
+            { id: 'step-front', type: 'progress', stepKey: 'front-view', value: 0, isCurrent: true },
+        ],
+        status: 'complete',
+    });
+
+    assert.equal(attempt.steps.length, 2);
+    assert.equal(getAgentAttemptStepBlocks(attempt)[0].stepKey, 'main-image');
+    assert.equal(getAgentAttemptStepBlocks(attempt)[1].stepKey, 'front-view');
 });
 
 test('retry appends a new attempt and switches the pager to the latest attempt', () => {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export type ProjectStorageErrorCode =
@@ -35,6 +35,7 @@ export interface ProjectMetadata {
   userId: string;
   createdAt: string;
   updatedAt: string;
+  sizeBytes: number;
 }
 
 export interface ProjectSummary extends ProjectMetadata {
@@ -54,6 +55,12 @@ export interface CreateProjectInput {
   name: string;
   scene?: unknown;
   agentHistory?: unknown;
+}
+
+export interface RenameProjectInput {
+  user: string;
+  projectId: string;
+  name: string;
 }
 
 export interface SaveProjectJsonInput {
@@ -80,12 +87,28 @@ export interface ProjectAssetIndex {
   agent: string[];
 }
 
+export interface SaveUserCodexAuthInput {
+  user: string;
+  apiKey: string;
+}
+
+export interface UserCodexAuthStatus {
+  user: string;
+  userId: string;
+  hasAuth: boolean;
+  projectCount: number;
+}
+
 const PROJECT_METADATA_FILE = 'project.json';
 const SCENE_FILE = 'scene.json';
 const AGENT_HISTORY_FILE = 'agent_history.json';
+const USER_CODEX_AUTH_FILE = 'codex_auth.json';
+const CODEX_HOME_DIR = 'codex_home';
+const CODEX_AUTH_FILE = 'auth.json';
 const PROJECT_SCHEMA = 'visionary.project';
 const MAX_NAME_LENGTH = 96;
 const MAX_USER_LENGTH = 64;
+const MAX_CODEX_API_KEY_LENGTH = 4096;
 
 function debugStorage(message: string, details?: unknown): void {
   if (details !== undefined) {
@@ -165,6 +188,35 @@ function normalizeRelativeFilePath(relativePath: string): string {
   return normalized;
 }
 
+function normalizeCodexApiKey(apiKey: string): string {
+  const normalized = String(apiKey || '').trim();
+  if (!normalized) {
+    throw new ProjectStorageError('BAD_REQUEST', 'codex api key is required');
+  }
+  if (normalized.length > MAX_CODEX_API_KEY_LENGTH || /[\u0000-\u001f]/.test(normalized)) {
+    throw new ProjectStorageError('BAD_REQUEST', 'codex api key is invalid');
+  }
+  return normalized;
+}
+
+function buildCodexAuthPayload(apiKey: string): Record<string, string> {
+  return {
+    OPENAI_API_KEY: normalizeCodexApiKey(apiKey),
+  };
+}
+
+function normalizeCodexAuthPayload(payload: Record<string, unknown>): Record<string, string> {
+  const openAiApiKey = payload.OPENAI_API_KEY;
+  if (typeof openAiApiKey === 'string' && openAiApiKey.trim()) {
+    return buildCodexAuthPayload(openAiApiKey);
+  }
+  const codexApiKey = payload.CODEX_API_KEY;
+  if (typeof codexApiKey === 'string' && codexApiKey.trim()) {
+    return buildCodexAuthPayload(codexApiKey);
+  }
+  throw new ProjectStorageError('BAD_REQUEST', 'codex auth payload is invalid');
+}
+
 async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await stat(targetPath);
@@ -186,13 +238,27 @@ async function writeJsonFile(targetPath: string, payload: unknown): Promise<void
   debugStorage('writeJsonFile:complete', { targetPath });
 }
 
-async function writeJsonStaged(projectDir: string, fileName: string, payload: unknown): Promise<void> {
+function getJsonPayloadByteLength(payload: unknown): number {
+  return Buffer.byteLength(`${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
+async function getFileSize(targetPath: string): Promise<number> {
+  try {
+    const info = await stat(targetPath);
+    return info.isFile() ? info.size : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function writeJsonStaged(projectDir: string, fileName: string, payload: unknown): Promise<number> {
   const tmpPath = path.join(projectDir, `${fileName}.tmp`);
   const finalPath = path.join(projectDir, fileName);
   debugStorage('writeJsonStaged:start', { tmpPath, finalPath });
   await writeJsonFile(tmpPath, payload);
   await copyFile(tmpPath, finalPath);
   debugStorage('writeJsonStaged:complete', { tmpPath, finalPath });
+  return getJsonPayloadByteLength(payload);
 }
 
 export class ProjectStorage {
@@ -230,11 +296,13 @@ export class ProjectStorage {
       userId,
       createdAt: timestamp,
       updatedAt: timestamp,
+      sizeBytes: 0,
     };
 
     await mkdir(path.join(projectDir, 'assets'), { recursive: true });
     await mkdir(path.join(projectDir, 'agent_history'), { recursive: true });
     await writeJsonFile(path.join(projectDir, PROJECT_METADATA_FILE), metadata);
+    await this.syncProjectCodexAuthFromUser(userId, projectId);
 
     if (input.scene !== undefined) {
       await this.saveScene({ user, projectId, payload: input.scene });
@@ -350,7 +418,7 @@ export class ProjectStorage {
     await mkdir(path.dirname(targetPath), { recursive: true });
     if (!skipped) {
       await writeFile(targetPath, input.content);
-      await this.touchProject(userId, projectId);
+      await this.touchProject(userId, projectId, { sizeDeltaBytes: input.content.byteLength });
     }
     debugStorage('writeAsset:complete', {
       userId,
@@ -393,6 +461,39 @@ export class ProjectStorage {
     };
   }
 
+  async getUserCodexAuthStatus(userInput: string): Promise<UserCodexAuthStatus> {
+    const { user, userId } = normalizeUserIdentity(userInput);
+    const projects = await this.listProjectsByUserId(userId);
+    return {
+      user,
+      userId,
+      hasAuth: await pathExists(this.getUserCodexAuthPath(userId)),
+      projectCount: projects.length,
+    };
+  }
+
+  async saveUserCodexAuth(input: SaveUserCodexAuthInput): Promise<UserCodexAuthStatus> {
+    const { user, userId } = normalizeUserIdentity(input.user);
+    const authPayload = buildCodexAuthPayload(input.apiKey);
+    const userDir = this.getUserDir(userId);
+    await this.ensureRoot();
+    await mkdir(userDir, { recursive: true });
+    await writeJsonFile(this.getUserCodexAuthPath(userId), authPayload);
+    await chmod(this.getUserCodexAuthPath(userId), 0o600);
+
+    const projects = await this.listProjectsByUserId(userId);
+    for (const project of projects) {
+      await this.writeProjectCodexAuth(userId, project.id, authPayload);
+    }
+
+    return {
+      user,
+      userId,
+      hasAuth: true,
+      projectCount: projects.length,
+    };
+  }
+
   async deleteProject(userInput: string, projectIdInput: string): Promise<{ userId: string; projectId: string }> {
     const { userId } = normalizeUserIdentity(userInput);
     const projectId = assertSafeSegment(projectIdInput, 'project id');
@@ -403,6 +504,40 @@ export class ProjectStorage {
       userId,
       projectId,
     };
+  }
+
+  async renameProject(input: RenameProjectInput): Promise<ProjectMetadata> {
+    const { user, userId } = normalizeUserIdentity(input.user);
+    const currentProjectId = assertSafeSegment(input.projectId, 'project id');
+    const currentMetadata = await this.readProjectMetadata(userId, currentProjectId);
+    const { name, projectId: nextProjectId } = normalizeProjectName(input.name);
+
+    if (name === currentMetadata.name && nextProjectId === currentProjectId) {
+      return currentMetadata;
+    }
+
+    await this.assertProjectNameAvailable(userId, name, currentProjectId);
+
+    const currentProjectDir = this.getProjectDir(userId, currentProjectId);
+    const nextProjectDir = this.getProjectDir(userId, nextProjectId);
+    if (nextProjectId !== currentProjectId && await pathExists(nextProjectDir)) {
+      throw new ProjectStorageError('CONFLICT', 'project already exists');
+    }
+
+    const nextMetadata: ProjectMetadata = {
+      ...currentMetadata,
+      id: nextProjectId,
+      name,
+      user,
+      userId,
+      updatedAt: nowIso(),
+    };
+
+    if (nextProjectId !== currentProjectId) {
+      await rename(currentProjectDir, nextProjectDir);
+    }
+    await writeJsonFile(path.join(nextProjectDir, PROJECT_METADATA_FILE), nextMetadata);
+    return this.readProjectMetadata(userId, nextProjectId);
   }
 
   async deleteUser(userInput: string): Promise<{ userId: string }> {
@@ -429,13 +564,16 @@ export class ProjectStorage {
       projectId,
       fileName,
     });
-    await writeJsonStaged(projectDir, fileName, input.payload);
+    const previousSizeBytes = await this.getProjectJsonTrackedSize(projectDir, fileName);
+    const writtenSizeBytes = await writeJsonStaged(projectDir, fileName, input.payload);
     debugStorage('saveProjectJson:complete', {
       userId,
       projectId,
       fileName,
     });
-    return this.touchProject(userId, projectId);
+    return this.touchProject(userId, projectId, {
+      sizeDeltaBytes: (writtenSizeBytes * 2) - previousSizeBytes,
+    });
   }
 
   private async readProjectJson(userInput: string, projectIdInput: string, fileName: string): Promise<unknown> {
@@ -450,10 +588,13 @@ export class ProjectStorage {
     return readJsonFile(targetPath);
   }
 
-  private async assertProjectNameAvailable(userId: string, name: string): Promise<void> {
+  private async assertProjectNameAvailable(userId: string, name: string, excludeProjectId = ''): Promise<void> {
     const existingProjects = await this.listProjectsByUserId(userId);
     const normalizedName = name.toLocaleLowerCase();
-    if (existingProjects.some((project) => project.name.toLocaleLowerCase() === normalizedName)) {
+    if (existingProjects.some((project) => (
+      project.id !== excludeProjectId
+      && project.name.toLocaleLowerCase() === normalizedName
+    ))) {
       throw new ProjectStorageError('CONFLICT', 'project name already exists for this user');
     }
   }
@@ -476,6 +617,26 @@ export class ProjectStorage {
       }
     }
     return projects;
+  }
+
+  private async syncProjectCodexAuthFromUser(userId: string, projectId: string): Promise<boolean> {
+    const authPath = this.getUserCodexAuthPath(userId);
+    if (!(await pathExists(authPath))) {
+      return false;
+    }
+    const authPayload = normalizeCodexAuthPayload(await readJsonFile<Record<string, unknown>>(authPath));
+    await this.writeProjectCodexAuth(userId, projectId, authPayload);
+    return true;
+  }
+
+  private async writeProjectCodexAuth(
+    userId: string,
+    projectId: string,
+    authPayload: Record<string, string>,
+  ): Promise<void> {
+    const authPath = path.join(this.getProjectDir(userId, projectId), CODEX_HOME_DIR, CODEX_AUTH_FILE);
+    await writeJsonFile(authPath, authPayload);
+    await chmod(authPath, 0o600);
   }
 
   private async listRelativeFiles(targetDir: string, prefix: string): Promise<string[]> {
@@ -516,17 +677,33 @@ export class ProjectStorage {
     if (metadata.schema !== PROJECT_SCHEMA || metadata.version !== 1 || metadata.id !== projectId) {
       throw new ProjectStorageError('BAD_REQUEST', 'project metadata is invalid');
     }
-    return metadata;
+    return {
+      ...metadata,
+      sizeBytes: Number.isFinite(metadata.sizeBytes) && metadata.sizeBytes > 0
+        ? metadata.sizeBytes
+        : 0,
+    };
   }
 
-  private async touchProject(userId: string, projectId: string): Promise<ProjectMetadata> {
+  private async touchProject(
+    userId: string,
+    projectId: string,
+    options: { sizeDeltaBytes?: number } = {},
+  ): Promise<ProjectMetadata> {
     const metadata = await this.readProjectMetadata(userId, projectId);
+    const sizeDeltaBytes = Number(options.sizeDeltaBytes || 0);
     const nextMetadata = {
       ...metadata,
       updatedAt: nowIso(),
+      sizeBytes: Math.max(0, Math.round((metadata.sizeBytes || 0) + sizeDeltaBytes)),
     };
     await writeJsonFile(path.join(this.getProjectDir(userId, projectId), PROJECT_METADATA_FILE), nextMetadata);
     return nextMetadata;
+  }
+
+  private async getProjectJsonTrackedSize(projectDir: string, fileName: string): Promise<number> {
+    return (await getFileSize(path.join(projectDir, fileName)))
+      + (await getFileSize(path.join(projectDir, `${fileName}.tmp`)));
   }
 
   private getUserDir(userId: string): string {
@@ -535,6 +712,10 @@ export class ProjectStorage {
 
   private getProjectDir(userId: string, projectId: string): string {
     return path.join(this.getUserDir(userId), assertSafeSegment(projectId, 'project id'));
+  }
+
+  private getUserCodexAuthPath(userId: string): string {
+    return path.join(this.getUserDir(userId), USER_CODEX_AUTH_FILE);
   }
 }
 

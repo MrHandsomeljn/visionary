@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -22,6 +22,10 @@ async function createTempStorage() {
       await rm(rootDir, { recursive: true, force: true });
     },
   };
+}
+
+function stagedJsonPayloadSize(payload: unknown): number {
+  return Buffer.byteLength(`${JSON.stringify(payload, null, 2)}\n`, 'utf8') * 2;
 }
 
 test('normalizes lightweight user and project names into stable safe ids', () => {
@@ -55,9 +59,12 @@ test('creates projects under separate user namespaces and lists by user', async 
     assert.equal(aliceProjects.length, 1);
     assert.equal(aliceProjects[0]?.name, 'Moon Scene');
     assert.equal(aliceProjects[0]?.hasScene, true);
+    assert.equal(typeof aliceProjects[0]?.sizeBytes, 'number');
+    assert.ok((aliceProjects[0]?.sizeBytes || 0) > 0);
     assert.equal(bobProjects.length, 1);
     assert.equal(bobProjects[0]?.name, 'Moon Scene');
     assert.equal(bobProjects[0]?.hasScene, false);
+    assert.equal(bobProjects[0]?.sizeBytes, 0);
   } finally {
     await cleanup();
   }
@@ -77,32 +84,65 @@ test('rejects duplicate project names inside one user namespace', async () => {
   }
 });
 
+test('renames projects by moving the project namespace and preserving persisted content', async () => {
+  const { storage, cleanup } = await createTempStorage();
+  try {
+    const project = await storage.createProject({
+      user: 'alice',
+      name: 'Original Name',
+      scene: { version: 2, assets: [] },
+    });
+    await storage.createProject({ user: 'alice', name: 'Existing Name' });
+
+    const renamed = await storage.renameProject({
+      user: 'alice',
+      projectId: project.id,
+      name: 'Renamed Name',
+    });
+
+    assert.notEqual(renamed.id, project.id);
+    assert.equal(renamed.name, 'Renamed Name');
+    assert.deepEqual(await storage.readScene('alice', renamed.id), { version: 2, assets: [] });
+    await assert.rejects(
+      () => storage.getProject('alice', project.id),
+      (error) => error instanceof ProjectStorageError && error.code === 'NOT_FOUND',
+    );
+
+    await assert.rejects(
+      () => storage.renameProject({ user: 'alice', projectId: renamed.id, name: 'existing name' }),
+      (error) => error instanceof ProjectStorageError && error.code === 'CONFLICT',
+    );
+    await assert.rejects(
+      () => storage.renameProject({ user: 'alice', projectId: renamed.id, name: 'bad/name' }),
+      (error) => error instanceof ProjectStorageError && error.code === 'BAD_REQUEST',
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
 test('saves scene and agent history with staged json files inside project folder', async () => {
   const { rootDir, storage, cleanup } = await createTempStorage();
   try {
     const project = await storage.createProject({ user: 'alice', name: 'Server Scene' });
     const createdUpdatedAt = project.updatedAt;
 
+    const scenePayload = { version: 2, assets: [{ name: 'model', path: 'assets/model.ply' }] };
+    const agentHistoryPayload = { schema: 'visionary.agent_history', version: 2, workflows: [] };
+
     await storage.saveScene({
       user: 'alice',
       projectId: project.id,
-      payload: { version: 2, assets: [{ name: 'model', path: 'assets/model.ply' }] },
+      payload: scenePayload,
     });
     await storage.saveAgentHistory({
       user: 'alice',
       projectId: project.id,
-      payload: { schema: 'visionary.agent_history', version: 2, workflows: [] },
+      payload: agentHistoryPayload,
     });
 
-    assert.deepEqual(await storage.readScene('alice', project.id), {
-      version: 2,
-      assets: [{ name: 'model', path: 'assets/model.ply' }],
-    });
-    assert.deepEqual(await storage.readAgentHistory('alice', project.id), {
-      schema: 'visionary.agent_history',
-      version: 2,
-      workflows: [],
-    });
+    assert.deepEqual(await storage.readScene('alice', project.id), scenePayload);
+    assert.deepEqual(await storage.readAgentHistory('alice', project.id), agentHistoryPayload);
 
     const userId = normalizeUserIdentity('alice').userId;
     const sceneTmpPath = path.join(rootDir, userId, project.id, 'scene.json.tmp');
@@ -116,6 +156,10 @@ test('saves scene and agent history with staged json files inside project folder
 
     const refreshedProject = await storage.getProject('alice', project.id);
     assert.notEqual(refreshedProject.updatedAt, createdUpdatedAt);
+    assert.equal(
+      refreshedProject.sizeBytes,
+      stagedJsonPayloadSize(scenePayload) + stagedJsonPayloadSize(agentHistoryPayload),
+    );
   } finally {
     await cleanup();
   }
@@ -181,6 +225,7 @@ test('writes project assets only under allowed project asset roots', async () =>
 
     const afterWrites = await storage.getProject('alice', project.id);
     assert.notEqual(afterWrites.updatedAt, beforeWrite.updatedAt);
+    assert.equal(afterWrites.sizeBytes, content.byteLength * 2);
 
     await assert.rejects(
       () => storage.writeAsset({
@@ -220,6 +265,79 @@ test('asset index excludes json manifests and remains empty before binary upload
       scene: [],
       agent: [],
     });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('user Codex auth syncs to existing and newly created project codex homes', async () => {
+  const { rootDir, storage, cleanup } = await createTempStorage();
+  try {
+    const first = await storage.createProject({ user: 'alice', name: 'Auth One' });
+    const second = await storage.createProject({ user: 'alice', name: 'Auth Two' });
+    const bobProject = await storage.createProject({ user: 'bob', name: 'Other User' });
+    const aliceId = normalizeUserIdentity('alice').userId;
+    const bobId = normalizeUserIdentity('bob').userId;
+
+    const status = await storage.saveUserCodexAuth({
+      user: 'alice',
+      apiKey: 'sk-user-auth',
+    });
+
+    assert.equal(status.user, 'alice');
+    assert.equal(status.userId, aliceId);
+    assert.equal(status.hasAuth, true);
+    assert.equal(status.projectCount, 2);
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(rootDir, aliceId, 'codex_auth.json'), 'utf8')),
+      { OPENAI_API_KEY: 'sk-user-auth' },
+    );
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(rootDir, aliceId, first.id, 'codex_home', 'auth.json'), 'utf8')),
+      { OPENAI_API_KEY: 'sk-user-auth' },
+    );
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(rootDir, aliceId, second.id, 'codex_home', 'auth.json'), 'utf8')),
+      { OPENAI_API_KEY: 'sk-user-auth' },
+    );
+    await assert.rejects(
+      () => stat(path.join(rootDir, bobId, bobProject.id, 'codex_home', 'auth.json')),
+      /ENOENT/,
+    );
+
+    const createdAfterAuth = await storage.createProject({ user: 'alice', name: 'Auth Three' });
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(rootDir, aliceId, createdAfterAuth.id, 'codex_home', 'auth.json'), 'utf8')),
+      { OPENAI_API_KEY: 'sk-user-auth' },
+    );
+    assert.deepEqual(await storage.getUserCodexAuthStatus('alice'), {
+      user: 'alice',
+      userId: aliceId,
+      hasAuth: true,
+      projectCount: 3,
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('legacy Codex auth payloads are normalized for project codex homes', async () => {
+  const { rootDir, storage, cleanup } = await createTempStorage();
+  try {
+    const userId = normalizeUserIdentity('alice').userId;
+    await mkdir(path.join(rootDir, userId), { recursive: true });
+    await writeFile(
+      path.join(rootDir, userId, 'codex_auth.json'),
+      `${JSON.stringify({ CODEX_API_KEY: 'sk-legacy-auth' }, null, 2)}\n`,
+      'utf8',
+    );
+
+    const project = await storage.createProject({ user: 'alice', name: 'Legacy Auth' });
+
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(rootDir, userId, project.id, 'codex_home', 'auth.json'), 'utf8')),
+      { OPENAI_API_KEY: 'sk-legacy-auth' },
+    );
   } finally {
     await cleanup();
   }

@@ -11,6 +11,9 @@ test('editor html uses declarative i18n markers for static UI text', () => {
     assert.match(html, /data-i18n="sidebar\.title"/);
     assert.match(html, /data-i18n="timeline\.title"/);
     assert.match(html, /data-i18n="modal\.helpTitle"/);
+    assert.match(html, /data-i18n="modal\.helpSections\.codex"/);
+    assert.match(html, /data-i18n="modal\.helpItems\.codexResume"/);
+    assert.match(html, /CODEX_HOME=\$PWD\/codex_home codex exec --json resume &lt;threadId&gt; "继续"/);
     assert.match(html, /data-i18n-attrs="title:common\.addImage;aria-label:common\.addImage"/);
     assert.match(html, /data-i18n-attrs="title:sidebar\.loadModel;aria-label:sidebar\.loadModel"/);
     assert.match(html, /data-i18n-attrs="data-tooltip:toolbar\.translate;aria-label:toolbar\.translate"/);
@@ -27,6 +30,8 @@ test('editor js provides a generic declarative i18n pass before dynamic UI updat
     assert.match(source, /root\.querySelectorAll\('\[data-i18n-placeholder\]'\)/);
     assert.match(source, /root\.querySelectorAll\('\[data-i18n-attrs\]'\)/);
     assert.match(source, /applyDeclarativeI18n\(\);/);
+    assert.match(source, /codexResume:\s*'进项目目录，用 CODEX_HOME=\$PWD\/codex_home codex exec --json resume <threadId> "继续"',/);
+    assert.match(source, /codexResume:\s*'Enter the project folder, then run CODEX_HOME=\$PWD\/codex_home codex exec --json resume <threadId> "continue"',/);
 });
 
 test('editor js routes user-visible feedback through i18n keys', () => {

@@ -170,6 +170,22 @@ test('workspace asset materialization progress uses a non-blocking loading overl
   assert.match(css, /pointer-events:\s*none;/);
 });
 
+test('startup loading overlay shows the current initialization step', async () => {
+  const [html, css, source] = await Promise.all([
+    readFile(new URL('../public/editor.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/editor.css', import.meta.url), 'utf8'),
+    readEditorSource(),
+  ]);
+
+  assert.match(html, /id="bootLoadingOverlay"[\s\S]*class="loading-detail" data-i18n="loading\.bootPreparing"/);
+  assert.match(css, /\.loading-detail/);
+  assert.match(source, /function setBootLoadingStatus\(detail = t\('loading\.bootPreparing'\)\)/);
+  assert.match(source, /setBootLoadingStatus\(t\('loading\.bootLoadingEditorApp'\)\)/);
+  assert.match(source, /setBootLoadingStatus\(t\('loading\.bootInitializingWebGpu'\)\)/);
+  assert.match(source, /setBootLoadingStatus\(t\('loading\.bootConnectingEditor'\)\)/);
+  assert.match(source, /loadingDetail\.textContent = options\?\.detail \|\| '';/);
+});
+
 test('workspace and server save flows emit debug logs for file-level progress', async () => {
   const source = await readEditorSource();
 

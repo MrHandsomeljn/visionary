@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PluginOption, ViteDevServer } from 'vite';
+import { CodexAgentRuntime } from './codex-agent-runtime.ts';
 import { ProjectStorage, ProjectStorageError, resolveProjectStorageRoot } from './project-storage.ts';
 
 interface ProjectApiResponse {
@@ -12,6 +13,9 @@ interface ProjectApiResponse {
 }
 
 const API_PREFIX = '/api/projects';
+const AGENT_STEP_ACTION_PREFIX = '/api/agent/step-action';
+const CODEX_AGENT_PREFIX = '/api/codex-agent';
+const CODEX_AUTH_PREFIX = '/api/codex-auth';
 const ADMIN_USERS_PREFIX = '/api/project-admin/users';
 const JSON_BODY_LIMIT_BYTES = 50 * 1024 * 1024;
 const BINARY_BODY_LIMIT_BYTES = 512 * 1024 * 1024;
@@ -135,6 +139,7 @@ function parseProjectPath(url: URL): { projectId: string | null; action: string 
 
 async function handleProjectsRequest(
   storage: ProjectStorage,
+  codexAgent: CodexAgentRuntime,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
@@ -143,6 +148,74 @@ async function handleProjectsRequest(
   }
 
   const url = new URL(req.url, 'http://visionary.local');
+  if (url.pathname === CODEX_AUTH_PREFIX) {
+    try {
+      if ((req.method || 'GET') === 'GET') {
+        sendOk(res, await storage.getUserCodexAuthStatus(getQueryString(url, 'user')));
+        return true;
+      }
+      if ((req.method || 'GET') === 'PUT') {
+        const body = readBodyObject(await readJsonBody(req));
+        sendOk(res, await storage.saveUserCodexAuth({
+          user: getBodyString(body, 'user'),
+          apiKey: getBodyString(body, 'apiKey'),
+        }));
+        return true;
+      }
+    } catch (error) {
+      sendError(res, error);
+      return true;
+    }
+  }
+
+  if (url.pathname === `${CODEX_AGENT_PREFIX}/messages` && (req.method || 'GET') === 'POST') {
+    try {
+      const body = readBodyObject(await readJsonBody(req));
+      sendOk(
+        res,
+        await codexAgent.sendMessage({
+          user: getBodyString(body, 'user'),
+          projectId: getBodyString(body, 'projectId'),
+          conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
+          threadId: typeof body.threadId === 'string' ? body.threadId : undefined,
+          prompt: getBodyString(body, 'prompt'),
+          workflow: typeof body.workflow === 'string' ? body.workflow : undefined,
+        }),
+      );
+      return true;
+    } catch (error) {
+      sendError(res, error);
+      return true;
+    }
+  }
+
+  if (
+    (url.pathname === AGENT_STEP_ACTION_PREFIX || url.pathname === `${CODEX_AGENT_PREFIX}/step-actions`)
+    && (req.method || 'GET') === 'POST'
+  ) {
+    try {
+      const body = readBodyObject(await readJsonBody(req));
+      sendOk(
+        res,
+        await codexAgent.handleStepAction({
+          user: getBodyString(body, 'user'),
+          projectId: getBodyString(body, 'projectId'),
+          sessionId: getBodyString(body, 'sessionId'),
+          stepKey: getBodyString(body, 'stepKey'),
+          action: getBodyString(body, 'action'),
+          prompt: typeof body.prompt === 'string' ? body.prompt : undefined,
+          selectedIndex: typeof body.selectedIndex === 'number' ? body.selectedIndex : undefined,
+          images: Array.isArray(body.images) ? body.images : undefined,
+          sourceImages: Array.isArray(body.sourceImages) ? body.sourceImages : undefined,
+        }),
+      );
+      return true;
+    } catch (error) {
+      sendError(res, error);
+      return true;
+    }
+  }
+
   if (url.pathname === ADMIN_USERS_PREFIX && (req.method || 'GET') === 'GET') {
     try {
       sendOk(res, await storage.listUsers());
@@ -221,6 +294,16 @@ async function handleProjectsRequest(
       return true;
     }
 
+    if (!action && method === 'PATCH') {
+      const body = readBodyObject(await readJsonBody(req));
+      sendOk(res, await storage.renameProject({
+        user: resolveUser(url, body),
+        projectId,
+        name: getBodyString(body, 'name'),
+      }));
+      return true;
+    }
+
     if (action === 'scene' && method === 'GET') {
       const user = getQueryString(url, 'user');
       sendOk(res, await storage.readScene(user, projectId));
@@ -291,8 +374,9 @@ export function createProjectApiPlugin(options?: { storage?: ProjectStorage }): 
     apply: 'serve',
     configureServer(server: ViteDevServer) {
       const storage = options?.storage ?? new ProjectStorage(resolveProjectStorageRoot());
+      const codexAgent = new CodexAgentRuntime(storage);
       server.middlewares.use(async (req, res, next) => {
-        const handled = await handleProjectsRequest(storage, req, res);
+        const handled = await handleProjectsRequest(storage, codexAgent, req, res);
         if (!handled) {
           next();
         }

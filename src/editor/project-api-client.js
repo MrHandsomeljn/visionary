@@ -62,6 +62,20 @@ export class ProjectApiClient {
         return parseApiResponse(response);
     }
 
+    async renameProject({ user, projectId, name }) {
+        const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}`, {
+            method: 'PATCH',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                name,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
     async loadScene(user, projectId) {
         const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}/scene${buildQuery({ user })}`);
         return parseApiResponse(response);
@@ -116,6 +130,81 @@ export class ProjectApiClient {
                 'content-type': 'application/octet-stream',
             },
             body: content,
+        });
+        return parseApiResponse(response);
+    }
+
+    async sendCodexAgentMessage({
+        user,
+        projectId,
+        conversationId,
+        threadId,
+        prompt,
+        workflow,
+    }) {
+        const response = await fetch('/api/codex-agent/messages', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                projectId,
+                conversationId,
+                threadId,
+                prompt,
+                workflow,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async sendCodexAgentStepAction({
+        user,
+        projectId,
+        sessionId,
+        stepKey,
+        action,
+        prompt,
+        selectedIndex,
+        images,
+        sourceImages,
+    }) {
+        const response = await fetch('/api/agent/step-action', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                projectId,
+                sessionId,
+                stepKey,
+                action,
+                prompt,
+                selectedIndex,
+                images,
+                sourceImages,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async getCodexAuthStatus(user) {
+        const response = await fetch(`/api/codex-auth${buildQuery({ user })}`);
+        return parseApiResponse(response);
+    }
+
+    async saveCodexAuth({ user, apiKey }) {
+        const response = await fetch('/api/codex-auth', {
+            method: 'PUT',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                apiKey,
+            }),
         });
         return parseApiResponse(response);
     }
