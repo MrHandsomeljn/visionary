@@ -49,6 +49,7 @@ certs/*.pem
 certs/*.key
 .env.local
 .visionary-projects/
+agent_history/
 
 # models/
 模型/
