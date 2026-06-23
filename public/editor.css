@@ -1271,6 +1271,7 @@ body.agent-workbench-resizing #agent-workbench {
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    overflow-anchor: none;
     padding: 12px var(--agent-workbench-content-inset-x);
     scrollbar-width: none;
 }
@@ -1434,6 +1435,67 @@ body.agent-workbench-resizing #agent-workbench {
     color: var(--text-secondary);
 }
 
+.agent-session-step-toggle {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.agent-session-step-toggle:hover {
+    border-color: color-mix(in srgb, var(--accent) 36%, transparent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+}
+
+.agent-session-step-toggle-icon {
+    width: 16px;
+    height: 16px;
+    overflow: visible;
+}
+
+.agent-session-step-toggle-line {
+    stroke: currentColor;
+    stroke-width: 8;
+    stroke-linecap: round;
+    fill: none;
+}
+
+.agent-session-step-toggle-shape {
+    opacity: 1;
+    transform: scale(1);
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: opacity 0.16s ease, transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.agent-session-step-toggle-shape.is-arrow {
+    opacity: 0;
+    transform: scale(0.72);
+}
+
+.agent-session-step-toggle.is-collapsed {
+    color: var(--accent);
+}
+
+.agent-session-step-toggle.is-collapsed .agent-session-step-toggle-shape.is-menu {
+    opacity: 0;
+    transform: scale(0.72);
+}
+
+.agent-session-step-toggle.is-collapsed .agent-session-step-toggle-shape.is-arrow {
+    opacity: 1;
+    transform: scale(1);
+}
+
 .agent-message-text {
     font-size: 12px;
     line-height: 1.6;
@@ -1550,33 +1612,53 @@ body.agent-workbench-resizing #agent-workbench {
 
 .agent-step-block {
     padding: 0;
+    gap: 0;
     overflow: hidden;
+    transition: height 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.16s ease, background 0.16s ease;
+}
+
+.agent-step-block.is-deferred-hidden[hidden] {
+    display: none;
+}
+
+.agent-step-block.is-animating {
+    will-change: height;
+    pointer-events: none;
+    contain: layout paint;
 }
 
 .agent-step-summary {
+    position: relative;
+    display: flex;
     cursor: pointer;
     list-style: none;
-    padding: 8px 10px 6px;
+    min-height: 34px;
+    max-height: 34px;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border-radius: 999px;
+    overflow: hidden;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
 }
 
 .agent-step-summary::-webkit-details-marker {
     display: none;
 }
 
-.agent-step-summary::before {
-    content: '›';
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 14px;
-    height: 14px;
-    color: var(--text-secondary);
-    transform: rotate(0deg);
-    transition: transform 0.16s ease;
-}
-
-.agent-step-block[open] .agent-step-summary::before {
-    transform: rotate(90deg);
+.agent-step-summary .agent-block-title {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    max-width: calc(100% - 160px);
+    transform: translate(-50%, -50%);
+    text-align: center;
+    line-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
 }
 
 .agent-step-summary-meta {
@@ -1585,6 +1667,62 @@ body.agent-workbench-resizing #agent-workbench {
     justify-content: flex-end;
     gap: 8px;
     min-width: 0;
+}
+
+.agent-step-summary-meta {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    max-width: 84px;
+}
+
+.agent-step-current-tag {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 82px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--accent);
+    font-size: 11px;
+    line-height: 18px;
+}
+
+.agent-step-summary-thumb {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    border: 1px solid var(--input-border);
+    background: color-mix(in srgb, var(--panel-bg) 34%, transparent);
+    overflow: hidden;
+    transform: scale(1);
+    opacity: 1;
+    transform-origin: center;
+    transition: opacity 0.16s ease, transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.16s ease;
+    will-change: transform, opacity;
+}
+
+.agent-step-block[open] .agent-step-summary-thumb {
+    opacity: 0;
+    transform: scale(0.72);
+    pointer-events: none;
+}
+
+.agent-step-block.is-closing .agent-step-summary-thumb {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.agent-step-summary-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
 }
 
 .agent-step-state {
@@ -1605,6 +1743,23 @@ body.agent-workbench-resizing #agent-workbench {
     display: grid;
     gap: 6px;
     padding: 0 10px 10px;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(-8px) scale(0.985);
+    transform-origin: top center;
+    transition: opacity 0.16s ease, transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: transform, opacity;
+}
+
+.agent-step-block[open] .agent-step-body {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+.agent-step-block.is-opening .agent-step-body,
+.agent-step-block.is-closing .agent-step-body {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.985);
 }
 
 .agent-image-frame,
@@ -1624,13 +1779,15 @@ body.agent-workbench-resizing #agent-workbench {
 
 .agent-image-frame.is-ready {
     min-height: 0;
+    aspect-ratio: var(--agent-image-aspect-ratio, auto);
+    display: block;
 }
 
 .agent-image-frame img {
     display: block;
     width: 100%;
     height: auto;
-    object-fit: cover;
+    object-fit: contain;
 }
 
 .agent-step-gallery {
@@ -1655,6 +1812,15 @@ body.agent-workbench-resizing #agent-workbench {
     width: 100%;
     max-width: none;
     justify-self: stretch;
+    transform-origin: 15px 0;
+    transition: opacity 0.16s ease, transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: transform, opacity;
+}
+
+.agent-step-block.is-opening .agent-step-gallery .agent-image-frame,
+.agent-step-block.is-closing .agent-step-gallery .agent-image-frame {
+    opacity: 0;
+    transform: translateY(-34px) scale(0.18);
 }
 
 .agent-step-gallery-nav {

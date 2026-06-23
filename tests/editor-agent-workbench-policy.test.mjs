@@ -64,6 +64,7 @@ test('agent collapse defers layout-heavy sync outside the click frame', () => {
 
 test('agent workbench layout tokens and message column sizing remain pinned', () => {
     const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
 
     assert.match(css, /--agent-workflow-tab-width:\s*44px;/);
     assert.match(css, /--agent-workflow-tab-gap:\s*16px;/);
@@ -123,6 +124,34 @@ test('agent workbench layout tokens and message column sizing remain pinned', ()
     );
     assert.match(
         css,
+        /\.agent-session-step-toggle\s*\{[\s\S]*width:\s*22px;[\s\S]*height:\s*22px;[\s\S]*flex:\s*0 0 22px;[\s\S]*display:\s*inline-flex;[\s\S]*align-items:\s*center;[\s\S]*justify-content:\s*center;[\s\S]*border-radius:\s*999px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle-icon\s*\{[\s\S]*width:\s*16px;[\s\S]*height:\s*16px;[\s\S]*overflow:\s*visible;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle-line\s*\{[\s\S]*stroke:\s*currentColor;[\s\S]*stroke-width:\s*8;[\s\S]*stroke-linecap:\s*round;[\s\S]*fill:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle-shape\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);[\s\S]*transform-box:\s*fill-box;[\s\S]*transform-origin:\s*center;[\s\S]*transition:\s*opacity 0\.16s ease, transform 0\.22s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle-shape\.is-arrow\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(0\.72\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle\.is-collapsed \.agent-session-step-toggle-shape\.is-menu\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(0\.72\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle\.is-collapsed \.agent-session-step-toggle-shape\.is-arrow\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
         /\.agent-session-pager\s*\{[\s\S]*justify-content:\s*flex-end;[\s\S]*width:\s*100%;[\s\S]*max-width:\s*100%;[\s\S]*align-self:\s*stretch;[\s\S]*\}/
     );
     assert.match(
@@ -136,6 +165,14 @@ test('agent workbench layout tokens and message column sizing remain pinned', ()
     assert.match(
         css,
         /\.agent-image-frame,[\s\S]*\.agent-viewer-frame\s*\{[\s\S]*width:\s*min\(100%, var\(--agent-output-asset-max-width\)\);[\s\S]*max-width:\s*var\(--agent-output-asset-max-width\);[\s\S]*justify-self:\s*flex-start;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-image-frame\.is-ready\s*\{[\s\S]*min-height:\s*0;[\s\S]*aspect-ratio:\s*var\(--agent-image-aspect-ratio, auto\);[\s\S]*display:\s*block;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-image-frame img\s*\{[\s\S]*display:\s*block;[\s\S]*width:\s*100%;[\s\S]*height:\s*auto;[\s\S]*object-fit:\s*contain;[\s\S]*\}/
     );
     assert.match(
         css,
@@ -160,6 +197,75 @@ test('agent workbench layout tokens and message column sizing remain pinned', ()
     assert.match(
         css,
         /\.agent-step-actions\s*\{[\s\S]*justify-content:\s*flex-end;[\s\S]*gap:\s*8px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\s*\{[\s\S]*padding:\s*0;[\s\S]*gap:\s*0;[\s\S]*overflow:\s*hidden;[\s\S]*transition:\s*height 0\.2s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\)[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\.is-animating\s*\{[\s\S]*will-change:\s*height;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\.is-deferred-hidden\[hidden\]\s*\{[\s\S]*display:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-summary\s*\{[\s\S]*display:\s*flex;[\s\S]*min-height:\s*34px;[\s\S]*max-height:\s*34px;[\s\S]*box-sizing:\s*border-box;[\s\S]*padding:\s*8px 10px;[\s\S]*border-radius:\s*999px;[\s\S]*align-items:\s*center;[\s\S]*justify-content:\s*flex-start;[\s\S]*gap:\s*6px;[\s\S]*\}/
+    );
+    assert.doesNotMatch(css, /\.agent-step-summary::before\s*\{/);
+    assert.match(
+        css,
+        /\.agent-step-summary-thumb\s*\{[\s\S]*width:\s*30px;[\s\S]*height:\s*30px;[\s\S]*flex:\s*0 0 30px;[\s\S]*border-radius:\s*999px;[\s\S]*overflow:\s*hidden;[\s\S]*transition:\s*opacity 0\.16s ease, transform 0\.2s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\)[\s\S]*will-change:\s*transform, opacity;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\[open\] \.agent-step-summary-thumb\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(0\.72\);[\s\S]*pointer-events:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\.is-closing \.agent-step-summary-thumb\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-summary \.agent-block-title\s*\{[\s\S]*position:\s*absolute;[\s\S]*left:\s*50%;[\s\S]*transform:\s*translate\(-50%, -50%\);[\s\S]*text-align:\s*center;[\s\S]*line-height:\s*18px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-summary-meta\s*\{[\s\S]*position:\s*absolute;[\s\S]*right:\s*10px;[\s\S]*top:\s*50%;[\s\S]*transform:\s*translateY\(-50%\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-current-tag\s*\{[\s\S]*max-width:\s*82px;[\s\S]*overflow:\s*hidden;[\s\S]*text-overflow:\s*ellipsis;[\s\S]*white-space:\s*nowrap;[\s\S]*color:\s*var\(--accent\);[\s\S]*line-height:\s*18px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-body\s*\{[\s\S]*overflow:\s*hidden;[\s\S]*opacity:\s*0;[\s\S]*transform:\s*translateY\(-8px\) scale\(0\.985\);[\s\S]*transition:\s*opacity 0\.16s ease, transform 0\.2s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\);[\s\S]*will-change:\s*transform, opacity;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\[open\] \.agent-step-body\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*translateY\(0\) scale\(1\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\.is-opening \.agent-step-gallery \.agent-image-frame,[\s\S]*\.agent-step-block\.is-closing \.agent-step-gallery \.agent-image-frame\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*translateY\(-34px\) scale\(0\.18\);[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /function animateAgentStepBlockToggle\(details, expand\) \{[\s\S]*details\.classList\.add\('is-animating', expand \? 'is-opening' : 'is-closing'\);[\s\S]*details\.style\.height = `\$\{startHeight\}px`;[\s\S]*details\.style\.height = `\$\{endHeight\}px`;[\s\S]*details\.open = Boolean\(expand\);[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /function runAgentMessageLayoutAnimation\(animation\) \{[\s\S]*if \(animation\.expand\) \{[\s\S]*element\.classList\.remove\('is-opening'\);[\s\S]*\}[\s\S]*element\.style\.height = `\$\{endHeight\}px`;/
+    );
+    assert.match(
+        source,
+        /function handleAgentStepSummaryToggle\(event, summary\) \{[\s\S]*event\.preventDefault\(\);[\s\S]*return animateAgentStepBlockToggle\(details, !details\.open\);[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /const stepSummary = event\.target\.closest\('\.agent-step-summary'\);[\s\S]*handleAgentStepSummaryToggle\(event, stepSummary\)/
     );
     assert.match(
         css,

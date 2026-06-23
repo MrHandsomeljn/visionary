@@ -471,6 +471,8 @@ let projectRenameCommitInFlight = false;
 let agentMessageBottomPinRaf = 0;
 let agentMessageBottomPinFramesRemaining = 0;
 let agentMessageScrollbarSyncRaf = 0;
+let agentMessageLayoutAnimationRaf = 0;
+const agentThumbnailImageCache = new Map();
 let agentWorkbenchResizeRaf = 0;
 let agentWorkbenchCollapseSyncRaf = 0;
 let agentWorkbenchTogglingTimer = 0;
@@ -506,6 +508,7 @@ const AGENT_WORKBENCH_DEFAULT_WIDTH = 360;
 const AGENT_WORKBENCH_MIN_WIDTH = 314;
 const AGENT_WORKBENCH_MAX_WIDTH = 520;
 const AGENT_WORKBENCH_COLLAPSED_WIDTH = 64;
+const AGENT_STEP_ANIMATION_MS = 220;
 const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_left_sidebar_width_v4';
 const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_right_sidebar_width';
 const TIMELINE_FPS_OPTIONS = [12, 24, 30, 60];
@@ -656,6 +659,7 @@ const UI_TEXT = {
             nextPage: '下一页',
             retryVersions: '重试版本',
             switchToVersion: '切换到版本 {page}',
+            progressCount: '进度: {current}/{total}',
             errorPrefix: '错误',
             currentWindow: '当前窗口',
             active: '已开启',
@@ -818,6 +822,8 @@ const UI_TEXT = {
             resetView: '重置视角',
             archivePreview: '展开查看',
             collapseSession: '收起',
+            collapseAllSteps: '收纳全部步骤',
+            expandAllSteps: '展开全部步骤',
             skills: {
                 scene: '场景',
                 object: '物体',
@@ -915,7 +921,8 @@ const UI_TEXT = {
                 continueAction: '继续',
                 layoutDetections: '检测到 {count} 个对象',
                 components3dAssets: '3D 资产 {count} 个',
-                insertSceneAsset: 'Blender 工程，{count} 个对象',
+                insertSceneAsset: '场景对象 {count} 个',
+                insertSceneInserted: '已插入 {count} 个场景对象',
             },
         },
         sidebar: {
@@ -1243,6 +1250,7 @@ const UI_TEXT = {
             nextPage: 'Next page',
             retryVersions: 'Retry versions',
             switchToVersion: 'Switch to version {page}',
+            progressCount: 'Progress: {current}/{total}',
             errorPrefix: 'Error',
             currentWindow: 'Current viewport',
             active: 'On',
@@ -1405,6 +1413,8 @@ const UI_TEXT = {
             resetView: 'Reset view',
             archivePreview: 'Expand details',
             collapseSession: 'Collapse',
+            collapseAllSteps: 'Collapse all steps',
+            expandAllSteps: 'Expand all steps',
             skills: {
                 scene: 'Scene',
                 object: 'Object',
@@ -1502,7 +1512,8 @@ const UI_TEXT = {
                 continueAction: 'Continue',
                 layoutDetections: '{count} detected objects',
                 components3dAssets: '{count} 3D assets',
-                insertSceneAsset: 'Blender scene, {count} objects',
+                insertSceneAsset: '{count} scene objects',
+                insertSceneInserted: 'Inserted {count} scene objects',
             },
         },
         sidebar: {
@@ -4082,12 +4093,75 @@ function getAgentSessionArchiveThumbnail(session) {
     return '';
 }
 
+function getAgentStepBlockThumbnail(block) {
+    const images = Array.isArray(block?.images) ? block.images : [];
+    if (images.length <= 0) return '';
+    const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(block.selectedIndex) || 0));
+    const image = images[selectedIndex];
+    return image?.src || '';
+}
+
+function getAgentImageAspectRatio(image) {
+    const metadata = image?.metadata && typeof image.metadata === 'object' ? image.metadata : {};
+    const width = Number(metadata.width || metadata.imageWidth || metadata.sourceWidth || metadata.previewWidth);
+    const height = Number(metadata.height || metadata.imageHeight || metadata.sourceHeight || metadata.previewHeight);
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+        return Math.max(0.35, Math.min(3.5, width / height));
+    }
+    if (metadata.kind === 'layout_bbox') return 1;
+    return null;
+}
+
+function renderAgentImageAspectStyle(image) {
+    const ratio = getAgentImageAspectRatio(image);
+    return Number.isFinite(ratio) ? ` style="--agent-image-aspect-ratio:${ratio.toFixed(4)}"` : '';
+}
+
+function getAgentPipelineProgressLabel(attempt) {
+    const blocks = getAgentAttemptStepBlocks(attempt)
+        .filter((block) => block?.type === 'progress' && block.stepKey);
+    if (blocks.length <= 0) return '';
+    const pipelineStepKeys = new Set(SCENE_PIPELINE_STEP_DEFS.map((step) => step.key));
+    const pipelineBlocks = blocks.filter((block) => pipelineStepKeys.has(block.stepKey));
+    const scopedBlocks = pipelineBlocks.length > 0 ? pipelineBlocks : blocks;
+    const completed = scopedBlocks.filter((block) => Boolean(block.applied)).length;
+    return t('common.progressCount', {
+        current: completed,
+        total: scopedBlocks.length,
+    });
+}
+
+function getAgentPipelineStepBlocks(attempt) {
+    const blocks = getAgentAttemptStepBlocks(attempt)
+        .filter((block) => block?.type === 'progress' && block.stepKey);
+    const pipelineStepKeys = new Set(SCENE_PIPELINE_STEP_DEFS.map((step) => step.key));
+    const pipelineBlocks = blocks.filter((block) => pipelineStepKeys.has(block.stepKey));
+    return pipelineBlocks.length > 0 ? pipelineBlocks : blocks;
+}
+
+function createAgentStepExpandToggleIcon() {
+    return `
+        <svg class="agent-session-step-toggle-icon" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+            <g class="agent-session-step-toggle-shape is-menu">
+                <line class="agent-session-step-toggle-line" x1="20" y1="35" x2="80" y2="35"></line>
+                <line class="agent-session-step-toggle-line" x1="20" y1="50" x2="80" y2="50"></line>
+                <line class="agent-session-step-toggle-line" x1="20" y1="65" x2="80" y2="65"></line>
+            </g>
+            <g class="agent-session-step-toggle-shape is-arrow">
+                <line class="agent-session-step-toggle-line" x1="25" y1="40" x2="50" y2="65"></line>
+                <line class="agent-session-step-toggle-line" x1="75" y1="40" x2="50" y2="65"></line>
+            </g>
+        </svg>
+    `;
+}
+
 function getAgentItemIndexById(itemId) {
     return state.agentMessages.findIndex((item) => item.id === itemId);
 }
 
 function updateAgentSessionById(sessionId, updater, {
     autoScroll = 'preserve-or-pin-bottom',
+    animateLayout = null,
     skipRender = false,
 } = {}) {
     const index = getAgentItemIndexById(sessionId);
@@ -4098,7 +4172,7 @@ function updateAgentSessionById(sessionId, updater, {
     if (!nextSession) return null;
     state.agentMessages[index] = nextSession;
     if (!skipRender) {
-        renderAgentMessages({ autoScroll });
+        renderAgentMessages({ autoScroll, animateLayout });
     }
     schedulePersistAgentConversations();
     return nextSession;
@@ -4136,6 +4210,47 @@ function patchAgentStepBlock(context, patch) {
     }), {
         autoScroll: 'preserve-or-pin-bottom',
     });
+}
+
+function renderAgentSessionStepBlocksExpanded(sessionId, attemptId, expanded) {
+    if (!sessionId || !attemptId) return null;
+    const nextExpanded = Boolean(expanded);
+    const patchBlocks = (blocks = []) => blocks.map((block) => (
+        block?.type === 'progress' && block.stepKey
+            ? { ...block, expanded: nextExpanded }
+            : block
+    ));
+    const nextSession = updateAgentSessionById(sessionId, (session) => ({
+        ...session,
+        attempts: (session.attempts || []).map((attempt) => {
+            if (attempt.id !== attemptId) return attempt;
+            const nextBlocks = patchBlocks(attempt.blocks || []);
+            return {
+                ...attempt,
+                blocks: nextBlocks,
+                ...(Array.isArray(attempt.steps) ? { steps: patchBlocks(attempt.steps) } : {}),
+                stepBlocksCollapsed: !nextExpanded,
+                updatedAt: new Date().toISOString(),
+            };
+        }),
+        updatedAt: new Date().toISOString(),
+    }), {
+        skipRender: true,
+    });
+    if (nextSession) {
+        const synced = syncAgentSessionStepBlocksDom(sessionId, attemptId, nextExpanded);
+        if (!synced) {
+            renderAgentSessionElement(sessionId, {
+                autoScroll: 'preserve-or-pin-bottom',
+                animateLayout: {
+                    sessionId,
+                    attemptId,
+                    expand: nextExpanded,
+                },
+            });
+        }
+    }
+    return nextSession;
 }
 
 function updateAgentStepSelectedIndex(context, selectedIndex) {
@@ -4199,6 +4314,15 @@ function updateAgentStepGalleryDom(context) {
         image.src = selectedImage.src || '';
         image.alt = selectedImage.alt || selectedImage.title || context.block.title || t('agent.blocks.image');
     }
+    const frame = blockElement.querySelector('.agent-image-frame');
+    if (frame instanceof HTMLElement && selectedImage) {
+        const ratio = getAgentImageAspectRatio(selectedImage);
+        if (Number.isFinite(ratio)) {
+            frame.style.setProperty('--agent-image-aspect-ratio', ratio.toFixed(4));
+        } else {
+            frame.style.removeProperty('--agent-image-aspect-ratio');
+        }
+    }
     const count = blockElement.querySelector('.agent-step-gallery-count');
     if (count) {
         count.textContent = `${selectedIndex + 1} / ${images.length}`;
@@ -4241,8 +4365,40 @@ function getSelectedAgentStepImage(attempt, stepKey) {
     return images[selectedIndex] || null;
 }
 
+function getSelectedAgentStepSourceImageFromSession(session, currentAttempt, stepKey) {
+    const attempts = [
+        currentAttempt,
+        ...(Array.isArray(session?.attempts) ? session.attempts : []),
+    ].filter(Boolean);
+    const seenAttempts = new Set();
+    let fallbackImage = null;
+    for (const attempt of attempts) {
+        if (seenAttempts.has(attempt)) continue;
+        seenAttempts.add(attempt);
+        const block = getAgentAttemptStepBlocks(attempt).find((item) => item?.stepKey === stepKey);
+        const image = getSelectedAgentStepImage(attempt, stepKey);
+        if (!image) continue;
+        if (block?.applied) {
+            return image;
+        }
+        if (!fallbackImage) {
+            fallbackImage = image;
+        }
+    }
+    return fallbackImage;
+}
+
 function serializeAgentStepSourceImage(attempt, stepKey) {
     const image = getSelectedAgentStepImage(attempt, stepKey);
+    if (!image) return null;
+    return {
+        ...serializeAgentStepImage(image),
+        sourceStepKey: stepKey,
+    };
+}
+
+function serializeAgentSessionStepSourceImage(session, currentAttempt, stepKey) {
+    const image = getSelectedAgentStepSourceImageFromSession(session, currentAttempt, stepKey);
     if (!image) return null;
     return {
         ...serializeAgentStepImage(image),
@@ -4971,13 +5127,17 @@ function renderAgentProgressBlock(block, context = {}) {
     const actions = Array.isArray(block.actions) ? block.actions : [];
     const isApplied = Boolean(block.applied);
     const isStepBlock = Boolean(block.stepKey);
+    const stepThumbnail = isStepBlock ? getAgentStepBlockThumbnail(block) : '';
     const showContinue = isStepBlock && shouldShowAgentPipelineContinue(context);
-    const isOpen = !isStepBlock || Boolean(block.expanded || block.isCurrent || block.applied || selectedImage || actions.length > 0 || showContinue);
-    const stepStateLabel = isApplied
-        ? t('agent.pipelineSteps.applied')
-        : block.isCurrent
-            ? t('agent.pipelineSteps.current')
-            : '';
+    const forceCollapsed = isStepBlock && Boolean(context.stepBlocksCollapsed);
+    const isHiddenStepBlock = isStepBlock && context.hiddenStepBlockIds instanceof Set && context.hiddenStepBlockIds.has(block.id);
+    const isOpen = !isStepBlock || (!forceCollapsed && Boolean(block.expanded || block.isCurrent || (!isApplied && (selectedImage || actions.length > 0 || showContinue))));
+    const stepStateLabel = isApplied ? t('agent.pipelineSteps.applied') : '';
+    const currentStepLabel = block.isCurrent && !isApplied ? t('agent.pipelineSteps.current') : '';
+    const statusText = isStepBlock && isApplied && /^已应用|^Applied/i.test(String(block.statusText || ''))
+        ? ''
+        : block.statusText;
+    const showProgressTrack = !isStepBlock || !isApplied;
     const content = `
             ${isStepBlock ? '' : `
             <div class="agent-block-header">
@@ -4985,16 +5145,18 @@ function renderAgentProgressBlock(block, context = {}) {
                 <span class="agent-block-meta">${percentText}</span>
             </div>
             `}
+            ${showProgressTrack ? `
             <div class="agent-progress-track ${block.indeterminate ? 'is-indeterminate' : ''}">
                 <div class="agent-progress-fill" style="width:${Math.round(progress * 100)}%"></div>
             </div>
-            ${block.statusText ? `<div class="agent-block-status">${escapeHtml(block.statusText)}</div>` : ''}
+            ` : ''}
+            ${statusText ? `<div class="agent-block-status">${escapeHtml(statusText)}</div>` : ''}
             ${selectedImage ? `
                 <div class="agent-step-gallery ${isApplied ? 'is-applied' : ''}" data-agent-step-gallery="${block.id}">
                     <div class="agent-step-gallery-main">
                         <div class="agent-step-gallery-image">
-                            <div class="agent-image-frame is-ready">
-                                <img src="${escapeHtml(selectedImage.src)}" alt="${escapeHtml(selectedImage.alt || selectedImage.title || block.title || t('agent.blocks.image'))}" loading="lazy">
+                            <div class="agent-image-frame is-ready"${renderAgentImageAspectStyle(selectedImage)}>
+                                <img src="${escapeHtml(selectedImage.src)}" alt="${escapeHtml(selectedImage.alt || selectedImage.title || block.title || t('agent.blocks.image'))}" loading="eager" decoding="async">
                                 ${images.length > 1 ? `<span class="agent-step-gallery-count">${selectedIndex + 1} / ${images.length}</span>` : ''}
                                 ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-prev" data-agent-step-gallery-nav="prev" data-agent-block-id="${block.id}" ${!isApplied && selectedIndex > 0 ? '' : 'disabled'} aria-label="Previous image">‹</button>` : ''}
                                 ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-next" data-agent-step-gallery-nav="next" data-agent-block-id="${block.id}" ${!isApplied && selectedIndex < images.length - 1 ? '' : 'disabled'} aria-label="Next image">›</button>` : ''}
@@ -5019,12 +5181,14 @@ function renderAgentProgressBlock(block, context = {}) {
     `;
     if (isStepBlock) {
         return `
-            <details class="agent-block agent-block-progress agent-step-block ${isApplied ? 'is-applied' : ''} ${block.isCurrent ? 'is-current' : ''}" data-agent-block-id="${block.id}" data-agent-session-id="${escapeHtml(context.sessionId || '')}" data-agent-attempt-id="${escapeHtml(context.attemptId || '')}" data-agent-step-key="${escapeHtml(block.stepKey || '')}" ${isOpen ? 'open' : ''}>
+            <details class="agent-block agent-block-progress agent-step-block ${isApplied ? 'is-applied' : ''} ${block.isCurrent ? 'is-current' : ''} ${isHiddenStepBlock ? 'is-deferred-hidden' : ''}" data-agent-block-id="${block.id}" data-agent-session-id="${escapeHtml(context.sessionId || '')}" data-agent-attempt-id="${escapeHtml(context.attemptId || '')}" data-agent-step-key="${escapeHtml(block.stepKey || '')}" ${isOpen ? 'open' : ''} ${isHiddenStepBlock ? 'hidden' : ''}>
                 <summary class="agent-block-header agent-step-summary">
+                    ${stepThumbnail ? `<span class="agent-step-summary-thumb"><img src="${escapeHtml(stepThumbnail)}" alt="" loading="eager" decoding="async"></span>` : ''}
+                    ${currentStepLabel ? `<span class="agent-step-current-tag">${escapeHtml(currentStepLabel)}</span>` : ''}
                     <span class="agent-block-title">${escapeHtml(block.title || t('agent.blocks.progress'))}</span>
                     <span class="agent-step-summary-meta">
                         ${stepStateLabel ? `<span class="agent-step-state">${escapeHtml(stepStateLabel)}</span>` : ''}
-                        <span class="agent-block-meta">${percentText}</span>
+                        ${showProgressTrack ? `<span class="agent-block-meta">${percentText}</span>` : ''}
                     </span>
                 </summary>
                 <div class="agent-step-body">
@@ -5077,7 +5241,6 @@ function renderAgentStepImageMetadata(image) {
     return `
         <div class="agent-step-metadata">
             <span>${escapeHtml(t('agent.pipelineSteps.layoutDetections', { count: detectionCount }))}</span>
-            ${metadata.bboxJsonPath ? `<span>${escapeHtml(metadata.bboxJsonPath)}</span>` : ''}
             ${labels.length > 0 ? `<span>${escapeHtml(labels.join(' / '))}</span>` : ''}
         </div>
     `;
@@ -5091,9 +5254,9 @@ function renderAgentImageBlock(block) {
                 <span class="agent-block-title">${escapeHtml(block.title || t('agent.blocks.image'))}</span>
                 <span class="agent-block-meta">${escapeHtml(getAgentBlockStatusLabel(block.status))}</span>
             </div>
-            <div class="agent-image-frame ${ready ? 'is-ready' : ''}">
+            <div class="agent-image-frame ${ready ? 'is-ready' : ''}"${ready ? renderAgentImageAspectStyle(block) : ''}>
                 ${ready
-                    ? `<img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt || block.title || t('agent.blocks.image'))}" loading="lazy">`
+                    ? `<img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt || block.title || t('agent.blocks.image'))}" loading="eager" decoding="async">`
                     : `<div class="agent-image-placeholder">${escapeHtml(t('agent.imageLoading'))}</div>`}
             </div>
         </section>
@@ -5141,12 +5304,20 @@ function shouldShowAgentStepBlock(block) {
     return Boolean(
         block?.applied
         || block?.isCurrent
+        || block?.expanded
         || (Array.isArray(block?.images) && block.images.length > 0)
         || (Array.isArray(block?.actions) && block.actions.length > 0)
     );
 }
 
 function renderAgentStepBlocks(blocks, context = {}) {
+    if (context.stepBlocksCollapsed) {
+        return `
+            <div class="agent-message-blocks agent-step-list">
+                ${blocks.map((block) => renderAgentProgressBlock(block, context)).join('')}
+            </div>
+        `;
+    }
     let anchorIndex = -1;
     for (let index = blocks.length - 1; index >= 0; index -= 1) {
         if (shouldShowAgentStepBlock(blocks[index])) {
@@ -5157,18 +5328,12 @@ function renderAgentStepBlocks(blocks, context = {}) {
     if (anchorIndex < 0) anchorIndex = 0;
     const nextIndex = Math.min(blocks.length - 1, anchorIndex + 1);
     const visibleBlocks = blocks.filter((block, index) => shouldShowAgentStepBlock(block) || index === nextIndex);
-    const hiddenBlocks = blocks.filter((block, index) => !visibleBlocks.includes(block) && index > nextIndex);
+    const hiddenStepBlockIds = new Set(blocks
+        .filter((block, index) => !visibleBlocks.includes(block) && index > nextIndex)
+        .map((block) => block.id));
     return `
         <div class="agent-message-blocks agent-step-list">
-            ${visibleBlocks.map((block) => renderAgentProgressBlock(block, context)).join('')}
-            ${hiddenBlocks.length > 0 ? `
-                <details class="agent-step-overflow">
-                    <summary>${escapeHtml(t('agent.pipelineSteps.more'))}</summary>
-                    <div class="agent-step-overflow-list">
-                        ${hiddenBlocks.map((block) => renderAgentProgressBlock(block, context)).join('')}
-                    </div>
-                </details>
-            ` : ''}
+            ${blocks.map((block) => renderAgentProgressBlock(block, { ...context, hiddenStepBlockIds })).join('')}
         </div>
     `;
 }
@@ -5331,7 +5496,7 @@ function renderAgentSessionItem(session) {
     if (!session || session.kind !== 'session') return '';
     if (session.collapsed && session.archiveState !== 'active') {
         return `
-            <div class="agent-message is-assistant is-session is-session-collapsed">
+            <div class="agent-message is-assistant is-session is-session-collapsed" data-agent-session-id="${escapeHtml(session.id)}">
                 ${renderAgentSessionArchiveTag(session)}
             </div>
         `;
@@ -5339,15 +5504,18 @@ function renderAgentSessionItem(session) {
 
     const attempt = getAgentSessionActiveAttempt(session);
     const totalAttempts = session.attempts?.length || 0;
+    const pipelineProgressLabel = getAgentPipelineProgressLabel(attempt);
+    const hasPipelineStepToggle = Boolean(pipelineProgressLabel);
+    const arePipelineStepsCollapsed = Boolean(attempt?.stepBlocksCollapsed);
     const archiveStateLabel = session.archiveState === 'canceled'
         ? t('common.canceled')
         : session.archiveState === 'applied'
             ? t('common.applied')
             : attempt?.status === 'failed'
                 ? t('common.failed')
-                : attempt?.status === 'complete'
+                : pipelineProgressLabel || (attempt?.status === 'complete'
                     ? t('common.completed')
-                    : t('common.generating');
+                    : t('common.generating'));
     const isArchivedExpanded = session.archiveState !== 'active' && !session.collapsed;
     const actionAvailability = resolveAgentSessionActionAvailability({
         archiveState: session.archiveState,
@@ -5355,13 +5523,24 @@ function renderAgentSessionItem(session) {
     });
 
     return `
-        <div class="agent-message is-assistant is-session">
+        <div class="agent-message is-assistant is-session" data-agent-session-id="${escapeHtml(session.id)}">
             <div class="agent-session-stack">
                 <div class="agent-message-bubble agent-session-bubble">
                     <div class="agent-session-header">
                         <span class="agent-message-role">${escapeHtml(t('common.agent'))}</span>
                         <div class="agent-session-header-meta">
                             ${totalAttempts > 1 ? `<span class="agent-session-attempt-label">${escapeHtml(t('common.version', { current: session.activeAttemptIndex + 1, total: totalAttempts }))}</span>` : ''}
+                            ${hasPipelineStepToggle ? `
+                                <button
+                                    type="button"
+                                    class="agent-session-step-toggle ${arePipelineStepsCollapsed ? 'is-collapsed' : ''}"
+                                    data-agent-session-step-toggle="${session.id}"
+                                    data-agent-session-attempt-id="${attempt?.id || ''}"
+                                    aria-pressed="${arePipelineStepsCollapsed ? 'true' : 'false'}"
+                                    title="${escapeHtml(arePipelineStepsCollapsed ? t('agent.expandAllSteps') : t('agent.collapseAllSteps'))}"
+                                    aria-label="${escapeHtml(arePipelineStepsCollapsed ? t('agent.expandAllSteps') : t('agent.collapseAllSteps'))}"
+                                >${createAgentStepExpandToggleIcon()}</button>
+                            ` : ''}
                             <span class="agent-session-status">${archiveStateLabel}</span>
                             ${isArchivedExpanded ? `
                                 <button
@@ -5376,7 +5555,7 @@ function renderAgentSessionItem(session) {
                         </div>
                     </div>
                     <div class="agent-message-text">${escapeHtml(attempt?.text || '')}</div>
-                    ${renderAgentBlocks(getAgentAttemptStepBlocks(attempt), { sessionId: session.id, attemptId: attempt?.id || '' })}
+                    ${renderAgentBlocks(getAgentAttemptStepBlocks(attempt), { sessionId: session.id, attemptId: attempt?.id || '', stepBlocksCollapsed: arePipelineStepsCollapsed })}
                     ${renderAgentPromptSuggestions(attempt?.promptSuggestions)}
                     <div class="agent-session-footer">
                         ${isArchivedExpanded ? '' : `
@@ -5535,11 +5714,249 @@ function bindAgentMessageAsyncBottomPin() {
     });
 }
 
-function renderAgentMessages({ autoScroll = 'preserve-or-pin-bottom' } = {}) {
+function retainAgentThumbnailImageCache(root = dom.agentMessageList) {
+    if (!root || typeof Image === 'undefined') return;
+    const activeSources = new Set();
+    root.querySelectorAll('.agent-step-summary-thumb img, .agent-session-archive-thumb img').forEach((img) => {
+        if (!(img instanceof HTMLImageElement)) return;
+        const src = String(img.currentSrc || img.src || '').trim();
+        if (!src) return;
+        activeSources.add(src);
+        if (agentThumbnailImageCache.has(src)) return;
+        const cachedImage = new Image();
+        cachedImage.decoding = 'async';
+        cachedImage.loading = 'eager';
+        cachedImage.src = src;
+        agentThumbnailImageCache.set(src, cachedImage);
+        cachedImage.decode?.().catch(() => {});
+    });
+    Array.from(agentThumbnailImageCache.keys()).forEach((src) => {
+        if (!activeSources.has(src)) {
+            agentThumbnailImageCache.delete(src);
+        }
+    });
+}
+
+function syncAgentImageFrameAspectRatios(root = dom.agentMessageList) {
+    if (!root) return;
+    root.querySelectorAll('.agent-image-frame.is-ready img').forEach((img) => {
+        if (!(img instanceof HTMLImageElement)) return;
+        const frame = img.closest('.agent-image-frame');
+        if (!(frame instanceof HTMLElement)) return;
+        const applyRatio = () => {
+            const width = Number(img.naturalWidth || 0);
+            const height = Number(img.naturalHeight || 0);
+            if (width > 0 && height > 0) {
+                frame.style.setProperty('--agent-image-aspect-ratio', (width / height).toFixed(4));
+            }
+        };
+        if (img.complete) {
+            applyRatio();
+            return;
+        }
+        img.addEventListener('load', applyRatio, { once: true });
+    });
+}
+
+function getAgentSessionDomElement(sessionId) {
+    if (!dom.agentMessageList || !sessionId) return null;
+    return dom.agentMessageList.querySelector(`[data-agent-session-id="${escapeCssIdentifier(sessionId)}"]`);
+}
+
+function getAgentStepBlockDomSelector(sessionId, attemptId) {
+    return `.agent-step-block[data-agent-session-id="${escapeCssIdentifier(sessionId)}"][data-agent-attempt-id="${escapeCssIdentifier(attemptId)}"]`;
+}
+
+function captureAgentMessageLayoutAnimation(options = null) {
+    if (!options || !dom.agentMessageList || !dom.agentMessageScroll) return null;
+    const sessionId = String(options.sessionId || '').trim();
+    const attemptId = String(options.attemptId || '').trim();
+    if (!sessionId || !attemptId) return null;
+    const sessionElement = getAgentSessionDomElement(sessionId);
+    const sessionRect = sessionElement?.getBoundingClientRect?.() || null;
+    const blocks = new Map();
+    dom.agentMessageList.querySelectorAll(getAgentStepBlockDomSelector(sessionId, attemptId)).forEach((element) => {
+        if (!(element instanceof HTMLDetailsElement)) return;
+        const blockId = String(element.dataset.agentBlockId || '').trim();
+        if (!blockId) return;
+        blocks.set(blockId, {
+            height: element.offsetHeight,
+            open: element.open,
+        });
+    });
+    return {
+        sessionId,
+        attemptId,
+        expand: Boolean(options.expand),
+        sessionTop: sessionRect?.top ?? null,
+        scrollTop: dom.agentMessageScroll.scrollTop,
+        clientHeight: dom.agentMessageScroll.clientHeight,
+        scrollHeight: dom.agentMessageScroll.scrollHeight,
+        wasPinnedToBottom: shouldForceAgentMessageBottomAfterRender({
+            mode: 'preserve-or-pin-bottom',
+            prevScrollTop: dom.agentMessageScroll.scrollTop,
+            prevClientHeight: dom.agentMessageScroll.clientHeight,
+            prevScrollHeight: dom.agentMessageScroll.scrollHeight,
+        }),
+        blocks,
+    };
+}
+
+function prepareAgentMessageLayoutAnimation(snapshot) {
+    if (!snapshot || !dom.agentMessageList) return null;
+    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    if (prefersReducedMotion) return null;
+
+    const items = [];
+    dom.agentMessageList.querySelectorAll(getAgentStepBlockDomSelector(snapshot.sessionId, snapshot.attemptId)).forEach((element) => {
+        if (!(element instanceof HTMLDetailsElement)) return;
+        const blockId = String(element.dataset.agentBlockId || '').trim();
+        const previous = snapshot.blocks.get(blockId);
+        if (!previous) return;
+        const endHeight = element.offsetHeight;
+        const startHeight = Math.max(0, previous.height);
+        if (Math.abs(endHeight - startHeight) < 1) return;
+        element.classList.add('is-animating', snapshot.expand ? 'is-opening' : 'is-closing');
+        element.style.height = `${startHeight}px`;
+        items.push({
+            element,
+            endHeight,
+        });
+    });
+    return items.length > 0 ? { ...snapshot, items } : null;
+}
+
+function restoreAgentMessageLayoutAnchor(snapshot) {
+    if (!snapshot || !dom.agentMessageScroll || snapshot.sessionTop === null) return;
+    if (snapshot.wasPinnedToBottom) {
+        forceAgentMessageScrollToBottom();
+        return;
+    }
+    const sessionElement = getAgentSessionDomElement(snapshot.sessionId);
+    const nextTop = sessionElement?.getBoundingClientRect?.().top;
+    if (!Number.isFinite(nextTop)) return;
+    dom.agentMessageScroll.scrollTop += nextTop - snapshot.sessionTop;
+}
+
+function runAgentMessageLayoutAnimation(animation) {
+    if (!animation || animation.items.length <= 0) return;
+    if (agentMessageLayoutAnimationRaf !== 0) {
+        cancelAnimationFrame(agentMessageLayoutAnimationRaf);
+        agentMessageLayoutAnimationRaf = 0;
+    }
+    agentMessageLayoutAnimationRaf = requestAnimationFrame(() => {
+        agentMessageLayoutAnimationRaf = 0;
+        animation.items.forEach(({ element, endHeight }) => {
+            if (animation.expand) {
+                element.classList.remove('is-opening');
+            }
+            element.style.height = `${endHeight}px`;
+        });
+        scheduleAgentMessageScrollbarSync();
+    });
+    window.setTimeout(() => {
+        animation.items.forEach(({ element }) => {
+            element.classList.remove('is-animating', 'is-opening', 'is-closing');
+            element.style.height = '';
+        });
+        if (animation.wasPinnedToBottom) {
+            scheduleAgentMessageBottomPin(2);
+        } else {
+            restoreAgentMessageLayoutAnchor(animation);
+        }
+        syncAgentMessageScrollbar();
+    }, AGENT_STEP_ANIMATION_MS + 40);
+}
+
+function syncAgentSessionStepToggleDom(sessionId, collapsed) {
+    const sessionElement = getAgentSessionDomElement(sessionId);
+    const toggle = sessionElement?.querySelector?.('[data-agent-session-step-toggle]');
+    if (!(toggle instanceof HTMLElement)) return;
+    toggle.classList.toggle('is-collapsed', Boolean(collapsed));
+    toggle.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
+    const label = collapsed ? t('agent.expandAllSteps') : t('agent.collapseAllSteps');
+    toggle.title = label;
+    toggle.setAttribute('aria-label', label);
+}
+
+function syncAgentSessionStepBlocksDom(sessionId, attemptId, expanded) {
+    if (!dom.agentMessageList || !sessionId || !attemptId) return false;
+    const blocks = Array.from(dom.agentMessageList.querySelectorAll(getAgentStepBlockDomSelector(sessionId, attemptId)))
+        .filter((element) => element instanceof HTMLDetailsElement);
+    if (blocks.length <= 0) return false;
+
+    const shouldExpand = Boolean(expanded);
+    const snapshot = captureAgentMessageLayoutAnimation({ sessionId, attemptId, expand: shouldExpand });
+    blocks.forEach((details) => {
+        details.hidden = false;
+        details.classList.remove('is-deferred-hidden');
+        details.open = shouldExpand;
+    });
+    syncAgentSessionStepToggleDom(sessionId, !shouldExpand);
+    const animation = prepareAgentMessageLayoutAnimation(snapshot);
+    restoreAgentMessageLayoutAnchor(snapshot);
+    syncAgentImageFrameAspectRatios(getAgentSessionDomElement(sessionId) || dom.agentMessageList);
+    retainAgentThumbnailImageCache(dom.agentMessageList);
+    syncAgentMessageScrollbar();
+    runAgentMessageLayoutAnimation(animation);
+    requestAnimationFrame(() => {
+        syncAgentMessageScrollbar();
+        void syncAgent3DBlocks();
+    });
+    return true;
+}
+
+function renderAgentSessionElement(sessionId, { autoScroll = 'preserve-or-pin-bottom', animateLayout = null } = {}) {
+    if (!dom.agentMessageList) return false;
+    const session = state.agentMessages.find((item) => item?.kind === 'session' && item.id === sessionId);
+    const currentElement = getAgentSessionDomElement(sessionId);
+    if (!session || !currentElement) {
+        renderAgentMessages({ autoScroll, animateLayout });
+        return false;
+    }
+
+    const prevScrollTop = dom.agentMessageScroll?.scrollTop ?? 0;
+    const prevClientHeight = dom.agentMessageScroll?.clientHeight ?? 0;
+    const prevScrollHeight = dom.agentMessageScroll?.scrollHeight ?? 0;
+    const layoutSnapshot = captureAgentMessageLayoutAnimation(animateLayout);
+    const shouldForceBottomAfterRender = shouldForceAgentMessageBottomAfterRender({
+        mode: autoScroll,
+        prevScrollTop,
+        prevClientHeight,
+        prevScrollHeight,
+    });
+    const template = document.createElement('template');
+    template.innerHTML = renderAgentSessionItem(session).trim();
+    const nextElement = template.content.firstElementChild;
+    if (!(nextElement instanceof HTMLElement)) {
+        renderAgentMessages({ autoScroll, animateLayout });
+        return false;
+    }
+    currentElement.replaceWith(nextElement);
+    const layoutAnimation = prepareAgentMessageLayoutAnimation(layoutSnapshot);
+    restoreAgentMessageLayoutAnchor(layoutSnapshot);
+    syncAgentImageFrameAspectRatios(nextElement);
+    retainAgentThumbnailImageCache(dom.agentMessageList);
+    syncAgentMessageScrollbar();
+    runAgentMessageLayoutAnimation(layoutAnimation);
+    requestAnimationFrame(() => {
+        if (shouldForceBottomAfterRender) {
+            scheduleAgentMessageBottomPin(4);
+            bindAgentMessageAsyncBottomPin();
+            return;
+        }
+        syncAgentMessageScrollbar();
+    });
+    void syncAgent3DBlocks();
+    return true;
+}
+
+function renderAgentMessages({ autoScroll = 'preserve-or-pin-bottom', animateLayout = null } = {}) {
     if (!dom.agentMessageList) return;
     const prevScrollTop = dom.agentMessageScroll?.scrollTop ?? 0;
     const prevClientHeight = dom.agentMessageScroll?.clientHeight ?? 0;
     const prevScrollHeight = dom.agentMessageScroll?.scrollHeight ?? 0;
+    const layoutSnapshot = captureAgentMessageLayoutAnimation(animateLayout);
     const shouldForceBottomAfterRender = shouldForceAgentMessageBottomAfterRender({
         mode: autoScroll,
         prevScrollTop,
@@ -5551,6 +5968,9 @@ function renderAgentMessages({ autoScroll = 'preserve-or-pin-bottom' } = {}) {
             ? renderAgentSessionItem(item)
             : renderAgentMessageItem(item)
     )).join('');
+    const layoutAnimation = prepareAgentMessageLayoutAnimation(layoutSnapshot);
+    syncAgentImageFrameAspectRatios(dom.agentMessageList);
+    retainAgentThumbnailImageCache(dom.agentMessageList);
     if (dom.agentMessageScroll) {
         dom.agentMessageScroll.scrollTop = resolveAgentMessageRefreshScrollTop({
             mode: autoScroll,
@@ -5560,7 +5980,9 @@ function renderAgentMessages({ autoScroll = 'preserve-or-pin-bottom' } = {}) {
             nextScrollHeight: dom.agentMessageScroll.scrollHeight,
         });
     }
+    restoreAgentMessageLayoutAnchor(layoutSnapshot);
     syncAgentMessageScrollbar();
+    runAgentMessageLayoutAnimation(layoutAnimation);
     requestAnimationFrame(() => {
         if (shouldForceBottomAfterRender) {
             scheduleAgentMessageBottomPin(8);
@@ -5743,8 +6165,69 @@ function resetAllAgentConversations() {
     renderAgentMessages({ autoScroll: 'always' });
 }
 
+function animateAgentStepBlockToggle(details, expand) {
+    if (!(details instanceof HTMLDetailsElement)) return false;
+    if (details.classList.contains('is-animating')) return true;
+    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    if (prefersReducedMotion) {
+        details.open = Boolean(expand);
+        return true;
+    }
+
+    const startHeight = details.offsetHeight;
+    details.classList.add('is-animating', expand ? 'is-opening' : 'is-closing');
+    if (expand) {
+        details.open = true;
+    }
+    details.style.height = `${startHeight}px`;
+    details.offsetHeight;
+    if (expand) {
+        requestAnimationFrame(() => {
+            details.classList.remove('is-opening');
+        });
+    }
+    const endHeight = expand ? details.scrollHeight : (details.querySelector('.agent-step-summary')?.offsetHeight || 34);
+    details.style.height = `${endHeight}px`;
+
+    const finish = () => {
+        details.classList.remove('is-animating', 'is-opening', 'is-closing');
+        details.style.height = '';
+        details.open = Boolean(expand);
+    };
+    window.setTimeout(finish, 220);
+    return true;
+}
+
+function handleAgentStepSummaryToggle(event, summary) {
+    const details = summary?.closest?.('.agent-step-block');
+    if (!(details instanceof HTMLDetailsElement)) return false;
+    event.preventDefault();
+    return animateAgentStepBlockToggle(details, !details.open);
+}
+
+function escapeCssIdentifier(value) {
+    return typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(value)
+        : String(value).replace(/["\\]/g, '\\$&');
+}
+
 function handleAgentMessageListClick(event) {
     if (!(event.target instanceof Element)) return;
+    const sessionStepToggle = event.target.closest('[data-agent-session-step-toggle]');
+    if (sessionStepToggle instanceof HTMLElement) {
+        const sessionId = String(sessionStepToggle.dataset.agentSessionStepToggle || '').trim();
+        const attemptId = String(sessionStepToggle.dataset.agentSessionAttemptId || '').trim();
+        const session = state.agentMessages.find((item) => item?.kind === 'session' && item.id === sessionId);
+        const attempt = session?.attempts?.find((item) => item?.id === attemptId);
+        if (!session || !attempt) return;
+        const nextCollapsed = !Boolean(attempt.stepBlocksCollapsed);
+        renderAgentSessionStepBlocksExpanded(sessionId, attemptId, !nextCollapsed);
+        return;
+    }
+    const stepSummary = event.target.closest('.agent-step-summary');
+    if (stepSummary instanceof HTMLElement && handleAgentStepSummaryToggle(event, stepSummary)) {
+        return;
+    }
     const pipelineContinueButton = event.target.closest('[data-agent-pipeline-continue]');
     if (pipelineContinueButton instanceof HTMLElement) {
         const context = getAgentStepBlockContextFromElement(pipelineContinueButton);
@@ -6236,27 +6719,29 @@ function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
 
 async function handleAgentStepAction(context, action) {
     if (!canUseServerCodexAgent()) return;
-    const currentImages = Array.isArray(context.block.images) ? context.block.images : [];
-    const selectedIndex = Math.max(0, Math.min(currentImages.length - 1, Number(context.block.selectedIndex) || 0));
-    patchAgentStepBlock(context, {
-        statusText: action === 'retry' ? t('common.generating') : context.block.statusText,
+    const liveContext = getAgentStepBlockContextById(context?.sessionId, context?.attemptId, context?.blockId) || context;
+    if (!liveContext) return;
+    const currentImages = Array.isArray(liveContext.block.images) ? liveContext.block.images : [];
+    const selectedIndex = Math.max(0, Math.min(currentImages.length - 1, Number(liveContext.block.selectedIndex) || 0));
+    patchAgentStepBlock(liveContext, {
+        statusText: action === 'retry' ? t('common.generating') : liveContext.block.statusText,
         indeterminate: action === 'retry',
     });
     const result = await projectApi.sendCodexAgentStepAction({
         user: state.projectSession.user,
         projectId: state.projectSession.activeProjectId,
-        sessionId: context.sessionId,
-        stepKey: context.stepKey,
+        sessionId: liveContext.sessionId,
+        stepKey: liveContext.stepKey,
         action,
-        prompt: context.session.prompt || context.attempt.text || '',
+        prompt: liveContext.session.prompt || liveContext.attempt.text || '',
         selectedIndex,
         images: currentImages.map((image) => serializeAgentStepImage(image)),
         sourceImages: [
-            serializeAgentStepSourceImage(context.attempt, 'main-image'),
-            serializeAgentStepSourceImage(context.attempt, 'front-view'),
-            serializeAgentStepSourceImage(context.attempt, 'top-view'),
-            serializeAgentStepSourceImage(context.attempt, 'layout'),
-            serializeAgentStepSourceImage(context.attempt, 'components-3d'),
+            serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'main-image'),
+            serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'front-view'),
+            serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'top-view'),
+            serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'layout'),
+            serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'components-3d'),
         ].filter(Boolean),
     });
     const patch = result?.blockPatch || {};
@@ -6274,16 +6759,47 @@ async function handleAgentStepAction(context, action) {
                 src: assetPath
                     ? projectApi.getAssetUrl(state.projectSession.user, state.projectSession.activeProjectId, assetPath)
                     : image?.src || '',
-                alt: context.session.prompt || context.attempt.text || '',
+                alt: liveContext.session.prompt || liveContext.attempt.text || '',
             };
         })
         : currentImages;
-    patchAgentStepBlock(context, {
-        ...patch,
-        images: nextImages,
-    });
+    if (patch.sceneInsertPlan && typeof patch.sceneInsertPlan === 'object') {
+        let inserted = { loaded: 0, failed: 0 };
+        try {
+            inserted = await applyAgentSceneInsertPlan(patch.sceneInsertPlan);
+            if (inserted.loaded <= 0) {
+                throw new Error(t('messages.loadModelFailed', { name: 'insert-scene' }));
+            }
+        } catch (error) {
+            patchAgentStepBlock(liveContext, {
+                ...patch,
+                images: nextImages,
+                statusText: error?.message || String(error),
+                value: 1,
+                indeterminate: false,
+                applied: false,
+                actions: ['cancel', 'retry'],
+            });
+            throw error;
+        }
+        patchAgentStepBlock(liveContext, {
+            ...patch,
+            images: nextImages,
+            statusText: t('agent.pipelineSteps.insertSceneInserted', { count: inserted.loaded }),
+            value: 1,
+            indeterminate: false,
+            applied: true,
+            actions: [],
+        });
+    } else {
+        patchAgentStepBlock(liveContext, {
+            ...patch,
+            images: nextImages,
+        });
+    }
     if (action === 'apply') {
-        const nextContext = advanceAgentPipelineAfterStepApply(context);
+        const appliedContext = getAgentStepBlockContextById(liveContext.sessionId, liveContext.attemptId, liveContext.blockId) || liveContext;
+        const nextContext = advanceAgentPipelineAfterStepApply(appliedContext);
         if (nextContext) {
             await handleAgentStepAction(nextContext, 'retry');
         }
@@ -9617,6 +10133,164 @@ function inferAssetType(pathOrName = '') {
     if (text.endsWith('.compressed.ply')) return 'compressed.ply';
     if (text.endsWith('.ply')) return 'ply';
     return 'ply';
+}
+
+function finiteNumberTuple(value, length, fallback = []) {
+    if (!Array.isArray(value) || value.length < length) return fallback;
+    const values = value.slice(0, length).map((item, index) => {
+        const numeric = Number(item);
+        return Number.isFinite(numeric) ? numeric : Number(fallback[index] ?? 0);
+    });
+    return values.length === length ? values : fallback;
+}
+
+function computeObject3DDimensions(root) {
+    if (!root || typeof root.traverse !== 'function') return null;
+    root.updateMatrixWorld?.(true);
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    const corners = [
+        [0, 0, 0],
+        [0, 0, 1],
+        [0, 1, 0],
+        [0, 1, 1],
+        [1, 0, 0],
+        [1, 0, 1],
+        [1, 1, 0],
+        [1, 1, 1],
+    ];
+    root.traverse((child) => {
+        const geometry = child?.geometry;
+        const box = geometry?.boundingBox;
+        if (!geometry || !child?.matrixWorld) return;
+        if (!box && typeof geometry.computeBoundingBox === 'function') {
+            geometry.computeBoundingBox();
+        }
+        const bounds = geometry.boundingBox;
+        if (!bounds?.min || !bounds?.max) return;
+        const e = child.matrixWorld.elements;
+        if (!e || e.length < 16) return;
+        for (const corner of corners) {
+            const x = corner[0] ? bounds.max.x : bounds.min.x;
+            const y = corner[1] ? bounds.max.y : bounds.min.y;
+            const z = corner[2] ? bounds.max.z : bounds.min.z;
+            const wx = e[0] * x + e[4] * y + e[8] * z + e[12];
+            const wy = e[1] * x + e[5] * y + e[9] * z + e[13];
+            const wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+            min[0] = Math.min(min[0], wx);
+            min[1] = Math.min(min[1], wy);
+            min[2] = Math.min(min[2], wz);
+            max[0] = Math.max(max[0], wx);
+            max[1] = Math.max(max[1], wy);
+            max[2] = Math.max(max[2], wz);
+        }
+    });
+    if (!min.every(Number.isFinite) || !max.every(Number.isFinite)) return null;
+    const dimensions = [
+        Math.abs(max[0] - min[0]),
+        Math.abs(max[1] - min[1]),
+        Math.abs(max[2] - min[2]),
+    ];
+    return dimensions.every((value) => Number.isFinite(value) && value > 0) ? dimensions : null;
+}
+
+function resolveAgentSceneInsertScale(loadedModel, transform = {}, fallbackScale = [1, 1, 1]) {
+    const referenceSize = finiteNumberTuple(transform.referenceSize, 3, []);
+    const minScale = Number.isFinite(Number(transform.minScale)) ? Number(transform.minScale) : 0.05;
+    const maxScale = Number.isFinite(Number(transform.maxScale)) ? Number(transform.maxScale) : 50;
+    const dimensions = computeObject3DDimensions(loadedModel?.object3D);
+    if (dimensions && referenceSize.length === 3) {
+        const ratios = referenceSize
+            .map((size, index) => dimensions[index] > 0 ? Number(size) / dimensions[index] : null)
+            .filter((value) => Number.isFinite(value) && value > 0);
+        if (ratios.length > 0) {
+            const scale = Math.min(...ratios);
+            return Math.max(minScale, Math.min(maxScale, scale));
+        }
+    }
+    const scale = finiteNumberTuple(transform.scale, 3, fallbackScale);
+    return (Math.abs(scale[0] - scale[1]) < 1e-6 && Math.abs(scale[1] - scale[2]) < 1e-6)
+        ? scale[0]
+        : (scale[0] + scale[1] + scale[2]) / 3;
+}
+
+async function applyAgentSceneInsertPlan(plan) {
+    if (!app) {
+        throw new Error(t('messages.editorNotInitialized'));
+    }
+    if (!isServerProjectSessionActive()) {
+        throw new Error(t('projectSession.loginRequired'));
+    }
+    const items = Array.isArray(plan?.items) ? plan.items : [];
+    if (items.length <= 0) {
+        return { loaded: 0, failed: 0 };
+    }
+
+    let loaded = 0;
+    let failed = 0;
+    showLoading(true, t('loading.loadingSceneAssets', { current: 0, total: items.length }), 0);
+    try {
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i] || {};
+            const sourcePath = String(item.path || item.modelPath || item.relativePath || '').trim();
+            showLoading(true, t('loading.loadingSceneAssets', { current: i + 1, total: items.length }), ((i + 1) / items.length) * 100);
+            if (!sourcePath) {
+                failed++;
+                continue;
+            }
+            try {
+                const response = await fetch(projectApi.getAssetUrl(
+                    state.projectSession.user,
+                    state.projectSession.activeProjectId,
+                    sourcePath,
+                ));
+                if (!response.ok) {
+                    throw new Error(t('messages.urlAssetLoadFailed', { status: response.status }));
+                }
+                const blob = await response.blob();
+                let targetName = sanitizeFileName(item.name || item.label || extractFileName(sourcePath));
+                const sourceExtension = (extractFileName(sourcePath).match(/\.[^.]+$/)?.[0] || '').toLowerCase();
+                if (sourceExtension && !targetName.toLowerCase().endsWith(sourceExtension)) {
+                    targetName = sanitizeFileName(`${targetName}${sourceExtension}`);
+                }
+                const fileForLoad = new File([blob], targetName, {
+                    type: blob.type || 'model/gltf-binary',
+                    lastModified: Date.now(),
+                });
+                const loadedModel = await app.loadModel(fileForLoad, {
+                    sourcePath: targetName,
+                    suppressLoadingOverlay: true,
+                });
+                if (!loadedModel) {
+                    throw new Error(t('messages.loadModelFailed', { name: targetName }));
+                }
+                if (targetName && loadedModel.name !== targetName) {
+                    app.renameModel?.(loadedModel.id, targetName, {
+                        sourcePath: targetName,
+                        sourceFile: fileForLoad,
+                    });
+                }
+                const transform = item.transform && typeof item.transform === 'object' ? item.transform : {};
+                const position = finiteNumberTuple(transform.position, 3, [0, 0, 0]);
+                const rotation = finiteNumberTuple(transform.rotationEulerRad, 3, [0, 0, 0]);
+                app.setModelPosition(loadedModel.id, position[0], position[1], position[2]);
+                app.setModelRotation(loadedModel.id, rotation[0], rotation[1], rotation[2]);
+                app.setModelScale(loadedModel.id, resolveAgentSceneInsertScale(loadedModel, transform));
+                applyPreviewModeToAllModels(state.exportMode);
+                loaded++;
+            } catch (assetError) {
+                failed++;
+                console.warn(`[Editor ${state.VERSION}] agent scene insert asset failed:`, item, assetError);
+            }
+        }
+    } finally {
+        showLoading(false);
+    }
+    if (loaded > 0) {
+        updateModelList();
+        markWorkspaceDirty('agent-insert-scene');
+    }
+    return { loaded, failed };
 }
 
 function extractFileName(pathOrUrl) {
