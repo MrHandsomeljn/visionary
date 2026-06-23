@@ -184,9 +184,9 @@ function buildFrontViewPrompt(input: {
   return [
     'Generate clean orthographic front-view component images for the scene.',
     'The front-view images should isolate the important visible objects as production-ready component references.',
-    'Keep proportions and visual style consistent with the source main image.',
+    'Use the attached source main image as the visual reference. Keep proportions and visual style consistent with it.',
     '',
-    `Source main image asset path: ${input.mainImagePath}`,
+    `Source main image asset path for traceability: ${input.mainImagePath}`,
     '',
     'Object / scene description:',
     input.objectDescriptions.trim(),
@@ -206,6 +206,11 @@ export async function generateFrontView(input: {
   const outputRoot = projectOutputRoot(input.projectRoot, input.projectId, input.runLabel, runId);
   const promptPath = path.join(outputRoot, 'front_view_prompt.txt');
   const batchOutputDir = path.join(outputRoot, 'front_views');
+  const root = path.resolve(input.projectRoot);
+  const sourceMainImagePath = path.resolve(root, input.mainImagePath);
+  if (!isPathInside(root, sourceMainImagePath)) {
+    throw new Error('Resolved main image path escapes project root.');
+  }
 
   emitProgress(title, '准备正视图 prompt', 0.01);
   await mkdir(batchOutputDir, { recursive: true });
@@ -222,6 +227,8 @@ export async function generateFrontView(input: {
     String(input.draws),
     '--workers',
     '1',
+    '--input-image',
+    sourceMainImagePath,
     '--output',
     batchOutputDir,
   ], NEW_PIPELINE_ROOT);
@@ -274,10 +281,10 @@ async function startMcpServer(): Promise<void> {
     'generate_front_view',
     {
       title: 'Generate front view',
-      description: 'Generate front-view component reference images through third-party/new_pipeline batch_generate.py.',
+      description: 'Generate front-view component reference images through third-party/new_pipeline batch_generate.py using the applied main image as Gemini image input.',
       inputSchema: {
         projectId: z.string().min(1).optional().describe('Optional Visionary project id. Defaults to the project id injected by the host runtime.'),
-        mainImagePath: z.string().min(1).describe('Project-relative agent_history path of the applied main image.'),
+        mainImagePath: z.string().min(1).describe('Project-relative agent_history path of the applied main image. The image is passed to batch_generate.py as --input-image.'),
         objectDescriptions: z.string().min(1).describe('Object and scene description used to generate front-view component references.'),
         draws: z.number().int().min(1).max(3).default(1).describe('How many front-view images to generate.'),
         runLabel: z.string().default('front-view').describe('Optional safe label appended to the run output directory.'),

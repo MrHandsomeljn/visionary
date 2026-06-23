@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -9,20 +8,32 @@ import { z } from 'zod';
 
 type JsonRecord = Record<string, unknown>;
 
-interface GeneratedAsset {
+interface ImageSize {
+  width: number;
+  height: number;
+}
+
+interface LayoutObject {
   id: string;
-  relativePath: string;
-  mimeType: string;
-  bytes: number;
-  metadata?: JsonRecord;
+  label: string;
+  bboxIndex: number;
+  frontPoint: unknown;
+  hasFront: boolean;
+  anchorPosition: [number, number, number];
+  referenceSize: [number, number, number];
+  targetYawDeg: number;
+}
+
+interface FrontOrientationIndex {
+  byFile: Map<string, JsonRecord>;
+  byKey: Map<string, JsonRecord>;
+  byBbox: Map<number, JsonRecord>;
 }
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const VISIONARY_ROOT = path.resolve(__dirname, '../../..');
-const REPO_ROOT = path.resolve(VISIONARY_ROOT, '..');
-const NEW_PIPELINE_ROOT = path.resolve(process.env.VISIONARY_NEW_PIPELINE_ROOT || path.join(REPO_ROOT, 'third-party', 'new_pipeline'));
-const PYTHON_BIN = path.join(NEW_PIPELINE_ROOT, '.venv', 'bin', 'python');
+const SCENE_SCALE = 0.01;
+const MIN_SCALE = 0.05;
+const MAX_SCALE = 50.0;
 
 function nowRunId(): string {
   return new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '_');
@@ -65,17 +76,6 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function fileAsset(projectRoot: string, id: string, filePath: string, mimeType: string, metadata: JsonRecord = {}): Promise<GeneratedAsset> {
-  const info = await stat(filePath);
-  return {
-    id,
-    relativePath: toRelative(projectRoot, filePath),
-    mimeType,
-    bytes: info.size,
-    metadata,
-  };
-}
-
 function emitProgress(title: string, message: string, progress: number): void {
   const payload = {
     type: progress <= 0.01 ? 'visionary.task.started' : progress >= 1 ? 'visionary.task.completed' : 'visionary.task.progress',
@@ -86,33 +86,6 @@ function emitProgress(title: string, message: string, progress: number): void {
     },
   };
   process.stderr.write(`${JSON.stringify(payload)}\n`);
-}
-
-async function runPythonScript(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(PYTHON_BIN, args, {
-      cwd,
-      env: process.env,
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-        return;
-      }
-      reject(new Error(`Python command failed with code ${code}: ${args.join(' ')}\n${stderr || stdout}`));
-    });
-  });
 }
 
 async function readJsonFile(filePath: string): Promise<unknown> {
@@ -132,57 +105,278 @@ async function collectGlbFiles(folder: string): Promise<string[]> {
     .sort((a, b) => a.localeCompare(b));
 }
 
-async function readFrontOrientationItemCount(frontOrientationPath: string): Promise<number> {
-  if (!await pathExists(frontOrientationPath)) return 0;
-  const frontOrientation = readRecord(await readJsonFile(frontOrientationPath));
-  return Array.isArray(frontOrientation.items) ? frontOrientation.items.length : 0;
+function parseImageDirIndex(filePath: string): number {
+  const match = path.basename(path.normalize(filePath)).match(/^image_(\d+)$/i);
+  if (!match) {
+    throw new Error(`Cannot infer image index from ${filePath}`);
+  }
+  return Number(match[1]);
 }
 
-function escapeSvgText(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+function imageStem(index: number): string {
+  return `image_${String(index).padStart(3, '0')}`;
 }
 
-async function writeBlendPreviewSvg(input: {
-  outputPath: string;
-  title: string;
-  blendPath: string;
-  objectCount: number;
-}): Promise<void> {
-  const svg = [
-    '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">',
-    '<rect width="1200" height="760" fill="#f5f2ec"/>',
-    '<rect x="72" y="72" width="1056" height="616" rx="18" fill="#ffffff" stroke="#2f3b45" stroke-width="3"/>',
-    '<rect x="116" y="116" width="968" height="360" rx="10" fill="#dfe8eb" stroke="#7f8b90" stroke-width="2"/>',
-    '<path d="M210 432 L410 245 L580 360 L725 220 L990 432 Z" fill="#97adb5"/>',
-    '<path d="M230 432 L230 528 L990 528 L990 432 Z" fill="#c7d4d8"/>',
-    '<circle cx="880" cy="198" r="42" fill="#f0b35a"/>',
-    `<text x="116" y="592" font-family="Arial, sans-serif" font-size="42" fill="#24313a">${escapeSvgText(input.title)}</text>`,
-    `<text x="116" y="642" font-family="Arial, sans-serif" font-size="24" fill="#5f6b73">layout.blend - ${input.objectCount} objects</text>`,
-    `<text x="116" y="676" font-family="Arial, sans-serif" font-size="20" fill="#7a858b">${escapeSvgText(input.blendPath)}</text>`,
-    '</svg>',
-    '',
-  ].join('\n');
-  await writeFile(input.outputPath, svg, 'utf8');
+function inferBatchFromHunyuanDir(hunyuanDir: string): { batchDir: string; imageIndex: number } {
+  const absPath = path.resolve(hunyuanDir);
+  const parts = absPath.split(path.sep);
+  for (let idx = 0; idx < parts.length - 2; idx += 1) {
+    if (parts[idx] !== 'pipeline_output' || parts[idx + 1] !== 'hunyuan_outputs') continue;
+    const imageIndex = parseImageDirIndex(parts[idx + 2]);
+    const batchParts = parts.slice(0, idx);
+    const batchDir = batchParts.length === 1 && batchParts[0] === ''
+      ? path.sep
+      : batchParts.join(path.sep) || path.sep;
+    return {
+      batchDir: path.resolve(batchDir),
+      imageIndex,
+    };
+  }
+  throw new Error(`Cannot infer batch_dir from ${hunyuanDir}`);
+}
+
+function bboxJsonPath(batchDir: string, imageIndex: number): string {
+  const stem = imageStem(imageIndex);
+  return path.join(batchDir, 'pipeline_output', 'bbox_front', stem, `${stem}_bbox_front.json`);
+}
+
+function topViewImagePath(batchDir: string, imageIndex: number): string {
+  const stem = imageStem(imageIndex);
+  return path.join(batchDir, 'pipeline_output', 'top_views', `${stem}_top.png`);
+}
+
+function imageSizeFromBuffer(buffer: Buffer): ImageSize | null {
+  if (buffer.length >= 24 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return {
+      width: buffer.readUInt32BE(16),
+      height: buffer.readUInt32BE(20),
+    };
+  }
+  if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 4 <= buffer.length) {
+      while (offset < buffer.length && buffer[offset] !== 0xff) offset += 1;
+      while (offset < buffer.length && buffer[offset] === 0xff) offset += 1;
+      if (offset >= buffer.length) break;
+      const marker = buffer[offset];
+      offset += 1;
+      if (marker === 0xd9 || marker === 0xda) break;
+      if (offset + 2 > buffer.length) break;
+      const segmentLength = buffer.readUInt16BE(offset);
+      if (segmentLength < 2 || offset + segmentLength > buffer.length) break;
+      if (marker === 0xc0 || marker === 0xc2) {
+        return {
+          height: buffer.readUInt16BE(offset + 3),
+          width: buffer.readUInt16BE(offset + 5),
+        };
+      }
+      offset += segmentLength;
+    }
+  }
+  return null;
+}
+
+async function readImageSize(imagePath: string): Promise<ImageSize | null> {
+  if (!await pathExists(imagePath)) return null;
+  try {
+    return imageSizeFromBuffer(await readFile(imagePath));
+  } catch {
+    return null;
+  }
+}
+
+function numberTuple(value: unknown, length: number): number[] | null {
+  if (!Array.isArray(value) || value.length < length) return null;
+  const values = value.slice(0, length).map((item) => Number(item));
+  return values.every((item) => Number.isFinite(item)) ? values : null;
+}
+
+function normalizeAngle(angle: number): number {
+  const normalized = ((((angle + 180) % 360) + 360) % 360) - 180;
+  return normalized === -180 ? 180 : normalized;
+}
+
+function annotationHasFront(annotation: JsonRecord): boolean {
+  return Boolean(numberTuple(annotation.front_point, 2));
+}
+
+function loadLayoutObjects(data: unknown, imageSize: ImageSize, sceneScale: number): LayoutObject[] {
+  if (Array.isArray(data)) {
+    return data.map((value, index) => {
+      const annotation = readRecord(value);
+      const box = numberTuple(annotation.box_2d, 4);
+      if (!box) return null;
+      const [x1n, y1n, x2n, y2n] = box;
+      const x1 = x1n / 1000 * imageSize.width;
+      const y1 = y1n / 1000 * imageSize.height;
+      const x2 = x2n / 1000 * imageSize.width;
+      const y2 = y2n / 1000 * imageSize.height;
+      const cx = (x1 + x2) / 2;
+      const cy = (y1 + y2) / 2;
+      const width = Math.abs(x2 - x1);
+      const height = Math.abs(y2 - y1);
+      let targetYawDeg = 0;
+      const frontPoint = numberTuple(annotation.front_point, 2);
+      if (frontPoint) {
+        const fx = frontPoint[0] / 1000 * imageSize.width;
+        const fy = frontPoint[1] / 1000 * imageSize.height;
+        targetYawDeg = Math.atan2(-(fy - cy), fx - cx) * 180 / Math.PI;
+      }
+      const label = String(annotation.label || `object_${index}`);
+      const sizeX = width * sceneScale;
+      const sizeY = height * sceneScale;
+      return {
+        id: label,
+        label,
+        bboxIndex: index,
+        frontPoint: annotation.front_point ?? null,
+        hasFront: annotationHasFront(annotation),
+        anchorPosition: [
+          (cx - imageSize.width / 2) * sceneScale,
+          (imageSize.height / 2 - cy) * sceneScale,
+          0,
+        ],
+        referenceSize: [sizeX, sizeY, Math.min(sizeX, sizeY)],
+        targetYawDeg,
+      } satisfies LayoutObject;
+    }).filter((item): item is LayoutObject => Boolean(item));
+  }
+
+  const record = readRecord(data);
+  const objects = Array.isArray(record.objects) ? record.objects : [];
+  return objects.map((value, index) => {
+    const object = readRecord(value);
+    const position = numberTuple(object.anchor_position, 3) || [0, 0, 0];
+    const referenceSize = numberTuple(object.reference_size, 3) || [1, 1, 1];
+    return {
+      id: String(object.id || object.label || `object_${index}`),
+      label: String(object.label || object.id || `object_${index}`),
+      bboxIndex: Number.isFinite(Number(object.bbox_index)) ? Number(object.bbox_index) : index,
+      frontPoint: object.front_point ?? null,
+      hasFront: object.has_front !== false,
+      anchorPosition: [position[0], position[1], position[2]],
+      referenceSize: [referenceSize[0], referenceSize[1], referenceSize[2]],
+      targetYawDeg: Number.isFinite(Number(object.target_yaw_deg ?? object.rotation_euler_z))
+        ? Number(object.target_yaw_deg ?? object.rotation_euler_z)
+        : 0,
+    };
+  });
+}
+
+function normalizeModelKey(name: string): string {
+  let key = path.basename(name, path.extname(name)).toLowerCase();
+  if (key.includes('_model')) {
+    key = key.split('_model')[0];
+  }
+  return key;
+}
+
+function matchGlbToLayoutObjects(glbPaths: string[], layoutObjects: LayoutObject[]): Array<{ glbPath: string; layoutObject: LayoutObject }> {
+  const normalizedGlbs = glbPaths.map((glbPath) => ({
+    glbPath,
+    key: normalizeModelKey(path.basename(glbPath)),
+  }));
+  const matches: Array<{ glbPath: string; layoutObject: LayoutObject }> = [];
+  for (const [index, layoutObject] of layoutObjects.entries()) {
+    const objectId = String(layoutObject.id || '').toLowerCase();
+    let chosen = normalizedGlbs.find(({ key }) => objectId && (objectId.includes(key) || key.includes(objectId)));
+    if (!chosen && normalizedGlbs.length > 0) {
+      chosen = normalizedGlbs[Math.min(index, normalizedGlbs.length - 1)];
+    }
+    if (chosen) {
+      matches.push({
+        glbPath: chosen.glbPath,
+        layoutObject,
+      });
+    }
+  }
+  return matches;
+}
+
+async function loadFrontOrientation(frontOrientationPath: string): Promise<FrontOrientationIndex> {
+  const byFile = new Map<string, JsonRecord>();
+  const byKey = new Map<string, JsonRecord>();
+  const byBbox = new Map<number, JsonRecord>();
+  if (!await pathExists(frontOrientationPath)) {
+    return { byFile, byKey, byBbox };
+  }
+  const data = readRecord(await readJsonFile(frontOrientationPath));
+  const items = Array.isArray(data.items) ? data.items.map(readRecord) : [];
+  for (const item of items) {
+    const modelFile = typeof item.model_file === 'string' ? item.model_file : '';
+    if (modelFile) {
+      byFile.set(modelFile, item);
+      byKey.set(normalizeModelKey(modelFile), item);
+    }
+    if (item.bbox_index !== undefined && Number.isFinite(Number(item.bbox_index))) {
+      byBbox.set(Number(item.bbox_index), item);
+    }
+  }
+  return { byFile, byKey, byBbox };
+}
+
+function correctionForModel(glbPath: string, layoutObject: LayoutObject, frontOrientation: FrontOrientationIndex): {
+  correctionYawDeg: number;
+  correctionStatus: string;
+  warning?: string;
+} {
+  let item = frontOrientation.byFile.get(path.basename(glbPath));
+  if (!item) {
+    item = frontOrientation.byKey.get(normalizeModelKey(path.basename(glbPath)));
+  }
+  if (!item) {
+    item = frontOrientation.byBbox.get(layoutObject.bboxIndex);
+  }
+  if (!item) {
+    return {
+      correctionYawDeg: 0,
+      correctionStatus: frontOrientation.byFile.size > 0 || frontOrientation.byBbox.size > 0 ? 'missing_model_correction' : 'missing_front_orientation',
+    };
+  }
+  const correctionYawDeg = Number(item.correction_yaw_deg);
+  return {
+    correctionYawDeg: Number.isFinite(correctionYawDeg) ? correctionYawDeg : 0,
+    correctionStatus: String(item.status || 'unknown'),
+    ...(typeof item.warning === 'string' && item.warning ? { warning: item.warning } : {}),
+  };
+}
+
+async function verifyGlbFile(filePath: string): Promise<{ ok: boolean; message: string }> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    const info = await stat(filePath);
+    handle = await open(filePath, 'r');
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(header, 0, 12, 0);
+    if (bytesRead < 12) return { ok: false, message: 'file is too small to be a valid GLB' };
+    if (header.subarray(0, 4).toString('ascii') !== 'glTF') return { ok: false, message: 'file header is not GLB' };
+    const declaredLength = header.readUInt32LE(8);
+    if (declaredLength !== info.size) {
+      return { ok: false, message: `GLB length mismatch (${declaredLength} declared, ${info.size} actual)` };
+    }
+    return { ok: true, message: 'OK' };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 function dependencyTree(input: {
   runId: string;
   hunyuanDir: string;
   frontOrientationPath: string;
-  sourceBlendPath: string;
-  blendPath: string;
-  preview: GeneratedAsset;
+  bboxJsonPath: string;
+  topViewPath: string;
+  sceneInsertPlanPath: string;
   glbPaths: string[];
   projectRoot: string;
 }): JsonRecord {
   const hunyuanId = 'hunyuan_output_dir';
   const frontOrientationId = 'front_orientation';
-  const sourceBlendId = 'source_layout_blend';
-  const blendId = 'final_layout_blend';
+  const bboxId = 'layout_bbox_json';
+  const topViewId = 'layout_top_view';
+  const planId = 'scene_insert_plan';
   return {
     schema: 'visionary.new_pipeline.dependency_tree',
     version: 1,
@@ -199,56 +393,48 @@ function dependencyTree(input: {
         kind: 'front_orientation',
         relativePath: input.frontOrientationPath,
       },
+      {
+        id: bboxId,
+        kind: 'layout_bbox_json',
+        relativePath: toRelative(input.projectRoot, input.bboxJsonPath),
+      },
+      {
+        id: topViewId,
+        kind: 'top_view',
+        relativePath: toRelative(input.projectRoot, input.topViewPath),
+      },
       ...input.glbPaths.map((glbPath, index) => ({
         id: `glb_${String(index + 1).padStart(3, '0')}`,
         kind: 'component_glb',
         relativePath: toRelative(input.projectRoot, glbPath),
       })),
       {
-        id: sourceBlendId,
-        kind: 'source_layout_blend',
-        relativePath: toRelative(input.projectRoot, input.sourceBlendPath),
-      },
-      {
-        id: blendId,
-        kind: 'final_layout_blend',
-        relativePath: input.blendPath,
-      },
-      {
-        id: input.preview.id,
-        kind: 'insert_scene_preview',
-        relativePath: input.preview.relativePath,
-        mimeType: input.preview.mimeType,
-        bytes: input.preview.bytes,
-        metadata: input.preview.metadata,
+        id: planId,
+        kind: 'visionary_scene_insert_plan',
+        relativePath: toRelative(input.projectRoot, input.sceneInsertPlanPath),
       },
     ],
     edges: [
       {
-        from: hunyuanId,
-        to: sourceBlendId,
-        relation: 'used_to_layout',
+        from: bboxId,
+        to: planId,
+        relation: 'positions_objects',
       },
       {
         from: frontOrientationId,
-        to: sourceBlendId,
-        relation: 'used_to_orient',
+        to: planId,
+        relation: 'orients_objects',
+      },
+      {
+        from: topViewId,
+        to: planId,
+        relation: 'defines_layout_scale',
       },
       ...input.glbPaths.map((_glbPath, index) => ({
         from: `glb_${String(index + 1).padStart(3, '0')}`,
-        to: sourceBlendId,
-        relation: 'inserted_into',
+        to: planId,
+        relation: 'loaded_by_visionary',
       })),
-      {
-        from: sourceBlendId,
-        to: blendId,
-        relation: 'copied_to_agent_history',
-      },
-      {
-        from: blendId,
-        to: input.preview.id,
-        relation: 'previewed_by',
-      },
     ],
   };
 }
@@ -266,59 +452,116 @@ export async function generateInsertScene(input: {
     throw new Error('Resolved front orientation path escapes project root.');
   }
   const hunyuanDir = path.dirname(frontOrientationPath);
-  const sourceBlendPath = path.join(hunyuanDir, 'layout.blend');
+  if (!isPathInside(root, hunyuanDir)) {
+    throw new Error('Resolved Hunyuan output path escapes project root.');
+  }
+  const { batchDir, imageIndex } = inferBatchFromHunyuanDir(hunyuanDir);
+  const sourceBboxJsonPath = bboxJsonPath(batchDir, imageIndex);
+  const sourceTopViewPath = topViewImagePath(batchDir, imageIndex);
   const runId = nowRunId();
   const outputRoot = projectOutputRoot(input.projectRoot, input.projectId, input.runLabel, runId);
-  const outputBlendPath = path.join(outputRoot, 'layout.blend');
-  const previewPath = path.join(outputRoot, 'layout-preview.svg');
+  const sceneInsertPlanPath = path.join(outputRoot, 'scene_insert_plan.json');
 
-  emitProgress(title, '准备 Blender 布局输入', 0.01);
+  emitProgress(title, '准备 Visionary 场景插入计划', 0.01);
   await mkdir(outputRoot, { recursive: true });
   const glbPaths = await collectGlbFiles(hunyuanDir);
-  const orientationItemCount = await readFrontOrientationItemCount(frontOrientationPath);
-
-  emitProgress(title, '调用 blender_frontpoint_layout.py', 0.35);
-  await runPythonScript([
-    'blender_frontpoint_layout.py',
-    '--hunyuan-dir',
-    hunyuanDir,
-  ], NEW_PIPELINE_ROOT);
-  if (!await pathExists(sourceBlendPath)) {
-    throw new Error(`blender_frontpoint_layout.py did not create ${sourceBlendPath}`);
+  if (glbPaths.length <= 0) {
+    throw new Error(`No GLB files found in ${hunyuanDir}`);
+  }
+  if (!await pathExists(sourceBboxJsonPath)) {
+    throw new Error(`Layout bbox JSON does not exist: ${sourceBboxJsonPath}`);
   }
 
-  emitProgress(title, '记录最终 Blender 工程', 0.9);
-  await copyFile(sourceBlendPath, outputBlendPath);
-  const blendRelativePath = toRelative(input.projectRoot, outputBlendPath);
-  const objectCount = Math.max(glbPaths.length, orientationItemCount);
-  await writeBlendPreviewSvg({
-    outputPath: previewPath,
-    title,
-    blendPath: blendRelativePath,
-    objectCount,
-  });
-  const preview = await fileAsset(
-    input.projectRoot,
-    'insert_scene_blend',
-    previewPath,
-    'image/svg+xml',
-    {
-      kind: 'insert_scene',
-      blendPath: blendRelativePath,
-      sourceBlendPath: toRelative(input.projectRoot, sourceBlendPath),
+  emitProgress(title, '读取 layout bbox 和正面朝向', 0.35);
+  const imageSize = await readImageSize(sourceTopViewPath) || { width: 1000, height: 1000 };
+  const layoutObjects = loadLayoutObjects(await readJsonFile(sourceBboxJsonPath), imageSize, SCENE_SCALE);
+  if (layoutObjects.length <= 0) {
+    throw new Error(`Layout bbox JSON has no usable objects: ${sourceBboxJsonPath}`);
+  }
+  const frontOrientation = await loadFrontOrientation(frontOrientationPath);
+  const matches = matchGlbToLayoutObjects(glbPaths, layoutObjects);
+  const warnings: string[] = [];
+  const items = [];
+  for (const [index, match] of matches.entries()) {
+    const verification = await verifyGlbFile(match.glbPath);
+    if (!verification.ok) {
+      warnings.push(`${path.basename(match.glbPath)} skipped: ${verification.message}`);
+      continue;
+    }
+    const correction = match.layoutObject.hasFront
+      ? correctionForModel(match.glbPath, match.layoutObject, frontOrientation)
+      : { correctionYawDeg: 0, correctionStatus: 'front_point_null' };
+    if (correction.warning) {
+      warnings.push(`${path.basename(match.glbPath)}: ${correction.warning}`);
+    }
+    const finalYawDeg = normalizeAngle(match.layoutObject.targetYawDeg + correction.correctionYawDeg);
+    const relativeModelPath = toRelative(input.projectRoot, match.glbPath);
+    const modelExtension = path.extname(match.glbPath) || '.glb';
+    const name = `${String(index + 1).padStart(2, '0')}-${safeSegment(match.layoutObject.label, path.basename(match.glbPath, modelExtension))}${modelExtension}`;
+    items.push({
+      id: `scene_object_${String(index + 1).padStart(3, '0')}`,
+      type: 'glb',
+      name,
+      label: match.layoutObject.label,
+      path: relativeModelPath,
+      modelPath: relativeModelPath,
+      relativePath: relativeModelPath,
+      source: {
+        bboxIndex: match.layoutObject.bboxIndex,
+        glbPath: relativeModelPath,
+        frontPoint: match.layoutObject.frontPoint,
+        hasFront: match.layoutObject.hasFront,
+      },
+      transform: {
+        position: match.layoutObject.anchorPosition,
+        rotationEulerRad: [0, 0, finalYawDeg * Math.PI / 180],
+        scale: [1, 1, 1],
+        referenceSize: match.layoutObject.referenceSize,
+        scaleMode: 'xyz_min',
+        minScale: MIN_SCALE,
+        maxScale: MAX_SCALE,
+      },
+      referenceSize: match.layoutObject.referenceSize,
+      orientation: {
+        targetYawDeg: match.layoutObject.targetYawDeg,
+        correctionYawDeg: correction.correctionYawDeg,
+        correctionStatus: correction.correctionStatus,
+        finalYawDeg,
+      },
+    });
+  }
+  if (items.length <= 0) {
+    throw new Error('No valid GLB files could be added to the Visionary scene insert plan.');
+  }
+
+  emitProgress(title, '记录 Visionary 场景插入计划', 0.9);
+  const plan = {
+    schema: 'visionary.scene_insert_plan',
+    version: 1,
+    runId,
+    stage: 'insert_scene',
+    coordinateSystem: 'visionary_xyz',
+    scaleMode: 'xyz_min',
+    manifestPath: toRelative(input.projectRoot, sceneInsertPlanPath),
+    source: {
       hunyuanDir: toRelative(input.projectRoot, hunyuanDir),
       frontOrientationPath: input.components3DFrontOrientationPath,
-      objectCount,
-      glbPaths: glbPaths.map((glbPath) => toRelative(input.projectRoot, glbPath)),
+      bboxJsonPath: toRelative(input.projectRoot, sourceBboxJsonPath),
+      topViewPath: toRelative(input.projectRoot, sourceTopViewPath),
+      imageIndex,
+      imageSize,
+      sceneScale: SCENE_SCALE,
     },
-  );
+    items,
+  };
+  await writeFile(sceneInsertPlanPath, `${JSON.stringify(plan, null, 2)}\n`, 'utf8');
   const tree = dependencyTree({
     runId,
     hunyuanDir,
     frontOrientationPath: input.components3DFrontOrientationPath,
-    sourceBlendPath,
-    blendPath: blendRelativePath,
-    preview,
+    bboxJsonPath: sourceBboxJsonPath,
+    topViewPath: sourceTopViewPath,
+    sceneInsertPlanPath,
     glbPaths,
     projectRoot: input.projectRoot,
   });
@@ -333,21 +576,18 @@ export async function generateInsertScene(input: {
     batchOutput: {
       relativePath: toRelative(input.projectRoot, outputRoot),
     },
-    images: [preview],
-    blendAsset: {
-      relativePath: blendRelativePath,
-      mimeType: 'application/x-blender',
-    },
+    images: [],
+    sceneInsertPlan: plan,
     dependencyTree: {
       relativePath: toRelative(input.projectRoot, manifestPath),
       data: tree,
     },
     visionaryTask: {
       title,
-      message: `生成 layout.blend，包含 ${objectCount} 个对象`,
+      message: `准备插入 ${items.length} 个 Visionary 场景对象`,
       progress: 1,
     },
-    warnings: [],
+    warnings,
   };
 }
 
@@ -361,7 +601,7 @@ async function startMcpServer(): Promise<void> {
     'insert_scene',
     {
       title: 'Insert generated assets into scene',
-      description: 'Create the final layout.blend through third-party/new_pipeline blender_frontpoint_layout.py.',
+      description: 'Create a Visionary scene insertion plan from layout bbox, front orientation, and GLB assets without generating a Blender .blend file.',
       inputSchema: {
         projectId: z.string().min(1).optional().describe('Optional Visionary project id. Defaults to the project id injected by the host runtime.'),
         components3DFrontOrientationPath: z.string().min(1).describe('Project-relative path of the applied components-3d front_orientation.json.'),

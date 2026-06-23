@@ -44,6 +44,7 @@ export interface CodexAgentStepActionResult {
     statusText?: string;
     value?: number;
     indeterminate?: boolean;
+    sceneInsertPlan?: Record<string, unknown>;
   };
   stepState: CodexAgentStepState;
 }
@@ -963,7 +964,7 @@ export class CodexAgentRuntime {
           selectedIndex: stepState.selectedIndex,
           applied: stepState.applied,
           actions: stepState.actions,
-          statusText: currentImages.length > 0 ? `已应用${stepLabel}` : '已应用',
+          statusText: '',
           value: 1,
           indeterminate: false,
         },
@@ -1072,13 +1073,15 @@ export class CodexAgentRuntime {
       ? result.images.map((image) => normalizeCodexGeneratedImage(image)).filter((image): image is CodexGeneratedImage => Boolean(image))
       : [];
     const images = [...currentImages, ...nextImages];
+    const sceneInsertPlan = readRecord(result.sceneInsertPlan);
+    const hasSceneInsertPlan = stepKey === 'insert-scene' && Object.keys(sceneInsertPlan).length > 0;
     const stepState = createCodexAgentStepState({
       sessionId: input.sessionId,
       stepKey,
       images,
       selectedIndex: Math.max(0, images.length - 1),
-      applied: false,
-      actions: ['cancel', 'retry', 'apply'],
+      applied: hasSceneInsertPlan,
+      actions: hasSceneInsertPlan ? [] : ['cancel', 'retry', 'apply'],
     });
     return {
       sessionId: input.sessionId,
@@ -1089,11 +1092,14 @@ export class CodexAgentRuntime {
         selectedIndex: stepState.selectedIndex,
         applied: stepState.applied,
         actions: stepState.actions,
-        statusText: nextImages.length > 0
-          ? `已生成 ${images.length} 张${stepLabel}`
-          : '重试完成，未返回新图片',
+        statusText: hasSceneInsertPlan
+          ? `已插入 ${Array.isArray(sceneInsertPlan.items) ? sceneInsertPlan.items.length : 0} 个场景对象`
+          : nextImages.length > 0
+            ? `已生成 ${images.length} 张${stepLabel}`
+            : '重试完成，未返回新图片',
         value: 1,
         indeterminate: false,
+        ...(hasSceneInsertPlan ? { sceneInsertPlan } : {}),
       },
       stepState,
     };

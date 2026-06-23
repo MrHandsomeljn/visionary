@@ -20,6 +20,8 @@ import {
   MAIN_IMAGE_PROMPT_DESCRIPTION,
   MAIN_IMAGE_TOOL_DESCRIPTION,
 } from '../src/server/mcp/new-pipeline-main-image-contract.ts';
+import { generateLayoutVisualizationAssets } from '../src/server/mcp/new-pipeline-layout-server.ts';
+import { generateInsertScene } from '../src/server/mcp/new-pipeline-insert-scene-server.ts';
 
 async function createTempStorage() {
   const rootDir = await mkdtemp(path.join(tmpdir(), 'visionary-codex-agent-'));
@@ -183,6 +185,18 @@ test('codex front-view retry requires an applied main image source', async () =>
   }
 });
 
+test('front-view MCP passes the applied main image as image input', async () => {
+  const source = await readFile(
+    new URL('../src/server/mcp/new-pipeline-front-view-server.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /const root = path\.resolve\(input\.projectRoot\);/);
+  assert.match(source, /const sourceMainImagePath = path\.resolve\(root, input\.mainImagePath\);/);
+  assert.match(source, /isPathInside\(root, sourceMainImagePath\)/);
+  assert.match(source, /'--input-image',\s*sourceMainImagePath,/);
+});
+
 test('codex top-view retry requires an applied main image source', async () => {
   const { storage, cleanup } = await createTempStorage();
   try {
@@ -243,6 +257,55 @@ test('codex layout retry requires an applied top view source', async () => {
     );
   } finally {
     await cleanup();
+  }
+});
+
+test('layout MCP creates an SVG visualization when extract_bbox does not return a visual image', async () => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'visionary-layout-visual-'));
+  try {
+    const bboxDir = path.join(projectRoot, 'agent_history', 'assets', 'new_pipeline', 'project', 'run-layout', 'bbox_front');
+    const imageDir = path.join(bboxDir, 'image_001');
+    await mkdir(imageDir, { recursive: true });
+    const bboxJsonPath = path.join(imageDir, 'image_001_bbox_front.json');
+    await writeFile(
+      bboxJsonPath,
+      JSON.stringify([
+        {
+          box_2d: [100, 200, 420, 610],
+          front_point: [420, 420],
+          label: 'assembly station',
+        },
+      ]),
+      'utf8',
+    );
+    await writeFile(
+      path.join(bboxDir, 'bbox_front_index.json'),
+      JSON.stringify({
+        results: [
+          {
+            image_index: 1,
+            success: true,
+            bbox_json: bboxJsonPath,
+            visual_image: null,
+            detection_count: 1,
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const images = await generateLayoutVisualizationAssets(projectRoot, bboxDir, '');
+
+    assert.equal(images.length, 1);
+    assert.equal(images[0].mimeType, 'image/svg+xml');
+    assert.match(images[0].relativePath, /image_001_bbox_front_visual\.svg$/);
+    assert.equal(images[0].metadata?.kind, 'layout_bbox');
+    assert.equal(images[0].metadata?.detectionCount, 1);
+    const svg = await readFile(path.join(projectRoot, images[0].relativePath), 'utf8');
+    assert.match(svg, /assembly station/);
+    assert.match(svg, /<rect x="100" y="200"/);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
   }
 });
 
@@ -307,6 +370,78 @@ test('codex insert-scene retry requires an applied components-3d source', async 
     );
   } finally {
     await cleanup();
+  }
+});
+
+test('insert-scene MCP returns a Visionary scene insert plan without creating a blend asset', async () => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'visionary-insert-scene-'));
+  try {
+    const batchDir = path.join(projectRoot, 'agent_history', 'assets', 'new_pipeline', 'project', 'run', 'main_images');
+    const bboxDir = path.join(batchDir, 'pipeline_output', 'bbox_front', 'image_001');
+    const topViewDir = path.join(batchDir, 'pipeline_output', 'top_views');
+    const hunyuanDir = path.join(batchDir, 'pipeline_output', 'hunyuan_outputs', 'image_001');
+    await mkdir(bboxDir, { recursive: true });
+    await mkdir(topViewDir, { recursive: true });
+    await mkdir(hunyuanDir, { recursive: true });
+    await writeFile(
+      path.join(bboxDir, 'image_001_bbox_front.json'),
+      JSON.stringify([
+        {
+          box_2d: [100, 200, 300, 500],
+          front_point: [300, 350],
+          label: 'workbench',
+        },
+      ]),
+      'utf8',
+    );
+    await writeFile(
+      path.join(topViewDir, 'image_001_top.png'),
+      Buffer.from('89504e470d0a1a0a0000000000000000000003e8000003e8', 'hex'),
+    );
+    await writeFile(
+      path.join(hunyuanDir, 'object_01_workbench_model.glb'),
+      Buffer.from('676c544602000000140000000000000000000000', 'hex'),
+    );
+    await writeFile(
+      path.join(hunyuanDir, 'front_orientation.json'),
+      JSON.stringify({
+        items: [
+          {
+            model_file: 'object_01_workbench_model.glb',
+            bbox_index: 0,
+            correction_yaw_deg: 90,
+            status: 'selected',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const result = await generateInsertScene({
+      projectRoot,
+      projectId: 'project',
+      components3DFrontOrientationPath: 'agent_history/assets/new_pipeline/project/run/main_images/pipeline_output/hunyuan_outputs/image_001/front_orientation.json',
+      runLabel: 'insert-scene',
+    });
+
+    const plan = result.sceneInsertPlan as Record<string, unknown>;
+    const items = Array.isArray(plan.items) ? plan.items as Array<Record<string, unknown>> : [];
+    assert.equal(result.stage, 'insert_scene');
+    assert.deepEqual(result.images, []);
+    assert.equal(result.blendAsset, undefined);
+    assert.equal(plan.schema, 'visionary.scene_insert_plan');
+    assert.equal(items.length, 1);
+    assert.equal(items[0].path, 'agent_history/assets/new_pipeline/project/run/main_images/pipeline_output/hunyuan_outputs/image_001/object_01_workbench_model.glb');
+    assert.match(String(items[0].name), /\.glb$/);
+    assert.equal((items[0].orientation as Record<string, unknown>).finalYawDeg, 90);
+    assert.equal((items[0].transform as Record<string, unknown>).scaleMode, 'xyz_min');
+    await stat(path.join(projectRoot, String(plan.manifestPath)));
+    await assert.rejects(
+      () => stat(path.join(hunyuanDir, 'layout.blend')),
+      /ENOENT/,
+    );
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
   }
 });
 
@@ -584,6 +719,7 @@ test('codex step apply action locks the selected main image without regenerating
     assert.equal(result.blockPatch.selectedIndex, 1);
     assert.equal(result.blockPatch.images.length, 2);
     assert.deepEqual(result.blockPatch.actions, []);
+    assert.equal(result.blockPatch.statusText, '');
     assert.deepEqual(result.stepState, {
       sessionId: 'agent-session-1',
       stepKey: 'main-image',

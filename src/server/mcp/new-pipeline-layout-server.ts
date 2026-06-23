@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +54,15 @@ function projectOutputRoot(projectRoot: string, projectId: string, runLabel: str
 
 function toRelative(projectRoot: string, filePath: string): string {
   return path.relative(projectRoot, filePath).split(path.sep).join('/');
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function fileAsset(projectRoot: string, id: string, filePath: string, mimeType: string, metadata: JsonRecord = {}): Promise<GeneratedAsset> {
@@ -118,30 +127,187 @@ async function readJsonFile(filePath: string): Promise<unknown> {
   return JSON.parse(await readFile(filePath, 'utf8')) as unknown;
 }
 
-async function readLayoutImages(projectRoot: string, bboxDir: string): Promise<GeneratedAsset[]> {
-  const indexRaw = await readFile(path.join(bboxDir, 'bbox_front_index.json'), 'utf8');
+function resolveResultPath(baseDir: string, value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return '';
+  return path.isAbsolute(raw) ? raw : path.resolve(baseDir, raw);
+}
+
+function imageMimeType(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  return 'image/png';
+}
+
+function escapeSvgText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function normalizeBox(value: unknown): [number, number, number, number] | null {
+  if (!Array.isArray(value) || value.length < 4) return null;
+  const box = value.slice(0, 4).map((item) => Number(item));
+  if (!box.every((item) => Number.isFinite(item))) return null;
+  return [
+    Math.max(0, Math.min(1000, box[0])),
+    Math.max(0, Math.min(1000, box[1])),
+    Math.max(0, Math.min(1000, box[2])),
+    Math.max(0, Math.min(1000, box[3])),
+  ];
+}
+
+function normalizePoint(value: unknown): [number, number] | null {
+  if (!Array.isArray(value) || value.length < 2) return null;
+  const point = value.slice(0, 2).map((item) => Number(item));
+  if (!point.every((item) => Number.isFinite(item))) return null;
+  return [
+    Math.max(0, Math.min(1000, point[0])),
+    Math.max(0, Math.min(1000, point[1])),
+  ];
+}
+
+async function imageDataUri(projectRoot: string, imagePath: string): Promise<string> {
+  if (!imagePath) return '';
+  const resolved = path.resolve(imagePath);
+  if (!isPathInside(path.resolve(projectRoot), resolved) || !await pathExists(resolved)) return '';
+  const bytes = await readFile(resolved);
+  return `data:${imageMimeType(resolved)};base64,${bytes.toString('base64')}`;
+}
+
+async function writeLayoutFallbackSvg(input: {
+  projectRoot: string;
+  bboxJsonPath: string;
+  imagePath: string;
+  outputPath: string;
+  title: string;
+  bboxData: unknown;
+}): Promise<void> {
+  const dataUri = await imageDataUri(input.projectRoot, input.imagePath);
+  const detections = Array.isArray(input.bboxData) ? input.bboxData : [];
+  const palette = ['#f97316', '#2563eb', '#16a34a', '#dc2626', '#9333ea', '#0891b2', '#ca8a04', '#db2777'];
+  const marks = detections.map((item, index) => {
+    const record = item && typeof item === 'object' && !Array.isArray(item) ? item as JsonRecord : {};
+    const box = normalizeBox(record.box_2d);
+    if (!box) return '';
+    const [x1, y1, x2, y2] = box;
+    const x = Math.min(x1, x2);
+    const y = Math.min(y1, y2);
+    const width = Math.abs(x2 - x1);
+    const height = Math.abs(y2 - y1);
+    const color = palette[index % palette.length];
+    const label = `${String(index + 1).padStart(2, '0')}: ${String(record.label || 'object')}`;
+    const point = normalizePoint(record.front_point);
+    const front = point ? [
+      `<line x1="${x + width / 2}" y1="${y + height / 2}" x2="${point[0]}" y2="${point[1]}" stroke="${color}" stroke-width="3" stroke-dasharray="10 7"/>`,
+      `<circle cx="${point[0]}" cy="${point[1]}" r="9" fill="${color}" stroke="#ffffff" stroke-width="3"/>`,
+    ].join('\n') : '';
+    return [
+      `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="none" stroke="${color}" stroke-width="4"/>`,
+      `<rect x="${x}" y="${Math.max(0, y - 30)}" width="${Math.min(520, Math.max(90, label.length * 12))}" height="28" fill="${color}" opacity="0.92"/>`,
+      `<text x="${x + 8}" y="${Math.max(19, y - 10)}" font-family="Arial, sans-serif" font-size="18" fill="#ffffff">${escapeSvgText(label)}</text>`,
+      front,
+    ].filter(Boolean).join('\n');
+  }).filter(Boolean).join('\n');
+  const svg = [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1000 1000">',
+    '<rect width="1000" height="1000" fill="#eef2f7"/>',
+    dataUri
+      ? `<image href="${dataUri}" x="0" y="0" width="1000" height="1000" preserveAspectRatio="none"/>`
+      : '<rect x="0" y="0" width="1000" height="1000" fill="#f8fafc" stroke="#cbd5e1" stroke-width="3"/>',
+    '<rect width="1000" height="1000" fill="none" stroke="#111827" stroke-width="5"/>',
+    marks,
+    `<rect x="16" y="930" width="968" height="50" fill="#111827" opacity="0.78"/>`,
+    `<text x="34" y="962" font-family="Arial, sans-serif" font-size="24" fill="#ffffff">${escapeSvgText(input.title)} - ${detections.length} objects</text>`,
+    '</svg>',
+    '',
+  ].join('\n');
+  await writeFile(input.outputPath, svg, 'utf8');
+}
+
+async function collectBboxJsonFiles(folder: string): Promise<string[]> {
+  const entries = await readdir(folder, { withFileTypes: true }).catch(() => []);
+  const files = await Promise.all(entries.map(async (entry) => {
+    const entryPath = path.join(folder, entry.name);
+    if (entry.isDirectory()) return collectBboxJsonFiles(entryPath);
+    if (entry.isFile() && /_bbox_front\.json$/i.test(entry.name)) return [entryPath];
+    return [];
+  }));
+  return files.flat().sort((a, b) => a.localeCompare(b));
+}
+
+async function readLayoutIndexResults(bboxDir: string): Promise<Array<{
+  image_index?: number;
+  success?: boolean;
+  bbox_json?: string;
+  visual_image?: string;
+  input_image?: string;
+  detection_count?: number;
+}>> {
+  const indexPath = path.join(bboxDir, 'bbox_front_index.json');
+  if (!await pathExists(indexPath)) return [];
+  const indexRaw = await readFile(indexPath, 'utf8');
   const index = JSON.parse(indexRaw) as { results?: Array<{
     image_index?: number;
     success?: boolean;
     bbox_json?: string;
     visual_image?: string;
+    input_image?: string;
     detection_count?: number;
   }> };
-  const results = Array.isArray(index.results) ? index.results : [];
+  return Array.isArray(index.results) ? index.results : [];
+}
+
+function inferImageIndexFromBboxJson(filePath: string, fallback: number): number {
+  const match = path.basename(filePath).match(/^image_(\d+)_bbox_front\.json$/i);
+  return match ? Number(match[1]) : fallback;
+}
+
+export async function generateLayoutVisualizationAssets(projectRoot: string, bboxDir: string, fallbackTopViewPath: string): Promise<GeneratedAsset[]> {
+  let results = await readLayoutIndexResults(bboxDir);
+  if (results.length <= 0) {
+    const bboxJsonFiles = await collectBboxJsonFiles(bboxDir);
+    results = bboxJsonFiles.map((bboxJsonPath, index) => ({
+      image_index: inferImageIndexFromBboxJson(bboxJsonPath, index + 1),
+      success: true,
+      bbox_json: bboxJsonPath,
+      visual_image: path.join(path.dirname(bboxJsonPath), `${path.basename(bboxJsonPath, '.json')}_visual.png`),
+      input_image: fallbackTopViewPath,
+    }));
+  }
   const assets: GeneratedAsset[] = [];
   for (const result of results) {
-    if (!result.success || typeof result.visual_image !== 'string') continue;
-    const bboxJsonPath = typeof result.bbox_json === 'string' ? result.bbox_json : '';
+    if (!result.success) continue;
+    const bboxJsonPath = resolveResultPath(bboxDir, result.bbox_json);
+    if (!bboxJsonPath || !isPathInside(path.resolve(projectRoot), path.resolve(bboxJsonPath)) || !await pathExists(bboxJsonPath)) continue;
     const bboxData = bboxJsonPath ? await readJsonFile(bboxJsonPath).catch(() => null) : null;
+    let visualPath = resolveResultPath(bboxDir, result.visual_image);
+    let mimeType = visualPath ? imageMimeType(visualPath) : 'image/png';
+    if (!visualPath || !isPathInside(path.resolve(projectRoot), path.resolve(visualPath)) || !await pathExists(visualPath)) {
+      visualPath = path.join(path.dirname(bboxJsonPath), `${path.basename(bboxJsonPath, '.json')}_visual.svg`);
+      await writeLayoutFallbackSvg({
+        projectRoot,
+        bboxJsonPath,
+        imagePath: resolveResultPath(bboxDir, result.input_image) || fallbackTopViewPath,
+        outputPath: visualPath,
+        title: `Layout ${String(result.image_index ?? assets.length + 1).padStart(3, '0')}`,
+        bboxData,
+      });
+      mimeType = 'image/svg+xml';
+    }
     assets.push(await fileAsset(
       projectRoot,
       `layout_bbox_${String(result.image_index ?? assets.length + 1).padStart(3, '0')}`,
-      result.visual_image,
-      'image/png',
+      visualPath,
+      mimeType,
       {
         kind: 'layout_bbox',
-        detectionCount: Number(result.detection_count) || 0,
-        bboxJsonPath: bboxJsonPath ? toRelative(projectRoot, bboxJsonPath) : '',
+        detectionCount: Number(result.detection_count) || (Array.isArray(bboxData) ? bboxData.length : 0),
+        bboxJsonPath: toRelative(projectRoot, bboxJsonPath),
         bboxData,
       },
     ));
@@ -249,7 +415,17 @@ export async function generateLayout(input: {
   await mkdir(bboxDir, { recursive: true });
   await copyFile(sourceTopViewPath, pipelineTopViewPath);
 
-  emitProgress(title, '调用 extract_bbox.py', 0.35);
+  emitProgress(title, '调用 extract_object_list.py', 0.25);
+  await runPythonScript([
+    'extract_object_list.py',
+    '--batch-dir',
+    sourceBatchDir,
+    '--workers',
+    '1',
+    '--force-regenerate',
+  ], NEW_PIPELINE_ROOT);
+
+  emitProgress(title, '调用 extract_bbox.py', 0.55);
   await runPythonScript([
     'extract_bbox.py',
     '--batch-dir',
@@ -260,7 +436,7 @@ export async function generateLayout(input: {
   ], NEW_PIPELINE_ROOT);
 
   emitProgress(title, '记录输出依赖树', 0.9);
-  const images = await readLayoutImages(input.projectRoot, bboxDir);
+  const images = await generateLayoutVisualizationAssets(input.projectRoot, bboxDir, pipelineTopViewPath);
   const tree = dependencyTree({
     runId,
     sourceMainImagePath: input.mainImagePath,
