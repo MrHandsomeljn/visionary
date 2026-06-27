@@ -3,6 +3,10 @@ import { GaussianThreeJSRenderer } from "../app/GaussianThreeJSRenderer";
 import { GaussianModel } from "../app/GaussianModel";
 import { RendererInitHelper } from "../utils/renderer-init-helper";
 
+export interface RecordingCameraRenderToCanvasOptions {
+    preserveCameraProjection?: boolean;
+}
+
 // 录制相机类 - 独立的录制相机对象
 export class RecordingCamera {
     private parentNodeId: string;
@@ -1135,7 +1139,7 @@ export class RecordingCamera {
      * Actively renders the current scene from this camera's perspective into a new, stable canvas.
      * @returns A Promise that resolves with an HTMLCanvasElement containing the rendered image.
      */
-    public async renderToCanvas(scene: THREE.Scene): Promise<HTMLCanvasElement> {
+    public async renderToCanvas(scene: THREE.Scene, options: RecordingCameraRenderToCanvasOptions = {}): Promise<HTMLCanvasElement> {
         if (!this.renderer) {
             throw new Error("RecordingCamera is not fully initialized. Renderer is missing.");
         }
@@ -1149,8 +1153,11 @@ export class RecordingCamera {
 
         // 确保渲染尺寸和相机宽高比正确
         renderer.setSize(width, height, false);
-        camera.aspect = width / height;
-        camera.updateProjectionMatrix();
+        if (!options.preserveCameraProjection) {
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+        }
+        camera.updateMatrixWorld(true);
 
         if (this.originalEnvMap === null) {
             this.originalEnvMap = scene.environment;

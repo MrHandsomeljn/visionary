@@ -40,6 +40,13 @@ import {
   createEditorMeshAnimationController,
   getEditorModelAnimationController,
 } from "./model-animation-controller";
+import {
+  VisionaryFrameRenderer,
+  renderVisionaryFrame,
+  type VisionaryRenderFrameContext,
+  type VisionaryRenderFrameOptions,
+  type VisionaryRenderFrameResult,
+} from "../exportMedia/renderFrame";
 
 const MAX_MODELS = 10000;
 const CAMERA_KEY_CODES = new Set([
@@ -2542,6 +2549,37 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
    */
   getFusedRenderer(): GaussianThreeJSRenderer | null {
     return this.fusedRenderer;
+  }
+
+  /**
+   * Get the current render context for offscreen frame rendering.
+   */
+  getRenderFrameContext(): VisionaryRenderFrameContext | null {
+    if (!this.meshRenderer || !this.meshScene) return null;
+    return {
+      renderer: this.meshRenderer,
+      scene: this.meshScene,
+      gaussianModels: this.fusedRenderer?.getGaussianModels?.() || [],
+    };
+  }
+
+  /**
+   * Create a reusable offscreen frame renderer for repeated trajectory evaluation.
+   */
+  createFrameRenderer(id?: string): VisionaryFrameRenderer | null {
+    const context = this.getRenderFrameContext();
+    return context ? new VisionaryFrameRenderer(context, id) : null;
+  }
+
+  /**
+   * Render one frame from explicit camera parameters without writing files.
+   */
+  async renderFrame(options: VisionaryRenderFrameOptions): Promise<VisionaryRenderFrameResult> {
+    const context = this.getRenderFrameContext();
+    if (!context) {
+      throw new Error("Editor render context is unavailable");
+    }
+    return renderVisionaryFrame(context, options);
   }
 
   /**
