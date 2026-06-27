@@ -585,8 +585,7 @@ export class EditorApp {
           this.fusedRenderer.renderThreeScene(this.meshCamera);
           const drew = this.fusedRenderer.drawSplats(this.meshRenderer, this.meshScene, this.meshCamera);
           if (!drew && this.renderMode !== "depth") {
-            this.meshRenderer.render(this.meshScene, this.meshCamera);
-            this.renderViewportOverlayDirect();
+            this.fusedRenderer.compositeOverlayToCurrentCanvas();
           }
         } else {
           this.meshRenderer.render(this.meshScene, this.meshCamera);

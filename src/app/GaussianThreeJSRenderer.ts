@@ -738,7 +738,7 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
                 }),
                 entryPoint: 'fs_main',
                 targets: [{
-                    format: 'bgra8unorm' // Canvas format (sRGB显示)
+                    format: this.canvasFormat // Canvas format (sRGB显示)
                 }]
             },
             primitive: {
@@ -1035,9 +1035,14 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
             (THREE as any).WebGLRenderTarget ??
             THREE.RenderTarget;
 
-        this.gizmoOverlayRT = new RenderTargetClass(w, h);
+        this.gizmoOverlayRT = new RenderTargetClass(w, h, {
+            format: THREE.RGBAFormat,
+            type: THREE.HalfFloatType,
+            samples: 1,
+            depthBuffer: false,
+        });
         if (this.gizmoOverlayRT && this.gizmoOverlayRT.texture) {
-            this.gizmoOverlayRT.texture.colorSpace = THREE.SRGBColorSpace;
+            this.gizmoOverlayRT.texture.colorSpace = THREE.LinearSRGBColorSpace;
         }
     }
 
@@ -1172,6 +1177,25 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         pass.end();
 
         this.overlayRenderedThisFrame = false;
+    }
+
+    public compositeOverlayToCurrentCanvas(): boolean {
+        if (!this.overlayRenderedThisFrame || !this.gizmoOverlayRT) {
+            return false;
+        }
+
+        const backend = (this.threeRenderer as any).backend;
+        const device = backend?.device as GPUDevice | undefined;
+        const context = backend?.context as GPUCanvasContext | undefined;
+        if (!device || !context) {
+            return false;
+        }
+
+        const encoder = device.createCommandEncoder({ label: "Overlay-to-Canvas render pass" });
+        const targetView = context.getCurrentTexture().createView();
+        this.compositeOverlayToCanvas(device, encoder, targetView);
+        device.queue.submit([encoder.finish()]);
+        return true;
     }
 
     public async init() {
