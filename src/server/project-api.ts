@@ -64,6 +64,19 @@ function decodePathPart(value: string): string {
   }
 }
 
+function contentTypeForProjectFilePath(filePath: string): string {
+  const normalized = filePath.toLowerCase();
+  if (normalized.endsWith('.svg')) return 'image/svg+xml; charset=utf-8';
+  if (normalized.endsWith('.png')) return 'image/png';
+  if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) return 'image/jpeg';
+  if (normalized.endsWith('.webp')) return 'image/webp';
+  if (normalized.endsWith('.gif')) return 'image/gif';
+  if (normalized.endsWith('.glb')) return 'model/gltf-binary';
+  if (normalized.endsWith('.gltf')) return 'model/gltf+json; charset=utf-8';
+  if (normalized.endsWith('.json')) return 'application/json; charset=utf-8';
+  return 'application/octet-stream';
+}
+
 async function readRequestBuffer(req: IncomingMessage, limitBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -342,7 +355,7 @@ async function handleProjectsRequest(
       const user = getQueryString(url, 'user');
       const file = await storage.readAsset(user, projectId, filePath);
       res.statusCode = 200;
-      res.setHeader('content-type', 'application/octet-stream');
+      res.setHeader('content-type', contentTypeForProjectFilePath(filePath));
       res.end(file);
       return true;
     }

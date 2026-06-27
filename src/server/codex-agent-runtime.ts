@@ -5,7 +5,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProjectStorage, ProjectStorageError } from './project-storage.ts';
 import { generateMainImage } from './mcp/new-pipeline-main-image-server.ts';
-import { generateFrontView } from './mcp/new-pipeline-front-view-server.ts';
 import { generateTopView } from './mcp/new-pipeline-top-view-server.ts';
 import { generateLayout } from './mcp/new-pipeline-layout-server.ts';
 import { generateComponents3D } from './mcp/new-pipeline-components-3d-server.ts';
@@ -110,16 +109,14 @@ const CODEX_CONFIG_FILE = 'config.toml';
 const CODEX_AUTH_FILE = 'auth.json';
 const DEFAULT_CODEX_TIMEOUT_MS = 10 * 60 * 1000;
 const NEW_PIPELINE_MAIN_IMAGE_MCP_NAME = 'visionary_new_pipeline_main_image';
-const NEW_PIPELINE_FRONT_VIEW_MCP_NAME = 'visionary_new_pipeline_front_view';
 const NEW_PIPELINE_TOP_VIEW_MCP_NAME = 'visionary_new_pipeline_top_view';
 const NEW_PIPELINE_LAYOUT_MCP_NAME = 'visionary_new_pipeline_layout';
 const NEW_PIPELINE_COMPONENTS_3D_MCP_NAME = 'visionary_new_pipeline_components_3d';
 const NEW_PIPELINE_INSERT_SCENE_MCP_NAME = 'visionary_new_pipeline_insert_scene';
 const VISIONARY_SCENE_SKILL_NAME = 'scene-skill';
-const SUPPORTED_STEP_KEYS = ['main-image', 'front-view', 'top-view', 'layout', 'components-3d', 'insert-scene'] as const;
+const SUPPORTED_STEP_KEYS = ['main-image', 'top-view', 'layout', 'components-3d', 'insert-scene'] as const;
 
 function codexStepLabel(stepKey: string): string {
-  if (stepKey === 'front-view') return '正视图';
   if (stepKey === 'top-view') return '俯视图';
   if (stepKey === 'layout') return 'layout';
   if (stepKey === 'components-3d') return '组件 3D 资产';
@@ -224,10 +221,6 @@ function newPipelineMcpServers(): Array<{ name: string; serverPath: string }> {
     {
       name: NEW_PIPELINE_MAIN_IMAGE_MCP_NAME,
       serverPath: path.join(rootDir, 'src', 'server', 'mcp', 'new-pipeline-main-image-server.ts'),
-    },
-    {
-      name: NEW_PIPELINE_FRONT_VIEW_MCP_NAME,
-      serverPath: path.join(rootDir, 'src', 'server', 'mcp', 'new-pipeline-front-view-server.ts'),
     },
     {
       name: NEW_PIPELINE_TOP_VIEW_MCP_NAME,
@@ -979,7 +972,7 @@ export class CodexAgentRuntime {
         images: currentImages,
         selectedIndex,
         applied: false,
-        actions: ['cancel', 'retry', 'apply'],
+        actions: ['retry'],
       });
       return {
         sessionId: input.sessionId,
@@ -991,7 +984,7 @@ export class CodexAgentRuntime {
           applied: stepState.applied,
           actions: stepState.actions,
           statusText: `已取消${stepLabel}生成步骤`,
-          value: 1,
+          value: 0,
           indeterminate: false,
         },
         stepState,
@@ -1014,7 +1007,7 @@ export class CodexAgentRuntime {
         components3DFrontOrientationPath: frontOrientationPathFromComponents3D(components3DImage),
         runLabel: sceneRunLabel(prompt),
       });
-    } else if (stepKey === 'front-view' || stepKey === 'top-view' || stepKey === 'layout' || stepKey === 'components-3d') {
+    } else if (stepKey === 'top-view' || stepKey === 'layout' || stepKey === 'components-3d') {
       const sourceImage = findSourceImageByStep(rawSourceImages, 'main-image') || sourceImages[0];
       if (!sourceImage) {
         throw new ProjectStorageError('BAD_REQUEST', `main image is required for ${stepKey}`);
@@ -1051,14 +1044,7 @@ export class CodexAgentRuntime {
           runLabel: sceneRunLabel(prompt),
         });
       } else {
-        result = await generateFrontView({
-          projectRoot: env.projectDir,
-          projectId: input.projectId,
-          mainImagePath: sourceImage.relativePath,
-          objectDescriptions: prompt,
-          draws: 1,
-          runLabel: sceneRunLabel(prompt),
-        });
+        throw new ProjectStorageError('BAD_REQUEST', `unsupported step: ${stepKey}`);
       }
     } else {
       result = await generateMainImage({
@@ -1072,9 +1058,15 @@ export class CodexAgentRuntime {
     const nextImages = Array.isArray(result.images)
       ? result.images.map((image) => normalizeCodexGeneratedImage(image)).filter((image): image is CodexGeneratedImage => Boolean(image))
       : [];
-    const images = [...currentImages, ...nextImages];
+    const images = stepKey === 'components-3d'
+      ? nextImages
+      : [...currentImages, ...nextImages];
     const sceneInsertPlan = readRecord(result.sceneInsertPlan);
     const hasSceneInsertPlan = stepKey === 'insert-scene' && Object.keys(sceneInsertPlan).length > 0;
+    const taskPayload = readRecord(result.visionaryTask);
+    const taskStatusText = typeof taskPayload.message === 'string' && taskPayload.message.trim()
+      ? taskPayload.message.trim()
+      : '';
     const stepState = createCodexAgentStepState({
       sessionId: input.sessionId,
       stepKey,
@@ -1094,8 +1086,10 @@ export class CodexAgentRuntime {
         actions: stepState.actions,
         statusText: hasSceneInsertPlan
           ? `已插入 ${Array.isArray(sceneInsertPlan.items) ? sceneInsertPlan.items.length : 0} 个场景对象`
-          : nextImages.length > 0
-            ? `已生成 ${images.length} 张${stepLabel}`
+          : taskStatusText
+            ? taskStatusText
+            : nextImages.length > 0
+            ? `已生成 ${nextImages.length} 张${stepLabel}`
             : '重试完成，未返回新图片',
         value: 1,
         indeterminate: false,

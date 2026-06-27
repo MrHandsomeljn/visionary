@@ -202,7 +202,7 @@ function annotationHasFront(annotation: JsonRecord): boolean {
 
 function loadLayoutObjects(data: unknown, imageSize: ImageSize, sceneScale: number): LayoutObject[] {
   if (Array.isArray(data)) {
-    return data.map((value, index) => {
+    return data.map((value, index): LayoutObject | null => {
       const annotation = readRecord(value);
       const box = numberTuple(annotation.box_2d, 4);
       if (!box) return null;
@@ -233,12 +233,12 @@ function loadLayoutObjects(data: unknown, imageSize: ImageSize, sceneScale: numb
         hasFront: annotationHasFront(annotation),
         anchorPosition: [
           (cx - imageSize.width / 2) * sceneScale,
-          (imageSize.height / 2 - cy) * sceneScale,
           0,
+          (imageSize.height / 2 - cy) * sceneScale,
         ],
-        referenceSize: [sizeX, sizeY, Math.min(sizeX, sizeY)],
+        referenceSize: [sizeX, Math.min(sizeX, sizeY), sizeY],
         targetYawDeg,
-      } satisfies LayoutObject;
+      };
     }).filter((item): item is LayoutObject => Boolean(item));
   }
 
@@ -514,7 +514,7 @@ export async function generateInsertScene(input: {
       },
       transform: {
         position: match.layoutObject.anchorPosition,
-        rotationEulerRad: [0, 0, finalYawDeg * Math.PI / 180],
+        rotationEulerRad: [0, finalYawDeg * Math.PI / 180, 0],
         scale: [1, 1, 1],
         referenceSize: match.layoutObject.referenceSize,
         scaleMode: 'xyz_min',
@@ -540,7 +540,7 @@ export async function generateInsertScene(input: {
     version: 1,
     runId,
     stage: 'insert_scene',
-    coordinateSystem: 'visionary_xyz',
+    coordinateSystem: 'visionary_y_up_xz_ground',
     scaleMode: 'xyz_min',
     manifestPath: toRelative(input.projectRoot, sceneInsertPlanPath),
     source: {

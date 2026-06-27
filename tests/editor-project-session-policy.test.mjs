@@ -131,6 +131,17 @@ test('server-backed project flow uploads assets and rewrites server asset urls o
     assert.match(clientSource, /async renameProject\(\{ user, projectId, name \}\)/);
 });
 
+test('project file API serves image and model assets with browser-usable content types', async () => {
+    const serverSource = await readFile(new URL('../src/server/project-api.ts', import.meta.url), 'utf8');
+
+    assert.match(serverSource, /function contentTypeForProjectFilePath\(filePath: string\): string/);
+    assert.match(serverSource, /normalized\.endsWith\('\.svg'\)[\s\S]*image\/svg\+xml; charset=utf-8/);
+    assert.match(serverSource, /normalized\.endsWith\('\.png'\)[\s\S]*image\/png/);
+    assert.match(serverSource, /normalized\.endsWith\('\.glb'\)[\s\S]*model\/gltf-binary/);
+    assert.match(serverSource, /res\.setHeader\('content-type', contentTypeForProjectFilePath\(filePath\)\);/);
+    assert.doesNotMatch(serverSource, /res\.setHeader\('content-type', 'application\/octet-stream'\);/);
+});
+
 test('opening a persisted server project rejects empty restore results for non-empty manifests', async () => {
     const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
 

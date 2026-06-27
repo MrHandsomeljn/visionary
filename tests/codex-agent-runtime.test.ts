@@ -129,8 +129,8 @@ test('codex project environment appends the new pipeline MCP servers and scene s
 
     assert.match(config, /\[mcp_servers\.visionary_new_pipeline_main_image\]/);
     assert.match(config, /new-pipeline-main-image-server\.ts/);
-    assert.match(config, /\[mcp_servers\.visionary_new_pipeline_front_view\]/);
-    assert.match(config, /new-pipeline-front-view-server\.ts/);
+    assert.doesNotMatch(config, /visionary_new_pipeline_front_view/);
+    assert.doesNotMatch(config, /new-pipeline-front-view-server\.ts/);
     assert.match(config, /\[mcp_servers\.visionary_new_pipeline_top_view\]/);
     assert.match(config, /new-pipeline-top-view-server\.ts/);
     assert.match(config, /\[mcp_servers\.visionary_new_pipeline_layout\]/);
@@ -156,45 +156,6 @@ test('codex project environment appends the new pipeline MCP servers and scene s
     await rm(sourceCodexHome, { recursive: true, force: true });
     await cleanup();
   }
-});
-
-test('codex front-view retry requires an applied main image source', async () => {
-  const { storage, cleanup } = await createTempStorage();
-  try {
-    const project = await storage.createProject({
-      user: 'Demo User',
-      name: 'Front View Project',
-    });
-    const runtime = new CodexAgentRuntime(storage);
-
-    await assert.rejects(
-      () => runtime.handleStepAction({
-        user: 'Demo User',
-        projectId: project.id,
-        sessionId: 'agent-session-1',
-        stepKey: 'front-view',
-        action: 'retry',
-        prompt: '生成一个车间流水线',
-        selectedIndex: 0,
-        images: [],
-      }),
-      /main image is required for front-view/,
-    );
-  } finally {
-    await cleanup();
-  }
-});
-
-test('front-view MCP passes the applied main image as image input', async () => {
-  const source = await readFile(
-    new URL('../src/server/mcp/new-pipeline-front-view-server.ts', import.meta.url),
-    'utf8',
-  );
-
-  assert.match(source, /const root = path\.resolve\(input\.projectRoot\);/);
-  assert.match(source, /const sourceMainImagePath = path\.resolve\(root, input\.mainImagePath\);/);
-  assert.match(source, /isPathInside\(root, sourceMainImagePath\)/);
-  assert.match(source, /'--input-image',\s*sourceMainImagePath,/);
 });
 
 test('codex top-view retry requires an applied main image source', async () => {
@@ -345,6 +306,59 @@ test('codex components-3d retry requires an applied layout source', async () => 
   }
 });
 
+test('components-3d MCP uses local demo GLB outputs instead of calling Hunyuan', async () => {
+  const source = await readFile(
+    new URL('../src/server/mcp/new-pipeline-components-3d-server.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /const DEFAULT_COMPONENTS_3D_DEMO_GLB_DIR = path\.join\(/);
+  assert.match(source, /20260623_components-3d-existing-glb-demo/);
+  assert.match(source, /process\.env\.VISIONARY_COMPONENTS_3D_DEMO_GLB_DIR \|\| DEFAULT_COMPONENTS_3D_DEMO_GLB_DIR/);
+  assert.match(source, /const COMPONENTS_3D_DEMO_ASSET_COUNT = 7;/);
+  assert.match(source, /async function collectDemoGlbFiles\(\)/);
+  assert.match(source, /Array\.from\(\{ length: COMPONENTS_3D_DEMO_ASSET_COUNT \}/);
+  assert.match(source, /const targetCount = COMPONENTS_3D_DEMO_ASSET_COUNT;/);
+  assert.match(source, /'extract_single_object\.py'/);
+  assert.match(source, /'render_front_candidates\.py'/);
+  assert.match(source, /'select_front_with_vlm\.py'/);
+  assert.match(source, /VISIONARY_COMPONENTS_3D_MOCK_VLM/);
+  assert.match(source, /--mock-response/);
+  assert.doesNotMatch(source, /VISIONARY_COMPONENTS_3D_REAL_VLM/);
+  assert.match(source, /await writeMockHunyuanOutputs\(\{/);
+  assert.match(source, /annotations: layoutAnnotations,/);
+  assert.match(source, /await rm\(hunyuanDir, \{ recursive: true, force: true \}\);/);
+  assert.match(source, /const demoGlbPaths = await collectDemoGlbFiles\(\);/);
+  assert.match(source, /await copyFile\(demoGlbPath, modelPath\);/);
+  assert.doesNotMatch(source, /'hunyuan3d\.py'/);
+  assert.doesNotMatch(source, /isHunyuanDisabledError/);
+  assert.match(source, /function selectedCandidateImage\(item: JsonRecord\)/);
+  assert.match(source, /function isRasterImagePath\(filePath: string\): boolean/);
+  assert.match(source, /const frontRendersDir = path\.join\(input\.outputRoot, 'front_renders'\);/);
+  assert.match(source, /await mkdir\(frontRendersDir, \{ recursive: true \}\);/);
+  assert.match(source, /item\.frontRenderPath && isRasterImagePath\(item\.frontRenderPath\) && await pathExists\(item\.frontRenderPath\)/);
+  assert.match(source, /await runBlenderScript\(\[[\s\S]*render-glb-front-thumbnail\.py[\s\S]*--glb[\s\S]*--output/);
+  assert.match(source, /const existingRelativePath = async \(filePath: string \| undefined\): Promise<string> => \{/);
+  assert.match(source, /const sourceGlbPaths = \(await Promise\.all\([\s\S]*existingRelativePath\(modelPath\)/);
+  assert.match(source, /const frontOrientationPath = await existingRelativePath\(item\.frontOrientationPath\);/);
+  assert.match(source, /const candidateSheetPath = await existingRelativePath\(item\.candidateSheetPath\);/);
+  assert.match(source, /metadata[\s\S]*thumbnailPath: frontRenderTarget \? toRelative\(input\.projectRoot, frontRenderTarget\) : ''/);
+  assert.match(source, /metadata[\s\S]*frontRenderPath: frontRenderTarget \? toRelative\(input\.projectRoot, frontRenderTarget\) : ''/);
+  assert.doesNotMatch(source, /sourceGlbPaths: item\.modelPaths\.map\(\(modelPath\) => toRelative\(input\.projectRoot, modelPath\)\)/);
+  assert.doesNotMatch(source, /thumbnailPath: toRelative\(input\.projectRoot, previewTarget\)/);
+  assert.doesNotMatch(source, /frontRenderPath: toRelative\(input\.projectRoot, previewTarget\)/);
+  assert.match(source, /const previewPath = frontRenderPath \|\| objectPreviewPath \|\| candidateSheetPath;/);
+});
+
+test('components-3d retry replaces the previous asset gallery instead of appending', async () => {
+  const source = await readFile(
+    new URL('../src/server/codex-agent-runtime.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /const images = stepKey === 'components-3d'[\s\S]*\? nextImages[\s\S]*: \[\.\.\.currentImages, \.\.\.nextImages\];/);
+});
+
 test('codex insert-scene retry requires an applied components-3d source', async () => {
   const { storage, cleanup } = await createTempStorage();
   try {
@@ -434,6 +448,10 @@ test('insert-scene MCP returns a Visionary scene insert plan without creating a 
     assert.equal(items[0].path, 'agent_history/assets/new_pipeline/project/run/main_images/pipeline_output/hunyuan_outputs/image_001/object_01_workbench_model.glb');
     assert.match(String(items[0].name), /\.glb$/);
     assert.equal((items[0].orientation as Record<string, unknown>).finalYawDeg, 90);
+    assert.equal(plan.coordinateSystem, 'visionary_y_up_xz_ground');
+    assert.deepEqual((items[0].transform as Record<string, unknown>).position, [-3, 0, 1.5]);
+    assert.deepEqual((items[0].transform as Record<string, unknown>).rotationEulerRad, [0, Math.PI / 2, 0]);
+    assert.deepEqual((items[0].transform as Record<string, unknown>).referenceSize, [2, 2, 3]);
     assert.equal((items[0].transform as Record<string, unknown>).scaleMode, 'xyz_min');
     await stat(path.join(projectRoot, String(plan.manifestPath)));
     await assert.rejects(
@@ -728,6 +746,43 @@ test('codex step apply action locks the selected main image without regenerating
       applied: true,
       actions: [],
     });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('codex step cancel clears progress and only allows retry', async () => {
+  const { storage, cleanup } = await createTempStorage();
+  try {
+    const project = await storage.createProject({
+      user: 'Demo User',
+      name: 'Cancel Step Project',
+    });
+    const runtime = new CodexAgentRuntime(storage);
+    const result = await runtime.handleStepAction({
+      user: 'Demo User',
+      projectId: project.id,
+      sessionId: 'agent-session-1',
+      stepKey: 'components-3d',
+      action: 'cancel',
+      selectedIndex: 0,
+      images: [
+        {
+          id: 'components_3d_001',
+          relativePath: 'agent_history/assets/new_pipeline/components/run-1.png',
+          mimeType: 'image/png',
+          bytes: 1,
+        },
+      ],
+    });
+
+    assert.equal(result.action, 'cancel');
+    assert.equal(result.blockPatch.applied, false);
+    assert.equal(result.blockPatch.value, 0);
+    assert.equal(result.blockPatch.indeterminate, false);
+    assert.deepEqual(result.blockPatch.actions, ['retry']);
+    assert.match(String(result.blockPatch.statusText), /已取消.*组件 3D 资产/);
+    assert.deepEqual(result.stepState.actions, ['retry']);
   } finally {
     await cleanup();
   }
