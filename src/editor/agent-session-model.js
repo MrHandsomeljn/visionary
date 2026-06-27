@@ -1,4 +1,5 @@
 const DEFAULT_ARCHIVE_STATE = 'active';
+const INTERRUPTED_ATTEMPT_STATUS = 'interrupted';
 
 function createId(prefix = 'agent') {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -141,6 +142,24 @@ export function replaceAgentSessionActiveAttempt(session, nextAttempt) {
 
 export function appendAgentSessionRetryAttempt(session, attempt) {
     if (!session || session.kind !== 'session' || !attempt) return session;
+    const activeIndex = Math.min(
+        Math.max(0, Number(session.activeAttemptIndex) || 0),
+        Math.max(0, (session.attempts || []).length - 1)
+    );
+    const activeAttempt = session.attempts?.[activeIndex] || null;
+    if (activeAttempt?.status === INTERRUPTED_ATTEMPT_STATUS) {
+        const attempts = (session.attempts || []).map((item, index) => (
+            index === activeIndex ? { ...attempt } : item
+        ));
+        return {
+            ...session,
+            attempts,
+            activeAttemptIndex: activeIndex,
+            archiveState: DEFAULT_ARCHIVE_STATE,
+            collapsed: false,
+            updatedAt: new Date().toISOString(),
+        };
+    }
     const attempts = [...(session.attempts || []), { ...attempt }];
     return {
         ...session,
@@ -324,14 +343,24 @@ export function resolveAgentSessionActionAvailability({
     }
 
     const isRunning = attemptStatus === 'running';
+    const isInterrupted = attemptStatus === INTERRUPTED_ATTEMPT_STATUS;
     const isComplete = attemptStatus === 'complete';
     const isFailed = attemptStatus === 'failed';
 
     return {
         canCancel: true,
         canRetry: !isRunning,
-        canApply: isComplete && !isFailed,
+        canApply: isComplete && !isFailed && !isInterrupted,
     };
+}
+
+export function normalizeAgentAttemptStatus(status = 'running') {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'interrupted') return INTERRUPTED_ATTEMPT_STATUS;
+    if (normalized === 'canceled' || normalized === 'cancelled') return 'canceled';
+    if (normalized === 'complete' || normalized === 'completed') return 'complete';
+    if (normalized === 'failed' || normalized === 'error') return 'failed';
+    return 'running';
 }
 
 function sanitizeExtension(value) {

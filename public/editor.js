@@ -15,6 +15,7 @@ import {
     getAgentAttemptStepBlocks,
     getAgentSessionActiveAttempt,
     patchAgentSessionAttemptBlock,
+    normalizeAgentAttemptStatus,
     resolveAgentSessionActionAvailability,
     resolveAgentSessionPagerItems,
     setAgentSessionArchiveState,
@@ -437,7 +438,6 @@ const AGENT_COMPOSER_SKILL_DEFS = [
 
 const SCENE_PIPELINE_STEP_DEFS = [
     { key: 'main-image', titleKey: 'agent.pipelineSteps.mainImage' },
-    { key: 'front-view', titleKey: 'agent.pipelineSteps.frontView' },
     { key: 'top-view', titleKey: 'agent.pipelineSteps.topView' },
     { key: 'layout', titleKey: 'agent.pipelineSteps.layout' },
     { key: 'components-3d', titleKey: 'agent.pipelineSteps.components3d' },
@@ -471,6 +471,10 @@ let projectRenameCommitInFlight = false;
 let agentMessageBottomPinRaf = 0;
 let agentMessageBottomPinFramesRemaining = 0;
 let agentMessageScrollbarSyncRaf = 0;
+let agentMessageScrollbarScheduledMeasure = false;
+let agentMessageScrollbarMeasureDirty = true;
+let agentMessageScrollbarMetricsCache = null;
+let agentMessageScrollbarResizeObserver = null;
 let agentMessageLayoutAnimationRaf = 0;
 const agentThumbnailImageCache = new Map();
 let agentWorkbenchResizeRaf = 0;
@@ -669,6 +673,7 @@ const UI_TEXT = {
             applied: '已应用',
             canceled: '已取消',
             completed: '已完成',
+            interrupted: '已中断',
             generating: '生成中',
             failed: '失败',
             user: '用户',
@@ -813,7 +818,7 @@ const UI_TEXT = {
             pendingImages: '待发送图片',
             skillToolbar: 'Agent 技能',
             removeSkill: '移除技能 {name}',
-            inputPlaceholder: '输入一句自然语言，触发当前流程的占位 Agent 响应',
+            inputPlaceholder: '输入一句自然语言，或使用技能标签发起 Agent 任务',
             collapsedTooltip: '收起 Agent 工作台',
             expandedTooltip: '展开 Agent 工作台',
             resizeAria: '调整 Agent 工作台宽度',
@@ -1101,6 +1106,7 @@ const UI_TEXT = {
             demoCameraCompletion: '请查看当前相机，并确认是否应用。',
             agentExecutionFailed: 'Agent 执行失败',
             codexAgentFailed: 'Codex 执行失败: {message}',
+            agentInterrupted: '任务已中断，请重试或取消。',
             agentPreviewPlaceholder: 'Agent 生成预览占位',
             invalidDepthScale: '深度倍率格式错误',
             setDepthScaleFailed: '设置深度倍率失败',
@@ -1260,6 +1266,7 @@ const UI_TEXT = {
             applied: 'Applied',
             canceled: 'Canceled',
             completed: 'Completed',
+            interrupted: 'Interrupted',
             generating: 'Generating',
             failed: 'Failed',
             user: 'User',
@@ -1404,7 +1411,7 @@ const UI_TEXT = {
             pendingImages: 'Pending images',
             skillToolbar: 'Agent skills',
             removeSkill: 'Remove skill {name}',
-            inputPlaceholder: 'Type a natural-language request to trigger the placeholder agent for the current workflow',
+            inputPlaceholder: 'Type a natural-language request or use a skill tag to start an agent task',
             collapsedTooltip: 'Collapse agent workbench',
             expandedTooltip: 'Expand agent workbench',
             resizeAria: 'Resize agent workbench',
@@ -1692,6 +1699,7 @@ const UI_TEXT = {
             demoCameraCompletion: 'Please review the current camera preview and confirm whether to apply it.',
             agentExecutionFailed: 'Agent execution failed',
             codexAgentFailed: 'Codex failed: {message}',
+            agentInterrupted: 'Task was interrupted. Retry or cancel it.',
             agentPreviewPlaceholder: 'Agent preview placeholder',
             invalidDepthScale: 'Invalid depth scale',
             setDepthScaleFailed: 'Failed to set depth scale',
@@ -2606,16 +2614,18 @@ function renderProjectBrowserProjectGrid() {
         return `
         <div class="project-browser-project-card${isActive ? ' is-active' : ''}">
             <div class="project-browser-project-card-header">
-                ${isActive ? `<span class="project-browser-project-card-badge">${escapeHtml(t('projectSession.currentBadge'))}</span>` : ''}
                 ${isRenaming ? `
-                    <input
-                        class="project-session-input project-browser-project-name-edit ${renameError ? 'has-error' : ''}"
-                        type="text"
-                        maxlength="96"
-                        value="${escapeHtml(renameValue)}"
-                        data-project-rename-input="${escapeHtml(projectId)}"
-                        aria-label="${escapeHtml(t('projectSession.createProjectNameLabel'))}"
-                    >
+                    <div class="project-browser-project-card-title-row">
+                        <input
+                            class="project-session-input project-browser-project-name-edit ${renameError ? 'has-error' : ''}"
+                            type="text"
+                            maxlength="96"
+                            value="${escapeHtml(renameValue)}"
+                            data-project-rename-input="${escapeHtml(projectId)}"
+                            aria-label="${escapeHtml(t('projectSession.createProjectNameLabel'))}"
+                        >
+                        ${isActive ? `<span class="project-browser-project-card-badge">${escapeHtml(t('projectSession.currentBadge'))}</span>` : ''}
+                    </div>
                     ${renameError ? `<div class="project-session-inline-error" role="alert">${escapeHtml(renameError)}</div>` : ''}
                 ` : `
                     <div class="project-browser-project-card-title-row">
@@ -2632,6 +2642,7 @@ function renderProjectBrowserProjectGrid() {
                                 <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
                             </svg>
                         </button>
+                        ${isActive ? `<span class="project-browser-project-card-badge">${escapeHtml(t('projectSession.currentBadge'))}</span>` : ''}
                     </div>
                 `}
                 <div class="project-browser-project-card-meta">
@@ -3560,6 +3571,149 @@ function buildAgentPipelineStatesSnapshot() {
     return pipelineStates;
 }
 
+function normalizeRestoredAgentAttemptStatus(status = 'running') {
+    const normalized = normalizeAgentAttemptStatus(status);
+    return normalized === 'running' ? 'interrupted' : normalized;
+}
+
+function isAgentAttemptInternallyRunning(attempt) {
+    if (!attempt || typeof attempt !== 'object') return false;
+    const blocks = getAgentAttemptStepBlocks(attempt);
+    if (blocks.some((block) => block?.type === 'progress' && block.indeterminate)) return true;
+    const pipelineState = attempt.pipelineState;
+    if (pipelineState?.status === 'running') return true;
+    const steps = pipelineState?.steps && typeof pipelineState.steps === 'object'
+        ? Object.values(pipelineState.steps)
+        : [];
+    return steps.some((step) => step?.status === 'running');
+}
+
+function shouldMarkInterruptedAgentStepBlock(block) {
+    if (!block || block.type !== 'progress' || !block.stepKey) return false;
+    if (block.applied) return false;
+    if (block.indeterminate || block.isCurrent) return true;
+    const statusText = String(block.statusText || '').trim();
+    return /^(生成中|Generating|处理中|Processing)/i.test(statusText);
+}
+
+function normalizeInterruptedAttemptBlocks(blocks = []) {
+    return (Array.isArray(blocks) ? blocks : []).map((block) => {
+        if (block?.type !== 'progress') return block;
+        const shouldMarkInterrupted = shouldMarkInterruptedAgentStepBlock(block);
+        return {
+            ...block,
+            indeterminate: false,
+            actions: [],
+            isCurrent: Boolean(block.isCurrent || block.indeterminate),
+            statusText: shouldMarkInterrupted ? t('common.interrupted') : block.statusText,
+        };
+    });
+}
+
+function normalizeInterruptedPipelineState(pipelineState) {
+    if (!pipelineState || typeof pipelineState !== 'object') return pipelineState;
+    const steps = pipelineState.steps && typeof pipelineState.steps === 'object'
+        ? Object.fromEntries(Object.entries(pipelineState.steps).map(([stepKey, step]) => [
+            stepKey,
+            {
+                ...step,
+                status: step?.status === 'running' ? 'interrupted' : step?.status,
+            },
+        ]))
+        : {};
+    return {
+        ...pipelineState,
+        status: pipelineState.status === 'running' ? 'interrupted' : pipelineState.status,
+        steps,
+        updatedAt: new Date().toISOString(),
+    };
+}
+
+function normalizeHydratedAgentAttempt(attempt) {
+    if (!attempt || typeof attempt !== 'object') return attempt;
+    const status = isAgentAttemptInternallyRunning(attempt)
+        ? 'interrupted'
+        : normalizeRestoredAgentAttemptStatus(attempt.status || 'running');
+    const isInterrupted = status === 'interrupted';
+    const blocks = isInterrupted
+        ? normalizeInterruptedAttemptBlocks(attempt.blocks || [])
+        : (Array.isArray(attempt.blocks) ? attempt.blocks : []);
+    const steps = Array.isArray(attempt.steps)
+        ? (isInterrupted ? normalizeInterruptedAttemptBlocks(attempt.steps) : attempt.steps)
+        : null;
+    return {
+        ...attempt,
+        status,
+        blocks,
+        ...(steps ? { steps } : {}),
+        ...(isInterrupted ? { pipelineState: normalizeInterruptedPipelineState(attempt.pipelineState) } : {}),
+    };
+}
+
+function createInterruptedAgentSessionFromLoadingMessage(message, prompt = '') {
+    const workflow = message?.workflow || state.agentWorkflow;
+    const attempt = createAgentGenerationAttempt({
+        workflow,
+        text: t('messages.agentInterrupted'),
+        status: 'interrupted',
+        blocks: normalizeInterruptedAttemptBlocks(message?.blocks || []),
+        createdAt: message?.createdAt || new Date().toISOString(),
+    });
+    return createAgentSession({
+        id: `agent-session-interrupted-${message?.id || Date.now()}`,
+        workflow,
+        prompt,
+        attachments: message?.attachments || [],
+        attempt,
+        createdAt: message?.createdAt || new Date().toISOString(),
+    });
+}
+
+function normalizeHydratedAgentItems(items = []) {
+    let lastUserPrompt = '';
+    return (Array.isArray(items) ? items : []).map((item) => {
+        if (item?.kind === 'message' && item.role === 'user') {
+            lastUserPrompt = String(item.text || '').trim();
+            return item;
+        }
+        if (item?.kind === 'message' && item.isLoading) {
+            return createInterruptedAgentSessionFromLoadingMessage(item, lastUserPrompt || String(item.text || '').trim());
+        }
+        if (item?.kind !== 'session' || !Array.isArray(item.attempts)) return item;
+        return {
+            ...item,
+            attempts: item.attempts.map((attempt) => normalizeHydratedAgentAttempt(attempt)),
+        };
+    });
+}
+
+function interruptRunningAgentConversations() {
+    let changed = false;
+    state.agentWorkflowThreads = Object.fromEntries(
+        Object.entries(state.agentWorkflowThreads || {}).map(([workflowId, thread]) => {
+            const items = normalizeHydratedAgentItems(thread?.items || []);
+            changed = changed || JSON.stringify(items) !== JSON.stringify(thread?.items || []);
+            return [workflowId, {
+                ...thread,
+                items,
+            }];
+        })
+    );
+    state.agentMessages = state.agentWorkflowThreads[state.agentWorkflow]?.items || state.agentMessages;
+    return changed;
+}
+
+function interruptAgentTasksForPageExit() {
+    const changed = interruptRunningAgentConversations();
+    if (!changed) return;
+    renderAgentMessages({ autoScroll: 'preserve-or-pin-bottom' });
+    if (isServerProjectSessionActive()) {
+        void saveServerProjectToCurrentProject({ silent: true });
+        return;
+    }
+    void persistAgentConversationsNow();
+}
+
 async function buildPersistableAgentConversationExport(options = {}) {
     const store = ensureAgentSessionStore();
     return store.exportSnapshot(buildAgentConversationSnapshot(), {
@@ -3817,7 +3971,7 @@ function hydrateAgentConversationSnapshot(snapshot) {
             workflow: workflowId,
             label: matched?.label || AGENT_WORKFLOW_DEFS[workflowId]?.label || workflowId,
             items: Array.isArray(matched?.items) && matched.items.length > 0
-                ? matched.items
+                ? normalizeHydratedAgentItems(matched.items)
                 : createDefaultAgentMessages(workflowId),
         };
     });
@@ -4086,7 +4240,8 @@ function getAgentSessionArchiveThumbnail(session) {
             if (block.type === 'progress' && Array.isArray(block.images)) {
                 const selectedIndex = Math.max(0, Math.min(block.images.length - 1, Number(block.selectedIndex) || 0));
                 const image = block.images[selectedIndex];
-                if (image?.src) return image.src;
+                const thumbnail = getAgentStepImageThumbnailSrc(image);
+                if (thumbnail) return thumbnail;
             }
         }
     }
@@ -4098,7 +4253,7 @@ function getAgentStepBlockThumbnail(block) {
     if (images.length <= 0) return '';
     const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(block.selectedIndex) || 0));
     const image = images[selectedIndex];
-    return image?.src || '';
+    return getAgentStepImageThumbnailSrc(image);
 }
 
 function getAgentImageAspectRatio(image) {
@@ -4178,6 +4333,13 @@ function updateAgentSessionById(sessionId, updater, {
     return nextSession;
 }
 
+function getAgentStepBlockDomElement(blockId) {
+    if (!dom.agentMessageList || !blockId) return null;
+    const selector = `[data-agent-block-id="${escapeCssIdentifier(blockId)}"]`;
+    const element = dom.agentMessageList.querySelector(selector);
+    return element instanceof HTMLElement ? element : null;
+}
+
 function getAgentStepBlockContextFromElement(element) {
     const blockElement = element?.closest?.('.agent-block-progress');
     if (!(blockElement instanceof HTMLElement)) return null;
@@ -4203,13 +4365,110 @@ function getAgentStepBlockContextFromElement(element) {
 
 function patchAgentStepBlock(context, patch) {
     if (!context) return null;
-    return updateAgentSessionById(context.sessionId, (session) => patchAgentSessionAttemptBlock(session, {
-        attemptId: context.attemptId,
-        blockId: context.blockId,
-        patch,
+    const session = updateAgentSessionById(context.sessionId, (session) => {
+        const patchBlockList = (blocks = []) => (
+            (blocks || []).map((block) => (
+                block.id === context.blockId ? { ...block, ...patch } : block
+            ))
+        );
+        return {
+            ...session,
+            attempts: (session.attempts || []).map((attempt) => {
+                if (attempt.id !== context.attemptId) return attempt;
+                const nextAttempt = {
+                    ...attempt,
+                    blocks: patchBlockList(attempt.blocks || []),
+                    ...(Array.isArray(attempt.steps) ? { steps: patchBlockList(attempt.steps) } : {}),
+                    updatedAt: new Date().toISOString(),
+                };
+                const hasScenePipeline = getAgentAttemptStepBlocks(nextAttempt)
+                    .some((block) => SCENE_PIPELINE_STEP_DEFS.some((step) => step.key === block?.stepKey));
+                return hasScenePipeline
+                    ? { ...nextAttempt, pipelineState: deriveScenePipelineState(session, nextAttempt) }
+                    : nextAttempt;
+            }),
+            updatedAt: new Date().toISOString(),
+        };
+    }, {
+        autoScroll: 'preserve-or-pin-bottom',
+        skipRender: true,
+    });
+    if (!session) return null;
+    const nextContext = getAgentStepBlockContextById(context.sessionId, context.attemptId, context.blockId);
+    if (nextContext) {
+        renderAgentStepBlockElement(nextContext, {
+            autoScroll: 'preserve-or-pin-bottom',
+        });
+    } else {
+        renderAgentSessionElement(context.sessionId, {
+            autoScroll: 'preserve-or-pin-bottom',
+        });
+    }
+    return session;
+}
+
+function getInterruptedAgentStepContext(sessionId, attemptId = '') {
+    const session = state.agentMessages.find((item) => item?.kind === 'session' && item.id === sessionId);
+    if (!session) return null;
+    const attempt = attemptId
+        ? session.attempts?.find((item) => item?.id === attemptId)
+        : getAgentSessionActiveAttempt(session);
+    if (!attempt || attempt.status !== 'interrupted') return null;
+    const blocks = getAgentAttemptStepBlocks(attempt);
+    const pipelineCurrentStepKey = String(attempt.pipelineState?.currentStepKey || '').trim();
+    const block = blocks.find((item) => (
+        item?.type === 'progress'
+        && item.stepKey
+        && !item.applied
+        && (item.isCurrent || (pipelineCurrentStepKey && item.stepKey === pipelineCurrentStepKey))
+    ));
+    if (!block?.id) return null;
+    return {
+        session,
+        attempt,
+        block,
+        sessionId: session.id,
+        attemptId: attempt.id,
+        blockId: block.id,
+        stepKey: block.stepKey,
+    };
+}
+
+function resumeInterruptedAgentStepAttempt(context) {
+    if (!context?.sessionId || !context.attemptId) return null;
+    return updateAgentSessionById(context.sessionId, (session) => ({
+        ...session,
+        attempts: (session.attempts || []).map((attempt) => {
+            if (attempt.id !== context.attemptId || attempt.status !== 'interrupted') return attempt;
+            const nextAttempt = {
+                ...attempt,
+                status: 'complete',
+                pipelineState: normalizeInterruptedPipelineState(attempt.pipelineState),
+                updatedAt: new Date().toISOString(),
+            };
+            return {
+                ...nextAttempt,
+                pipelineState: deriveScenePipelineState(session, nextAttempt),
+            };
+        }),
+        updatedAt: new Date().toISOString(),
     }), {
         autoScroll: 'preserve-or-pin-bottom',
+        skipRender: true,
     });
+}
+
+async function handleInterruptedAgentStepAction(context, action) {
+    const liveContext = getAgentStepBlockContextById(context?.sessionId, context?.attemptId, context?.blockId) || context;
+    if (!liveContext || liveContext.attempt?.status !== 'interrupted') return;
+    if (action === 'cancel') {
+        await handleAgentSessionAction(liveContext.sessionId, 'cancel');
+        return;
+    }
+    if (action !== 'retry') return;
+    resumeInterruptedAgentStepAttempt(liveContext);
+    const retryContext = getAgentStepBlockContextById(liveContext.sessionId, liveContext.attemptId, liveContext.blockId) || liveContext;
+    await handleAgentStepAction(retryContext, 'retry');
 }
 
 function renderAgentSessionStepBlocksExpanded(sessionId, attemptId, expanded) {
@@ -4266,6 +4525,7 @@ function updateAgentStepSelectedIndex(context, selectedIndex) {
     const nextContext = getAgentStepBlockContextById(context.sessionId, context.attemptId, context.blockId);
     if (nextContext) {
         updateAgentStepGalleryDom(nextContext);
+        void syncAgent3DBlocks();
     }
     return session;
 }
@@ -4309,19 +4569,17 @@ function updateAgentStepGalleryDom(context) {
     const images = Array.isArray(context.block.images) ? context.block.images : [];
     const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(context.block.selectedIndex) || 0));
     const selectedImage = images[selectedIndex] || null;
-    const image = blockElement.querySelector('.agent-step-gallery-image img');
-    if (image instanceof HTMLImageElement && selectedImage) {
-        image.src = selectedImage.src || '';
-        image.alt = selectedImage.alt || selectedImage.title || context.block.title || t('agent.blocks.image');
-    }
-    const frame = blockElement.querySelector('.agent-image-frame');
-    if (frame instanceof HTMLElement && selectedImage) {
-        const ratio = getAgentImageAspectRatio(selectedImage);
-        if (Number.isFinite(ratio)) {
-            frame.style.setProperty('--agent-image-aspect-ratio', ratio.toFixed(4));
-        } else {
-            frame.style.removeProperty('--agent-image-aspect-ratio');
-        }
+    const galleryMain = blockElement.querySelector('.agent-step-gallery-main');
+    if (galleryMain instanceof HTMLElement && selectedImage) {
+        galleryMain.innerHTML = renderAgentStepGalleryMain({
+            block: context.block,
+            images,
+            selectedImage,
+            selectedIndex,
+            isApplied: Boolean(context.block.applied),
+            isInterruptedAttempt: context.attempt?.status === 'interrupted',
+        });
+        syncAgentImageFrameAspectRatios(galleryMain);
     }
     const count = blockElement.querySelector('.agent-step-gallery-count');
     if (count) {
@@ -4343,6 +4601,61 @@ function updateAgentStepGalleryDom(context) {
             || (direction === 'prev' && selectedIndex <= 0)
             || (direction === 'next' && selectedIndex >= images.length - 1);
     });
+}
+
+function renderAgentStepBlockElement(context, { autoScroll = 'preserve-or-pin-bottom' } = {}) {
+    if (!context?.sessionId || !context.attemptId || !context.block?.id) return false;
+    const currentElement = getAgentStepBlockDomElement(context.block.id);
+    if (!currentElement) return false;
+    const prevScrollTop = dom.agentMessageScroll?.scrollTop ?? 0;
+    const prevClientHeight = dom.agentMessageScroll?.clientHeight ?? 0;
+    const prevScrollHeight = dom.agentMessageScroll?.scrollHeight ?? 0;
+    const shouldForceBottomAfterRender = shouldForceAgentMessageBottomAfterRender({
+        mode: autoScroll,
+        prevScrollTop,
+        prevClientHeight,
+        prevScrollHeight,
+    });
+    const sessionElement = getAgentSessionDomElement(context.sessionId);
+    const stepBlocksCollapsed = Boolean(context.attempt?.stepBlocksCollapsed);
+    const blocks = getAgentAttemptStepBlocks(context.attempt);
+    const hiddenStepBlockIds = stepBlocksCollapsed
+        ? new Set()
+        : getDeferredAgentStepBlockIds(blocks);
+    const template = document.createElement('template');
+    template.innerHTML = renderAgentProgressBlock(context.block, {
+        sessionId: context.sessionId,
+        attemptId: context.attemptId,
+        attempt: context.attempt,
+        stepBlocksCollapsed,
+        hiddenStepBlockIds,
+    }).trim();
+    const nextElement = template.content.firstElementChild;
+    if (!(nextElement instanceof HTMLElement)) return false;
+    currentElement.replaceWith(nextElement);
+    syncAgentSessionHeaderDom(context.sessionId);
+    syncAgentImageFrameAspectRatios(nextElement);
+    retainAgentThumbnailImageCache(sessionElement || dom.agentMessageList);
+    if (dom.agentMessageScroll) {
+        dom.agentMessageScroll.scrollTop = resolveAgentMessageRefreshScrollTop({
+            mode: autoScroll,
+            prevScrollTop,
+            prevClientHeight,
+            prevScrollHeight,
+            nextScrollHeight: dom.agentMessageScroll.scrollHeight,
+        });
+    }
+    syncAgentMessageScrollbar();
+    requestAnimationFrame(() => {
+        if (shouldForceBottomAfterRender) {
+            scheduleAgentMessageBottomPin(4);
+            bindAgentMessageAsyncBottomPin();
+            return;
+        }
+        syncAgentMessageScrollbar();
+    });
+    void syncAgent3DBlocks();
+    return true;
 }
 
 function serializeAgentStepImage(image) {
@@ -4412,6 +4725,7 @@ function shouldShowAgentPipelineContinue(context) {
     if (!pipelineState || pipelineState.kind !== 'scene-skill' || pipelineState.status === 'completed') return false;
     if (!block?.stepKey || block.stepKey !== pipelineState.currentStepKey) return false;
     if (block.applied || block.indeterminate) return false;
+    if (context?.attempt?.status === 'interrupted') return false;
     if (Array.isArray(block.images) && block.images.length > 0) return false;
     const stepStatus = pipelineState.steps?.[block.stepKey]?.status || '';
     return ['ready', 'paused', 'failed', 'running'].includes(stepStatus) || Boolean(block.isCurrent);
@@ -4466,8 +4780,23 @@ function advanceAgentPipelineAfterStepApply(context) {
         return nextSession;
     }, {
         autoScroll: 'preserve-or-pin-bottom',
+        skipRender: true,
     });
-    return session ? getAgentStepBlockContextByStepKey(context.sessionId, context.attemptId, nextStepKey) : null;
+    if (!session) return null;
+    const currentContext = getAgentStepBlockContextByStepKey(context.sessionId, context.attemptId, context.stepKey);
+    const nextContext = getAgentStepBlockContextByStepKey(context.sessionId, context.attemptId, nextStepKey);
+    const renderedCurrent = currentContext
+        ? renderAgentStepBlockElement(currentContext, { autoScroll: 'preserve-or-pin-bottom' })
+        : false;
+    const renderedNext = nextContext
+        ? renderAgentStepBlockElement(nextContext, { autoScroll: 'preserve-or-pin-bottom' })
+        : false;
+    if (!renderedCurrent || !renderedNext) {
+        renderAgentSessionElement(context.sessionId, {
+            autoScroll: 'preserve-or-pin-bottom',
+        });
+    }
+    return nextContext;
 }
 
 function createAgentBlockId(prefix = 'block') {
@@ -4559,6 +4888,45 @@ function createScenePipelineSteps({
     });
 }
 
+function createPendingCodexTaskSession({
+    workflowId,
+    prompt,
+    attachments = [],
+} = {}) {
+    const mainImageBlock = createAgentProgressBlock({
+        title: t('agent.pipelineSteps.mainImage'),
+        stepKey: 'main-image',
+        statusText: t('common.generating'),
+        value: 0.01,
+        indeterminate: true,
+        images: [],
+        selectedIndex: 0,
+        applied: false,
+        actions: [],
+        isCurrent: true,
+        expanded: true,
+    });
+    const steps = createScenePipelineSteps({ mainImageBlock });
+    const attempt = createAgentGenerationAttempt({
+        workflow: workflowId,
+        text: t('common.generating'),
+        blocks: steps,
+        steps,
+        status: 'running',
+    });
+    const session = createAgentSession({
+        workflow: workflowId,
+        prompt,
+        attachments,
+        attempt,
+    });
+    const activeAttempt = getAgentSessionActiveAttempt(session);
+    if (activeAttempt) {
+        activeAttempt.pipelineState = deriveScenePipelineState(session, activeAttempt);
+    }
+    return session;
+}
+
 function getNextScenePipelineStepKey(stepKey) {
     const index = SCENE_PIPELINE_STEP_DEFS.findIndex((step) => step.key === stepKey);
     return index >= 0 && index < SCENE_PIPELINE_STEP_DEFS.length - 1
@@ -4616,6 +4984,51 @@ function isReadyAgentViewer3DBlock(block) {
         && block.status === 'ready'
         && Boolean(block.assetUrl)
         && (block.format === 'glb' || block.format === 'gltf');
+}
+
+function getAgentStepImageProjectAssetUrl(relativePath) {
+    const assetPath = String(relativePath || '').trim();
+    if (!assetPath) return '';
+    const activeProjectId = String(state.projectSession.activeProjectId || '').trim();
+    const inferredProjectId = assetPath.match(/^agent_history\/assets\/new_pipeline\/([^/]+)\//)?.[1] || '';
+    const projectId = activeProjectId || inferredProjectId;
+    if (!projectId) return '';
+    return projectApi.getAssetUrl(state.projectSession.user, projectId, assetPath);
+}
+
+function getAgentStepImageThumbnailSrc(image) {
+    const metadata = image?.metadata && typeof image.metadata === 'object' ? image.metadata : null;
+    const thumbnailPath = String(
+        metadata?.thumbnailPath
+        || metadata?.frontRenderPath
+        || metadata?.previewPath
+        || ''
+    ).trim();
+    if (thumbnailPath) {
+        return getAgentStepImageProjectAssetUrl(thumbnailPath);
+    }
+    return image?.src || '';
+}
+
+function getAgentStepImageGlbPath(image) {
+    const metadata = image?.metadata && typeof image.metadata === 'object' ? image.metadata : null;
+    const glbPaths = Array.isArray(metadata?.glbPaths)
+        ? metadata.glbPaths.map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+    return glbPaths[0] || '';
+}
+
+function createAgentStepImageViewer3DBlock(block, image, selectedIndex = 0) {
+    const glbPath = getAgentStepImageGlbPath(image);
+    if (!glbPath) return null;
+    return createAgentViewer3DBlock({
+        id: `${block.id}-viewer-${String(selectedIndex).padStart(3, '0')}`,
+        title: image?.title || image?.id || block.title || t('agent.blocks.viewer3d'),
+        status: 'ready',
+        assetUrl: getAgentStepImageProjectAssetUrl(glbPath),
+        format: 'glb',
+        interaction: { rotate: true, zoom: true, pan: false, reset: true },
+    });
 }
 
 function isImageFile(file) {
@@ -5095,10 +5508,23 @@ async function syncAgent3DBlocks() {
             ? getAgentAttemptStepBlocks(getAgentSessionActiveAttempt(item))
             : (item.blocks || []);
         for (const block of blocks) {
-            if (!isReadyAgentViewer3DBlock(block)) continue;
-            const host = dom.agentMessageList?.querySelector(`[data-agent-viewer-block-id="${block.id}"]`);
-            if (host instanceof HTMLElement) {
-                viewerBlocks.push({ block, host });
+            if (isReadyAgentViewer3DBlock(block)) {
+                const host = dom.agentMessageList?.querySelector(`[data-agent-viewer-block-id="${block.id}"]`);
+                if (host instanceof HTMLElement) {
+                    viewerBlocks.push({ block, host });
+                }
+                continue;
+            }
+            if (block?.type === 'progress') {
+                const images = Array.isArray(block.images) ? block.images : [];
+                const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(block.selectedIndex) || 0));
+                const selectedImage = images[selectedIndex] || null;
+                const viewerBlock = createAgentStepImageViewer3DBlock(block, selectedImage, selectedIndex);
+                if (!viewerBlock) continue;
+                const host = dom.agentMessageList?.querySelector(`[data-agent-viewer-block-id="${viewerBlock.id}"]`);
+                if (host instanceof HTMLElement) {
+                    viewerBlocks.push({ block: viewerBlock, host });
+                }
             }
         }
     }
@@ -5118,26 +5544,83 @@ async function syncAgent3DBlocks() {
     }
 }
 
+function renderAgentStepGalleryMain({
+    block,
+    images = [],
+    selectedImage,
+    selectedIndex = 0,
+    isApplied = false,
+    isInterruptedAttempt = false,
+} = {}) {
+    const viewerBlock = createAgentStepImageViewer3DBlock(block, selectedImage, selectedIndex);
+    const thumbnailSrc = getAgentStepImageThumbnailSrc(selectedImage);
+    const nav = `
+        ${images.length > 1 ? `<span class="agent-step-gallery-count">${selectedIndex + 1} / ${images.length}</span>` : ''}
+        ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-prev" data-agent-step-gallery-nav="prev" data-agent-block-id="${block.id}" ${!isApplied && !isInterruptedAttempt && selectedIndex > 0 ? '' : 'disabled'} aria-label="Previous image">‹</button>` : ''}
+        ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-next" data-agent-step-gallery-nav="next" data-agent-block-id="${block.id}" ${!isApplied && !isInterruptedAttempt && selectedIndex < images.length - 1 ? '' : 'disabled'} aria-label="Next image">›</button>` : ''}
+    `;
+    if (viewerBlock) {
+        return `
+            <div class="agent-step-gallery-image">
+                <div class="agent-viewer-frame agent-step-viewer-frame is-ready">
+                    <div class="agent-viewer-surface" data-agent-viewer-block-id="${escapeHtml(viewerBlock.id)}"></div>
+                    ${nav}
+                </div>
+            </div>
+        `;
+    }
+    return `
+        <div class="agent-step-gallery-image">
+            <div class="agent-image-frame is-ready"${renderAgentImageAspectStyle(selectedImage)}>
+                <img src="${escapeHtml(thumbnailSrc)}" alt="${escapeHtml(selectedImage.alt || selectedImage.title || block.title || t('agent.blocks.image'))}" loading="eager" decoding="async">
+                ${nav}
+            </div>
+        </div>
+    `;
+}
+
 function renderAgentProgressBlock(block, context = {}) {
     const progress = Math.max(0, Math.min(1, Number(block.value) || 0));
     const percentText = block.indeterminate ? t('agent.promptProcessing') : `${Math.round(progress * 100)}%`;
     const images = Array.isArray(block.images) ? block.images : [];
     const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(block.selectedIndex) || 0));
     const selectedImage = images[selectedIndex] || null;
-    const actions = Array.isArray(block.actions) ? block.actions : [];
     const isApplied = Boolean(block.applied);
     const isStepBlock = Boolean(block.stepKey);
+    const isInterruptedAttempt = context?.attempt?.status === 'interrupted';
+    const actions = isInterruptedAttempt && isStepBlock
+        ? []
+        : (Array.isArray(block.actions) ? block.actions : []);
+    const isCanceledStep = isStepBlock && /^已取消|^Canceled/i.test(String(block.statusText || ''));
     const stepThumbnail = isStepBlock ? getAgentStepBlockThumbnail(block) : '';
     const showContinue = isStepBlock && shouldShowAgentPipelineContinue(context);
     const forceCollapsed = isStepBlock && Boolean(context.stepBlocksCollapsed);
     const isHiddenStepBlock = isStepBlock && context.hiddenStepBlockIds instanceof Set && context.hiddenStepBlockIds.has(block.id);
     const isOpen = !isStepBlock || (!forceCollapsed && Boolean(block.expanded || block.isCurrent || (!isApplied && (selectedImage || actions.length > 0 || showContinue))));
-    const stepStateLabel = isApplied ? t('agent.pipelineSteps.applied') : '';
-    const currentStepLabel = block.isCurrent && !isApplied ? t('agent.pipelineSteps.current') : '';
-    const statusText = isStepBlock && isApplied && /^已应用|^Applied/i.test(String(block.statusText || ''))
-        ? ''
-        : block.statusText;
-    const showProgressTrack = !isStepBlock || !isApplied;
+    const stepStateLabel = isApplied
+        ? t('agent.pipelineSteps.applied')
+        : isCanceledStep
+            ? t('common.canceled')
+            : isInterruptedAttempt
+                ? t('common.interrupted')
+                : '';
+    const isCurrentStepStatus = isStepBlock
+        && block.isCurrent
+        && !isApplied
+        && /^(当前步骤|Current step)$/i.test(String(block.statusText || '').trim());
+    let statusText = block.statusText;
+    if (
+        isStepBlock
+        && (
+            isInterruptedAttempt
+            || isCurrentStepStatus
+            || (isApplied && /^已应用|^Applied/i.test(String(block.statusText || '')))
+        )
+    ) {
+        statusText = '';
+    }
+    const showProgressTrack = !isStepBlock || (!isApplied && !isCanceledStep && !isInterruptedAttempt);
+    const showInterruptedStepActions = isInterruptedAttempt && isStepBlock && block.isCurrent && !isApplied && context.sessionId;
     const content = `
             ${isStepBlock ? '' : `
             <div class="agent-block-header">
@@ -5154,14 +5637,7 @@ function renderAgentProgressBlock(block, context = {}) {
             ${selectedImage ? `
                 <div class="agent-step-gallery ${isApplied ? 'is-applied' : ''}" data-agent-step-gallery="${block.id}">
                     <div class="agent-step-gallery-main">
-                        <div class="agent-step-gallery-image">
-                            <div class="agent-image-frame is-ready"${renderAgentImageAspectStyle(selectedImage)}>
-                                <img src="${escapeHtml(selectedImage.src)}" alt="${escapeHtml(selectedImage.alt || selectedImage.title || block.title || t('agent.blocks.image'))}" loading="eager" decoding="async">
-                                ${images.length > 1 ? `<span class="agent-step-gallery-count">${selectedIndex + 1} / ${images.length}</span>` : ''}
-                                ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-prev" data-agent-step-gallery-nav="prev" data-agent-block-id="${block.id}" ${!isApplied && selectedIndex > 0 ? '' : 'disabled'} aria-label="Previous image">‹</button>` : ''}
-                                ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-next" data-agent-step-gallery-nav="next" data-agent-block-id="${block.id}" ${!isApplied && selectedIndex < images.length - 1 ? '' : 'disabled'} aria-label="Next image">›</button>` : ''}
-                            </div>
-                        </div>
+                        ${renderAgentStepGalleryMain({ block, images, selectedImage, selectedIndex, isApplied, isInterruptedAttempt })}
                     </div>
                     ${renderAgentStepImageMetadata(selectedImage)}
                 </div>
@@ -5171,6 +5647,12 @@ function renderAgentProgressBlock(block, context = {}) {
                     ${actions.map((action) => `
                         <button type="button" class="agent-inline-btn agent-step-action-btn" data-agent-step-action="${escapeHtml(action)}" data-agent-block-id="${block.id}" ${isApplied ? 'disabled' : ''}>${escapeHtml(t(`agent.actions.${action}`))}</button>
                     `).join('')}
+                </div>
+            ` : ''}
+            ${showInterruptedStepActions ? `
+                <div class="agent-step-actions">
+                    <button type="button" class="agent-inline-btn" data-agent-interrupted-step-action="cancel" data-agent-block-id="${block.id}">${escapeHtml(t('agent.actions.cancel'))}</button>
+                    <button type="button" class="agent-inline-btn" data-agent-interrupted-step-action="retry" data-agent-block-id="${block.id}">${escapeHtml(t('agent.actions.retry'))}</button>
                 </div>
             ` : ''}
             ${showContinue ? `
@@ -5184,7 +5666,6 @@ function renderAgentProgressBlock(block, context = {}) {
             <details class="agent-block agent-block-progress agent-step-block ${isApplied ? 'is-applied' : ''} ${block.isCurrent ? 'is-current' : ''} ${isHiddenStepBlock ? 'is-deferred-hidden' : ''}" data-agent-block-id="${block.id}" data-agent-session-id="${escapeHtml(context.sessionId || '')}" data-agent-attempt-id="${escapeHtml(context.attemptId || '')}" data-agent-step-key="${escapeHtml(block.stepKey || '')}" ${isOpen ? 'open' : ''} ${isHiddenStepBlock ? 'hidden' : ''}>
                 <summary class="agent-block-header agent-step-summary">
                     ${stepThumbnail ? `<span class="agent-step-summary-thumb"><img src="${escapeHtml(stepThumbnail)}" alt="" loading="eager" decoding="async"></span>` : ''}
-                    ${currentStepLabel ? `<span class="agent-step-current-tag">${escapeHtml(currentStepLabel)}</span>` : ''}
                     <span class="agent-block-title">${escapeHtml(block.title || t('agent.blocks.progress'))}</span>
                     <span class="agent-step-summary-meta">
                         ${stepStateLabel ? `<span class="agent-step-state">${escapeHtml(stepStateLabel)}</span>` : ''}
@@ -5208,17 +5689,12 @@ function renderAgentStepImageMetadata(image) {
     const metadata = image?.metadata && typeof image.metadata === 'object' ? image.metadata : null;
     if (!metadata) return '';
     if (metadata.kind === 'components_3d') {
-        const glbPaths = Array.isArray(metadata.glbPaths)
-            ? metadata.glbPaths.map((item) => String(item || '').trim()).filter(Boolean)
-            : [];
         const details = [
             metadata.label ? String(metadata.label) : '',
-            glbPaths.length > 0 ? t('agent.pipelineSteps.components3dAssets', { count: glbPaths.length }) : '',
         ].filter(Boolean);
         return `
         <div class="agent-step-metadata">
             ${details.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}
-            ${glbPaths.slice(0, 2).map((item) => `<span>${escapeHtml(item)}</span>`).join('')}
         </div>
     `;
     }
@@ -5318,24 +5794,29 @@ function renderAgentStepBlocks(blocks, context = {}) {
             </div>
         `;
     }
-    let anchorIndex = -1;
-    for (let index = blocks.length - 1; index >= 0; index -= 1) {
-        if (shouldShowAgentStepBlock(blocks[index])) {
-            anchorIndex = index;
-            break;
-        }
-    }
-    if (anchorIndex < 0) anchorIndex = 0;
-    const nextIndex = Math.min(blocks.length - 1, anchorIndex + 1);
-    const visibleBlocks = blocks.filter((block, index) => shouldShowAgentStepBlock(block) || index === nextIndex);
-    const hiddenStepBlockIds = new Set(blocks
-        .filter((block, index) => !visibleBlocks.includes(block) && index > nextIndex)
-        .map((block) => block.id));
+    const hiddenStepBlockIds = getDeferredAgentStepBlockIds(blocks);
     return `
         <div class="agent-message-blocks agent-step-list">
             ${blocks.map((block) => renderAgentProgressBlock(block, { ...context, hiddenStepBlockIds })).join('')}
         </div>
     `;
+}
+
+function getDeferredAgentStepBlockIds(blocks = []) {
+    const stepBlocks = Array.isArray(blocks) ? blocks : [];
+    let anchorIndex = -1;
+    for (let index = stepBlocks.length - 1; index >= 0; index -= 1) {
+        if (shouldShowAgentStepBlock(stepBlocks[index])) {
+            anchorIndex = index;
+            break;
+        }
+    }
+    if (anchorIndex < 0) anchorIndex = 0;
+    const nextIndex = Math.min(stepBlocks.length - 1, anchorIndex + 1);
+    const visibleBlocks = stepBlocks.filter((block, index) => shouldShowAgentStepBlock(block) || index === nextIndex);
+    return new Set(stepBlocks
+        .filter((block, index) => !visibleBlocks.includes(block) && index > nextIndex)
+        .map((block) => block.id));
 }
 
 function isAgentImageAttachment(attachment) {
@@ -5507,15 +5988,7 @@ function renderAgentSessionItem(session) {
     const pipelineProgressLabel = getAgentPipelineProgressLabel(attempt);
     const hasPipelineStepToggle = Boolean(pipelineProgressLabel);
     const arePipelineStepsCollapsed = Boolean(attempt?.stepBlocksCollapsed);
-    const archiveStateLabel = session.archiveState === 'canceled'
-        ? t('common.canceled')
-        : session.archiveState === 'applied'
-            ? t('common.applied')
-            : attempt?.status === 'failed'
-                ? t('common.failed')
-                : pipelineProgressLabel || (attempt?.status === 'complete'
-                    ? t('common.completed')
-                    : t('common.generating'));
+    const archiveStateLabel = getAgentSessionStatusLabel(session, attempt);
     const isArchivedExpanded = session.archiveState !== 'active' && !session.collapsed;
     const actionAvailability = resolveAgentSessionActionAvailability({
         archiveState: session.archiveState,
@@ -5555,7 +6028,7 @@ function renderAgentSessionItem(session) {
                         </div>
                     </div>
                     <div class="agent-message-text">${escapeHtml(attempt?.text || '')}</div>
-                    ${renderAgentBlocks(getAgentAttemptStepBlocks(attempt), { sessionId: session.id, attemptId: attempt?.id || '', stepBlocksCollapsed: arePipelineStepsCollapsed })}
+                    ${renderAgentBlocks(getAgentAttemptStepBlocks(attempt), { sessionId: session.id, attemptId: attempt?.id || '', attempt, stepBlocksCollapsed: arePipelineStepsCollapsed })}
                     ${renderAgentPromptSuggestions(attempt?.promptSuggestions)}
                     <div class="agent-session-footer">
                         ${isArchivedExpanded ? '' : `
@@ -5573,62 +6046,111 @@ function renderAgentSessionItem(session) {
     `;
 }
 
-function getAgentMessageScrollbarMetrics() {
-    if (!dom.agentMessageScroll || !dom.agentMessageScrollbar) return null;
+function invalidateAgentMessageScrollbarMetrics() {
+    agentMessageScrollbarMeasureDirty = true;
+}
+
+function measureAgentMessageScrollbarMetrics() {
+    if (!dom.agentMessageScroll || !dom.agentMessageScrollbar) {
+        agentMessageScrollbarMetricsCache = null;
+        agentMessageScrollbarMeasureDirty = true;
+        return null;
+    }
     const clientHeight = dom.agentMessageScroll.clientHeight;
     const scrollHeight = dom.agentMessageScroll.scrollHeight;
     const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
     const trackHeight = dom.agentMessageScrollbar.clientHeight;
     if (trackHeight <= 0) {
-        return {
+        agentMessageScrollbarMetricsCache = {
             clientHeight,
             scrollHeight,
             maxScrollTop,
             trackHeight: 0,
             thumbHeight: 0,
             thumbTravel: 0,
-            thumbTop: 0,
         };
+        agentMessageScrollbarMeasureDirty = false;
+        return agentMessageScrollbarMetricsCache;
     }
     const thumbHeight = maxScrollTop <= 0
         ? trackHeight
         : Math.max(36, Math.min(trackHeight, (clientHeight / scrollHeight) * trackHeight));
     const thumbTravel = Math.max(0, trackHeight - thumbHeight);
-    const thumbTop = maxScrollTop <= 0 || thumbTravel <= 0
-        ? 0
-        : (dom.agentMessageScroll.scrollTop / maxScrollTop) * thumbTravel;
-    return {
+    agentMessageScrollbarMetricsCache = {
         clientHeight,
         scrollHeight,
         maxScrollTop,
         trackHeight,
         thumbHeight,
         thumbTravel,
-        thumbTop,
     };
+    agentMessageScrollbarMeasureDirty = false;
+    return agentMessageScrollbarMetricsCache;
 }
 
-function syncAgentMessageScrollbar() {
-    if (!dom.agentMessageScroll || !dom.agentMessageScrollbar || !dom.agentMessageScrollbarThumb) return;
-    const metrics = getAgentMessageScrollbarMetrics();
-    if (!metrics) return;
+function getAgentMessageScrollbarMetrics({ measure = false } = {}) {
+    if (measure || agentMessageScrollbarMeasureDirty || !agentMessageScrollbarMetricsCache) {
+        return measureAgentMessageScrollbarMetrics();
+    }
+    return agentMessageScrollbarMetricsCache;
+}
+
+function updateAgentMessageScrollbarThumb(metrics = agentMessageScrollbarMetricsCache) {
+    if (!dom.agentMessageScroll || !dom.agentMessageScrollbar || !dom.agentMessageScrollbarThumb || !metrics) return;
     const shouldHide = metrics.maxScrollTop <= 0 || metrics.trackHeight <= 0 || state.agentWorkbenchCollapsed;
-    dom.agentMessageScrollbar.classList.toggle('is-hidden', shouldHide);
-    dom.agentMessageScrollbarThumb.style.height = `${Math.max(0, metrics.thumbHeight)}px`;
-    dom.agentMessageScrollbarThumb.style.transform = `translateY(${Math.max(0, metrics.thumbTop)}px)`;
+    const nextHeight = `${Math.max(0, metrics.thumbHeight)}px`;
+    const thumbTop = metrics.maxScrollTop <= 0 || metrics.thumbTravel <= 0
+        ? 0
+        : (dom.agentMessageScroll.scrollTop / metrics.maxScrollTop) * metrics.thumbTravel;
+    const nextTransform = `translate3d(0, ${Math.max(0, thumbTop)}px, 0)`;
+    if (dom.agentMessageScrollbar.classList.contains('is-hidden') !== shouldHide) {
+        dom.agentMessageScrollbar.classList.toggle('is-hidden', shouldHide);
+    }
+    if (dom.agentMessageScrollbarThumb.style.height !== nextHeight) {
+        dom.agentMessageScrollbarThumb.style.height = nextHeight;
+    }
+    if (dom.agentMessageScrollbarThumb.style.transform !== nextTransform) {
+        dom.agentMessageScrollbarThumb.style.transform = nextTransform;
+    }
 }
 
-function scheduleAgentMessageScrollbarSync() {
+function syncAgentMessageScrollbar({ measure = true } = {}) {
+    if (!dom.agentMessageScroll || !dom.agentMessageScrollbar || !dom.agentMessageScrollbarThumb) return;
+    const metrics = getAgentMessageScrollbarMetrics({ measure });
+    if (!metrics) return;
+    updateAgentMessageScrollbarThumb(metrics);
+}
+
+function scheduleAgentMessageScrollbarSync({ measure = true } = {}) {
+    agentMessageScrollbarScheduledMeasure = agentMessageScrollbarScheduledMeasure || Boolean(measure);
+    if (measure) {
+        invalidateAgentMessageScrollbarMetrics();
+    }
     if (agentMessageScrollbarSyncRaf !== 0) return;
     agentMessageScrollbarSyncRaf = requestAnimationFrame(() => {
         agentMessageScrollbarSyncRaf = 0;
-        syncAgentMessageScrollbar();
+        const shouldMeasure = agentMessageScrollbarScheduledMeasure;
+        agentMessageScrollbarScheduledMeasure = false;
+        syncAgentMessageScrollbar({ measure: shouldMeasure });
     });
+}
+
+function initAgentMessageScrollbarObservers() {
+    if (agentMessageScrollbarResizeObserver || typeof ResizeObserver === 'undefined') return;
+    agentMessageScrollbarResizeObserver = new ResizeObserver(() => {
+        scheduleAgentMessageScrollbarSync({ measure: true });
+    });
+    if (dom.agentMessageScroll) {
+        agentMessageScrollbarResizeObserver.observe(dom.agentMessageScroll);
+    }
+    if (dom.agentMessageList) {
+        agentMessageScrollbarResizeObserver.observe(dom.agentMessageList);
+    }
 }
 
 function beginAgentMessageScrollbarDrag(event) {
     if (event.button !== 0 || !dom.agentMessageScroll) return;
-    const metrics = getAgentMessageScrollbarMetrics();
+    const metrics = getAgentMessageScrollbarMetrics({ measure: true });
     if (!metrics || metrics.maxScrollTop <= 0 || metrics.thumbTravel <= 0) return;
     const trackRect = dom.agentMessageScrollbar?.getBoundingClientRect();
     const thumbRect = dom.agentMessageScrollbarThumb?.getBoundingClientRect();
@@ -5653,7 +6175,7 @@ function beginAgentMessageScrollbarDrag(event) {
     window.addEventListener('mousemove', onAgentMessageScrollbarDragMove);
     window.addEventListener('mouseup', endAgentMessageScrollbarDrag);
     window.addEventListener('blur', endAgentMessageScrollbarDrag);
-    syncAgentMessageScrollbar();
+    syncAgentMessageScrollbar({ measure: false });
     event.preventDefault();
 }
 
@@ -5664,7 +6186,7 @@ function onAgentMessageScrollbarDragMove(event) {
     const deltaY = event.clientY - startY;
     const nextScrollTop = startScrollTop + (deltaY / thumbTravel) * maxScrollTop;
     dom.agentMessageScroll.scrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
-    syncAgentMessageScrollbar();
+    syncAgentMessageScrollbar({ measure: false });
     event.preventDefault();
 }
 
@@ -5680,7 +6202,7 @@ function endAgentMessageScrollbarDrag() {
 function forceAgentMessageScrollToBottom() {
     if (!dom.agentMessageScroll) return;
     dom.agentMessageScroll.scrollTop = dom.agentMessageScroll.scrollHeight;
-    syncAgentMessageScrollbar();
+    syncAgentMessageScrollbar({ measure: true });
 }
 
 function runAgentMessageBottomPinLoop() {
@@ -5877,6 +6399,41 @@ function syncAgentSessionStepToggleDom(sessionId, collapsed) {
     const label = collapsed ? t('agent.expandAllSteps') : t('agent.collapseAllSteps');
     toggle.title = label;
     toggle.setAttribute('aria-label', label);
+}
+
+function getAgentSessionStatusLabel(session, attempt) {
+    const pipelineProgressLabel = getAgentPipelineProgressLabel(attempt);
+    if (session?.archiveState === 'canceled') return t('common.canceled');
+    if (session?.archiveState === 'applied') return t('common.applied');
+    if (attempt?.status === 'interrupted') return t('common.interrupted');
+    if (attempt?.status === 'failed') return t('common.failed');
+    return pipelineProgressLabel || (attempt?.status === 'complete'
+        ? t('common.completed')
+        : t('common.generating'));
+}
+
+function syncAgentSessionHeaderDom(sessionId) {
+    const session = state.agentMessages.find((item) => item?.kind === 'session' && item.id === sessionId);
+    const sessionElement = getAgentSessionDomElement(sessionId);
+    if (!session || !(sessionElement instanceof HTMLElement)) return false;
+    const attempt = getAgentSessionActiveAttempt(session);
+    const status = sessionElement.querySelector('.agent-session-status');
+    if (status) {
+        status.textContent = getAgentSessionStatusLabel(session, attempt);
+    }
+    const actionAvailability = resolveAgentSessionActionAvailability({
+        archiveState: session.archiveState,
+        attemptStatus: attempt?.status || 'running',
+    });
+    const retryButton = sessionElement.querySelector('[data-agent-session-action="retry"]');
+    if (retryButton instanceof HTMLButtonElement) {
+        retryButton.disabled = !actionAvailability.canRetry;
+    }
+    const applyButton = sessionElement.querySelector('[data-agent-session-action="apply"]');
+    if (applyButton instanceof HTMLButtonElement) {
+        applyButton.disabled = !actionAvailability.canApply;
+    }
+    return true;
 }
 
 function syncAgentSessionStepBlocksDom(sessionId, attemptId, expanded) {
@@ -6231,7 +6788,7 @@ function handleAgentMessageListClick(event) {
     const pipelineContinueButton = event.target.closest('[data-agent-pipeline-continue]');
     if (pipelineContinueButton instanceof HTMLElement) {
         const context = getAgentStepBlockContextFromElement(pipelineContinueButton);
-        if (!context || !shouldShowAgentPipelineContinue(context)) return;
+        if (!context || context.attempt?.status === 'interrupted' || !shouldShowAgentPipelineContinue(context)) return;
         handleAgentStepAction(context, 'retry').catch((error) => {
             console.warn('[Agent Step] continue failed', error);
             showError(t('messages.agentOperationFailed', { message: error?.message || String(error) }));
@@ -6241,7 +6798,7 @@ function handleAgentMessageListClick(event) {
     const stepGalleryNav = event.target.closest('[data-agent-step-gallery-nav]');
     if (stepGalleryNav instanceof HTMLElement) {
         const context = getAgentStepBlockContextFromElement(stepGalleryNav);
-        if (!context || context.block.applied) return;
+        if (!context || context.attempt?.status === 'interrupted' || context.block.applied) return;
         const images = Array.isArray(context.block.images) ? context.block.images : [];
         if (images.length <= 1) return;
         const direction = stepGalleryNav.dataset.agentStepGalleryNav;
@@ -6256,9 +6813,20 @@ function handleAgentMessageListClick(event) {
     if (stepActionButton instanceof HTMLElement) {
         const context = getAgentStepBlockContextFromElement(stepActionButton);
         const action = String(stepActionButton.dataset.agentStepAction || '').trim();
-        if (!context || !action) return;
+        if (!context || context.attempt?.status === 'interrupted' || !action) return;
         handleAgentStepAction(context, action).catch((error) => {
             console.warn('[Agent Step] action failed', error);
+            showError(t('messages.agentOperationFailed', { message: error?.message || String(error) }));
+        });
+        return;
+    }
+    const interruptedStepActionButton = event.target.closest('[data-agent-interrupted-step-action]');
+    if (interruptedStepActionButton instanceof HTMLElement) {
+        const context = getAgentStepBlockContextFromElement(interruptedStepActionButton);
+        const action = String(interruptedStepActionButton.dataset.agentInterruptedStepAction || '').trim();
+        if (!context || !action) return;
+        handleInterruptedAgentStepAction(context, action).catch((error) => {
+            console.warn('[Agent Step] interrupted action failed', error);
             showError(t('messages.agentOperationFailed', { message: error?.message || String(error) }));
         });
         return;
@@ -6318,6 +6886,9 @@ function handleAgentWorkflowClick(event) {
     if (!workflowId) return;
     setAgentWorkflow(workflowId);
 }
+
+window.addEventListener('pagehide', interruptAgentTasksForPageExit);
+window.addEventListener('beforeunload', interruptAgentTasksForPageExit);
 
 function handleAgentWorkbenchModeClick(event) {
     if (!(event.target instanceof Element)) return;
@@ -6613,6 +7184,17 @@ function hasCodexTaskSignal(result) {
     return Boolean(result?.task?.started);
 }
 
+function replaceAgentSessionAttempt(session, attemptId, nextAttempt) {
+    if (!session || session.kind !== 'session' || !attemptId || !nextAttempt) return session;
+    return {
+        ...session,
+        attempts: (session.attempts || []).map((attempt) => (
+            attempt.id === attemptId ? { ...nextAttempt, id: attemptId } : attempt
+        )),
+        updatedAt: new Date().toISOString(),
+    };
+}
+
 function replaceAgentMessageWithSession(messageId, session) {
     const index = getAgentMessageIndexById(messageId);
     if (index < 0 || !session) return null;
@@ -6622,10 +7204,9 @@ function replaceAgentMessageWithSession(messageId, session) {
     return session;
 }
 
-function createCodexTaskSessionFromResult({
+function createCodexTaskAttemptFromResult({
     workflowId,
     prompt,
-    attachments,
     result,
 } = {}) {
     const task = result?.task || {};
@@ -6670,6 +7251,20 @@ function createCodexTaskSessionFromResult({
         steps,
         status: 'complete',
     });
+    return attempt;
+}
+
+function createCodexTaskSessionFromResult({
+    workflowId,
+    prompt,
+    attachments,
+    result,
+} = {}) {
+    const attempt = createCodexTaskAttemptFromResult({
+        workflowId,
+        prompt,
+        result,
+    });
     const session = createAgentSession({
         workflow: workflowId,
         prompt,
@@ -6681,11 +7276,86 @@ function createCodexTaskSessionFromResult({
     return session;
 }
 
+function completeServerCodexAgentSessionAttempt({
+    sessionId,
+    attemptId,
+    workflowId,
+    prompt,
+    result,
+} = {}) {
+    if (hasCodexTaskSignal(result)) {
+        const nextAttempt = createCodexTaskAttemptFromResult({
+            workflowId,
+            prompt,
+            result,
+        });
+        updateAgentSessionById(sessionId, (session) => {
+            const nextSession = replaceAgentSessionAttempt(session, attemptId, nextAttempt);
+            const attempt = nextSession.attempts?.find((item) => item?.id === attemptId);
+            if (!attempt) return nextSession;
+            return replaceAgentSessionAttempt(nextSession, attemptId, {
+                ...attempt,
+                pipelineState: deriveScenePipelineState(nextSession, attempt),
+            });
+        }, {
+            autoScroll: 'preserve-or-pin-bottom',
+        });
+        return;
+    }
+    updateAgentSessionById(sessionId, (session) => updateAgentSessionAttempt(session, {
+        attemptId,
+        text: result?.finalText || t('messages.agentExecutionFailed'),
+        status: 'complete',
+        blocks: [],
+        steps: [],
+    }), {
+        autoScroll: 'preserve-or-pin-bottom',
+    });
+}
+
+function runServerCodexAgentSessionAttempt({
+    workflowId,
+    prompt,
+    sessionId,
+    attemptId,
+} = {}) {
+    projectApi.sendCodexAgentMessage({
+        user: state.projectSession.user,
+        projectId: state.projectSession.activeProjectId,
+        conversationId: getCodexAgentConversationId(),
+        threadId: state.agentCodexThreadId,
+        prompt,
+        workflow: workflowId,
+    }).then((result) => {
+        state.agentCodexConversationId = result?.conversationId || state.agentCodexConversationId;
+        state.agentCodexThreadId = result?.threadId || state.agentCodexThreadId;
+        completeServerCodexAgentSessionAttempt({
+            sessionId,
+            attemptId,
+            workflowId,
+            prompt,
+            result,
+        });
+    }).catch((error) => {
+        createAgentSessionHandle(sessionId, attemptId).fail(t('messages.codexAgentFailed', {
+            message: error?.message || String(error),
+        }));
+    });
+}
+
 function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
     const handle = openAgentAssistantMessage({
         workflow: workflowId,
         isLoading: true,
     });
+    let pendingSession = null;
+    if (/\$scene-skill(?=\s|$)/i.test(String(prompt || ''))) {
+        pendingSession = replaceAgentMessageWithSession(handle.messageId, createPendingCodexTaskSession({
+            workflowId,
+            prompt,
+            attachments,
+        }));
+    }
 
     projectApi.sendCodexAgentMessage({
         user: state.projectSession.user,
@@ -6698,6 +7368,16 @@ function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
         state.agentCodexConversationId = result?.conversationId || state.agentCodexConversationId;
         state.agentCodexThreadId = result?.threadId || state.agentCodexThreadId;
         if (hasCodexTaskSignal(result)) {
+            if (pendingSession) {
+                completeServerCodexAgentSessionAttempt({
+                    sessionId: pendingSession.id,
+                    attemptId: getAgentSessionActiveAttempt(pendingSession)?.id || '',
+                    workflowId,
+                    prompt,
+                    result,
+                });
+                return;
+            }
             replaceAgentMessageWithSession(handle.messageId, createCodexTaskSessionFromResult({
                 workflowId,
                 prompt,
@@ -6738,7 +7418,6 @@ async function handleAgentStepAction(context, action) {
         images: currentImages.map((image) => serializeAgentStepImage(image)),
         sourceImages: [
             serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'main-image'),
-            serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'front-view'),
             serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'top-view'),
             serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'layout'),
             serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'components-3d'),
@@ -6841,7 +7520,33 @@ async function handleAgentSessionAction(sessionId, action) {
     }
 
     if (action === 'retry') {
+        const interruptedStepContext = getInterruptedAgentStepContext(sessionId, activeAttempt?.id || '');
+        if (interruptedStepContext) {
+            await handleInterruptedAgentStepAction(interruptedStepContext, 'retry');
+            return;
+        }
         const retryPrompt = session.prompt || activeAttempt?.text || t('messages.retryRequest');
+        if (canUseServerCodexAgent()) {
+            const nextAttempt = createAgentGenerationAttempt({
+                workflow: session.workflow,
+                text: `${t('common.generating')}: ${retryPrompt}`,
+                blocks: [],
+            });
+            updateAgentSessionById(sessionId, (current) => appendAgentSessionRetryAttempt(current, nextAttempt), {
+                autoScroll: 'preserve-or-pin-bottom',
+            });
+            await invokeAgentSessionActionHandler('onRetry', {
+                ...payload,
+                nextAttempt,
+            });
+            runServerCodexAgentSessionAttempt({
+                workflowId: session.workflow,
+                prompt: retryPrompt,
+                sessionId,
+                attemptId: nextAttempt.id,
+            });
+            return;
+        }
         const { blocks, progressBlock, imageBlock, viewerBlock } = createMockAgentAttemptBlocks(session.workflow);
         const nextAttempt = createAgentGenerationAttempt({
             workflow: session.workflow,
@@ -8721,6 +9426,25 @@ function updateCameraSequenceToggleButton() {
     syncCameraSequenceDragButton();
 }
 
+function renderModelVisibilityIcon(visible) {
+    return visible
+        ? `
+            <svg class="model-visibility-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                <circle cx="12" cy="12" r="3" />
+            </svg>
+        `
+        : `
+            <svg class="model-visibility-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M3 12c2.4 3 5.4 4.5 9 4.5s6.6-1.5 9-4.5" />
+                <path d="m5 15-1.5 2" />
+                <path d="m9 16.3-.5 2.2" />
+                <path d="m15 16.3.5 2.2" />
+                <path d="m19 15 1.5 2" />
+            </svg>
+        `;
+}
+
 /**
  * 更新模型列表 UI
  */
@@ -8761,8 +9485,13 @@ function updateModelList() {
                     `;
                 })()}
                 <span class="model-points">${t('sidebar.pointCount', { count: model.pointCount.toLocaleString() })}</span>
-                <button class="model-visibility-btn ${model.visible ? 'active' : ''}" data-id="${model.id}" title="${t('sidebar.toggleVisibility')}">
-                    ${model.visible ? t('common.visible') : t('common.hidden')}
+                <button
+                    class="model-visibility-btn ${model.visible ? 'active' : ''}"
+                    data-id="${model.id}"
+                    title="${escapeHtml(model.visible ? t('common.visible') : t('common.hidden'))}"
+                    aria-label="${escapeHtml(t('sidebar.toggleVisibility'))}: ${escapeHtml(model.visible ? t('common.visible') : t('common.hidden'))}"
+                >
+                    ${renderModelVisibilityIcon(model.visible)}
                 </button>
                 <span class="model-remove" data-id="${model.id}" title="${t('sidebar.deleteModel')}">&times;</span>
             </div>
@@ -8842,7 +9571,7 @@ function updateModelList() {
                 }
             });
             input.addEventListener('blur', () => {
-                void commitModelRename(input.dataset.id, { keepEditingOnError: true });
+                handleModelRenameInputBlur(input.dataset.id);
             });
         });
 
@@ -9968,6 +10697,13 @@ function focusModelRenameInput(modelId) {
     requestAnimationFrame(() => {
         input.focus();
         input.select();
+    });
+}
+
+function handleModelRenameInputBlur(modelId) {
+    requestAnimationFrame(() => {
+        if (!document.hasFocus()) return;
+        void commitModelRename(modelId, { keepEditingOnError: true });
     });
 }
 
@@ -14256,7 +14992,9 @@ function initEventListeners() {
         if (!projectId || !state.projectSession.adminSelectedUser) return;
         void deleteAdminProject(state.projectSession.adminSelectedUser, projectId);
     });
-    dom.agentMessageScroll?.addEventListener('scroll', syncAgentMessageScrollbar);
+    dom.agentMessageScroll?.addEventListener('scroll', () => {
+        scheduleAgentMessageScrollbarSync({ measure: false });
+    }, { passive: true });
     dom.agentMessageScrollbar?.addEventListener('mousedown', beginAgentMessageScrollbarDrag);
     dom.agentComposer?.addEventListener('submit', handleAgentComposerSubmit);
     dom.agentComposerSkillToolbar?.addEventListener('click', handleAgentComposerSkillToolbarClick);
@@ -14846,6 +15584,7 @@ async function init() {
     // 初始化事件监听
     setBootLoadingStatus(t('loading.bootFinalizingUi'));
     initEventListeners();
+    initAgentMessageScrollbarObservers();
     initializeSidebarLayout();
     syncLeftSidebarCollapsedState();
     syncCanvasContainerToViewport();
@@ -14857,7 +15596,7 @@ async function init() {
             false
         );
         syncCanvasContainerToViewport();
-        syncAgentMessageScrollbar();
+        scheduleAgentMessageScrollbarSync({ measure: true });
     });
     initSceneSettingsUI();
     initTimelineUI();
@@ -14865,7 +15604,7 @@ async function init() {
     syncSceneSettingsPanel();
     syncCameraPreviewPanel();
     syncViewportGizmoControls();
-    syncAgentMessageScrollbar();
+    syncAgentMessageScrollbar({ measure: true });
     syncCameraSequenceDragButton();
     startAnimationControlsSyncLoop();
 

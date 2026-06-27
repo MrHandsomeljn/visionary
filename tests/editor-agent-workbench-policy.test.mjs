@@ -23,13 +23,35 @@ test('agent workbench resize is coalesced per frame and persisted only after dra
 
 test('agent scrollbar sync is coalesced instead of queueing duplicate rAF callbacks', () => {
     const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
 
     assert.match(source, /let agentMessageScrollbarSyncRaf = 0;/);
+    assert.match(source, /let agentMessageScrollbarScheduledMeasure = false;/);
+    assert.match(source, /let agentMessageScrollbarMeasureDirty = true;/);
+    assert.match(source, /let agentMessageScrollbarMetricsCache = null;/);
+    assert.match(source, /function invalidateAgentMessageScrollbarMetrics\(\) \{[\s\S]*agentMessageScrollbarMeasureDirty = true;[\s\S]*\}/);
     assert.match(
         source,
-        /function scheduleAgentMessageScrollbarSync\(\) \{[\s\S]*if \(agentMessageScrollbarSyncRaf !== 0\) return;[\s\S]*agentMessageScrollbarSyncRaf = requestAnimationFrame\(\(\) => \{[\s\S]*agentMessageScrollbarSyncRaf = 0;[\s\S]*syncAgentMessageScrollbar\(\);[\s\S]*\}\);[\s\S]*\}/
+        /function getAgentMessageScrollbarMetrics\(\{ measure = false \} = \{\}\) \{[\s\S]*if \(measure \|\| agentMessageScrollbarMeasureDirty \|\| !agentMessageScrollbarMetricsCache\) \{[\s\S]*return measureAgentMessageScrollbarMetrics\(\);[\s\S]*\}[\s\S]*return agentMessageScrollbarMetricsCache;[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /function updateAgentMessageScrollbarThumb\(metrics = agentMessageScrollbarMetricsCache\) \{[\s\S]*dom\.agentMessageScroll\.scrollTop[\s\S]*translate3d\(0, \$\{Math\.max\(0, thumbTop\)\}px, 0\)/
+    );
+    assert.match(
+        source,
+        /function scheduleAgentMessageScrollbarSync\(\{ measure = true \} = \{\}\) \{[\s\S]*agentMessageScrollbarScheduledMeasure = agentMessageScrollbarScheduledMeasure \|\| Boolean\(measure\);[\s\S]*if \(measure\) \{[\s\S]*invalidateAgentMessageScrollbarMetrics\(\);[\s\S]*\}[\s\S]*if \(agentMessageScrollbarSyncRaf !== 0\) return;[\s\S]*agentMessageScrollbarSyncRaf = requestAnimationFrame\(\(\) => \{[\s\S]*const shouldMeasure = agentMessageScrollbarScheduledMeasure;[\s\S]*agentMessageScrollbarScheduledMeasure = false;[\s\S]*syncAgentMessageScrollbar\(\{ measure: shouldMeasure \}\);[\s\S]*\}\);[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /dom\.agentMessageScroll\?\.addEventListener\('scroll', \(\) => \{[\s\S]*scheduleAgentMessageScrollbarSync\(\{ measure: false \}\);[\s\S]*\}, \{ passive: true \}\);/
     );
     assert.doesNotMatch(source, /requestAnimationFrame\(syncAgentMessageScrollbar\)/);
+    assert.doesNotMatch(source, /addEventListener\('scroll', syncAgentMessageScrollbar\)/);
+    assert.match(
+        css,
+        /\.agent-message-scrollbar-thumb\s*\{[\s\S]*contain:\s*strict;[\s\S]*will-change:\s*transform;[\s\S]*\}/
+    );
 });
 
 test('agent collapse defers layout-heavy sync outside the click frame', () => {
@@ -93,6 +115,14 @@ test('agent workbench layout tokens and message column sizing remain pinned', ()
     assert.match(
         css,
         /\.agent-workbench-toggle:hover::before\s*\{[\s\S]*border-color:\s*var\(--accent\);[\s\S]*background:\s*color-mix\(in srgb, var\(--panel-bg\) 80%, transparent\);[\s\S]*box-shadow:\s*inset 0 0 0 1px color-mix\(in srgb, var\(--accent\) 50%, transparent\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-resizer\s*\{[\s\S]*right:\s*-4px;[\s\S]*width:\s*8px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-resizer::before\s*\{[\s\S]*left:\s*3px;[\s\S]*width:\s*1px;[\s\S]*\}/
     );
     assert.match(
         css,
@@ -180,8 +210,14 @@ test('agent workbench layout tokens and message column sizing remain pinned', ()
     );
     assert.match(
         css,
-        /\.agent-step-gallery \.agent-image-frame\s*\{[\s\S]*position:\s*relative;[\s\S]*width:\s*100%;[\s\S]*max-width:\s*none;[\s\S]*\}/
+        /\.agent-step-gallery \.agent-image-frame,[\s\S]*\.agent-step-gallery \.agent-viewer-frame\s*\{[\s\S]*position:\s*relative;[\s\S]*width:\s*100%;[\s\S]*max-width:\s*none;[\s\S]*\}/
     );
+    assert.match(
+        css,
+        /\.agent-step-viewer-frame\s*\{[\s\S]*min-height:\s*240px;[\s\S]*\}/
+    );
+    assert.doesNotMatch(css, /\.agent-step-viewer-thumb\s*\{/);
+    assert.doesNotMatch(css, /\.agent-step-viewer-thumb img\s*\{/);
     assert.match(
         css,
         /\.agent-step-gallery-nav\s*\{[\s\S]*position:\s*absolute;[\s\S]*top:\s*50%;[\s\S]*transform:\s*translateY\(-50%\);[\s\S]*\}/
@@ -201,6 +237,10 @@ test('agent workbench layout tokens and message column sizing remain pinned', ()
     assert.match(
         css,
         /\.agent-step-block\s*\{[\s\S]*padding:\s*0;[\s\S]*gap:\s*0;[\s\S]*overflow:\s*hidden;[\s\S]*transition:\s*height 0\.2s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\)[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\.is-current:not\(\.is-applied\)\s*\{[\s\S]*border-color:\s*#3b82f6;[\s\S]*\}/
     );
     assert.match(
         css,
@@ -235,10 +275,7 @@ test('agent workbench layout tokens and message column sizing remain pinned', ()
         css,
         /\.agent-step-summary-meta\s*\{[\s\S]*position:\s*absolute;[\s\S]*right:\s*10px;[\s\S]*top:\s*50%;[\s\S]*transform:\s*translateY\(-50%\);[\s\S]*\}/
     );
-    assert.match(
-        css,
-        /\.agent-step-current-tag\s*\{[\s\S]*max-width:\s*82px;[\s\S]*overflow:\s*hidden;[\s\S]*text-overflow:\s*ellipsis;[\s\S]*white-space:\s*nowrap;[\s\S]*color:\s*var\(--accent\);[\s\S]*line-height:\s*18px;[\s\S]*\}/
-    );
+    assert.doesNotMatch(css, /\.agent-step-current-tag\s*\{/);
     assert.match(
         css,
         /\.agent-step-body\s*\{[\s\S]*overflow:\s*hidden;[\s\S]*opacity:\s*0;[\s\S]*transform:\s*translateY\(-8px\) scale\(0\.985\);[\s\S]*transition:\s*opacity 0\.16s ease, transform 0\.2s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\);[\s\S]*will-change:\s*transform, opacity;[\s\S]*\}/
@@ -249,7 +286,7 @@ test('agent workbench layout tokens and message column sizing remain pinned', ()
     );
     assert.match(
         css,
-        /\.agent-step-block\.is-opening \.agent-step-gallery \.agent-image-frame,[\s\S]*\.agent-step-block\.is-closing \.agent-step-gallery \.agent-image-frame\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*translateY\(-34px\) scale\(0\.18\);[\s\S]*\}/
+        /\.agent-step-block\.is-opening \.agent-step-gallery \.agent-image-frame,[\s\S]*\.agent-step-block\.is-closing \.agent-step-gallery \.agent-image-frame,[\s\S]*\.agent-step-block\.is-opening \.agent-step-gallery \.agent-viewer-frame,[\s\S]*\.agent-step-block\.is-closing \.agent-step-gallery \.agent-viewer-frame\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*translateY\(-34px\) scale\(0\.18\);[\s\S]*\}/
     );
     assert.match(
         source,

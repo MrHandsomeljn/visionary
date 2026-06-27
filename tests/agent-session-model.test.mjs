@@ -8,6 +8,7 @@ import {
     createAgentSession,
     getAgentAttemptStepBlocks,
     getAgentSessionActiveAttempt,
+    normalizeAgentAttemptStatus,
     resolveAgentSessionActionAvailability,
     resolveAgentSessionPagerItems,
     setAgentSessionArchiveState,
@@ -41,14 +42,14 @@ test('generation attempts can expose pipeline steps as the primary block model',
         blocks: [{ id: 'legacy-progress', type: 'progress', stepKey: 'legacy', value: 1 }],
         steps: [
             { id: 'step-main', type: 'progress', stepKey: 'main-image', value: 1, applied: true },
-            { id: 'step-front', type: 'progress', stepKey: 'front-view', value: 0, isCurrent: true },
+            { id: 'step-top', type: 'progress', stepKey: 'top-view', value: 0, isCurrent: true },
         ],
         status: 'complete',
     });
 
     assert.equal(attempt.steps.length, 2);
     assert.equal(getAgentAttemptStepBlocks(attempt)[0].stepKey, 'main-image');
-    assert.equal(getAgentAttemptStepBlocks(attempt)[1].stepKey, 'front-view');
+    assert.equal(getAgentAttemptStepBlocks(attempt)[1].stepKey, 'top-view');
 });
 
 test('retry appends a new attempt and switches the pager to the latest attempt', () => {
@@ -76,6 +77,35 @@ test('retry appends a new attempt and switches the pager to the latest attempt',
     assert.equal(getAgentSessionActiveAttempt(retried).text, '第二次尝试');
     assert.equal(retried.archiveState, 'active');
     assert.equal(retried.collapsed, false);
+});
+
+test('retry replaces an interrupted active attempt instead of appending a new version', () => {
+    const session = createAgentSession({
+        workflow: 'scene-build',
+        prompt: '生成场景',
+        attempt: createAgentGenerationAttempt({
+            id: 'attempt-interrupted',
+            workflow: 'scene-build',
+            text: '任务已中断',
+            status: 'interrupted',
+            blocks: [],
+        }),
+    });
+
+    const retried = appendAgentSessionRetryAttempt(
+        session,
+        createAgentGenerationAttempt({
+            id: 'attempt-retry',
+            workflow: 'scene-build',
+            text: '重新生成',
+            blocks: [{ id: 'progress-retry', type: 'progress', value: 0.1 }],
+        })
+    );
+
+    assert.equal(retried.attempts.length, 1);
+    assert.equal(retried.activeAttemptIndex, 0);
+    assert.equal(getAgentSessionActiveAttempt(retried).id, 'attempt-retry');
+    assert.equal(getAgentSessionActiveAttempt(retried).text, '重新生成');
 });
 
 test('cancel/apply archive state collapses the session into a compact tag model', () => {
@@ -228,4 +258,21 @@ test('failed attempts allow retry but keep apply disabled', () => {
             canApply: false,
         }
     );
+});
+
+test('interrupted attempts disable apply but still allow retry and cancel', () => {
+    assert.deepEqual(
+        resolveAgentSessionActionAvailability({
+            archiveState: 'active',
+            attemptStatus: 'interrupted',
+        }),
+        {
+            canCancel: true,
+            canRetry: true,
+            canApply: false,
+        }
+    );
+    assert.equal(normalizeAgentAttemptStatus('running'), 'running');
+    assert.equal(normalizeAgentAttemptStatus('interrupted'), 'interrupted');
+    assert.equal(normalizeAgentAttemptStatus('cancelled'), 'canceled');
 });
