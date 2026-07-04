@@ -53,8 +53,8 @@ export class RendererInitHelper {
     /** 默认像素比率 */
     private static readonly DEFAULT_PIXEL_RATIO = 1;
     
-    /** 默认 HDR 纹理 URL */
-    private static readonly DEFAULT_FALLBACK_HDR_URL = '/public/textures/hdr/daytime.hdr';
+    /** 默认 HDR 纹理 URL；空值表示不自动加载项目外/不存在的回退资源。 */
+    private static readonly DEFAULT_FALLBACK_HDR_URL = "";
 
     // ==================== 主要初始化函数 ====================
 
@@ -265,18 +265,20 @@ export class RendererInitHelper {
         // 如果场景没有环境贴图，尝试加载默认的
         if (!scene.environment) {
             const defaultUrl = fallbackHdrUrl || this.DEFAULT_FALLBACK_HDR_URL;
-            console.log('[RendererInitHelper] 场景无环境贴图，加载默认 HDR:', defaultUrl);
-            
-            try {
-                const defaultTexture = await EnvMapHelper.loadHDRTexture(defaultUrl);
-                if (defaultTexture) {
-                    const envMap = await this.createEnvironmentMap(renderer, defaultTexture);
-                    if (envMap) {
-                        return { envMap, background: defaultTexture };
+            if (defaultUrl) {
+                console.log('[RendererInitHelper] 场景无环境贴图，加载默认 HDR:', defaultUrl);
+
+                try {
+                    const defaultTexture = await EnvMapHelper.loadHDRTexture(defaultUrl);
+                    if (defaultTexture) {
+                        const envMap = await this.createEnvironmentMap(renderer, defaultTexture);
+                        if (envMap) {
+                            return { envMap, background: defaultTexture };
+                        }
                     }
+                } catch (e) {
+                    console.warn('[RendererInitHelper] 加载默认 HDR 失败:', e);
                 }
-            } catch (e) {
-                console.warn('[RendererInitHelper] 加载默认 HDR 失败:', e);
             }
         } else {
             // 场景有环境贴图，尝试获取原始纹理并创建
@@ -322,6 +324,9 @@ export class RendererInitHelper {
 
         // 回退到加载默认 HDR
         const fallbackUrl = fallbackHdrUrl || this.DEFAULT_FALLBACK_HDR_URL;
+        if (!fallbackUrl) {
+            return { envMap: null, background: null };
+        }
         console.warn('[RendererInitHelper] 无法获取原始纹理，回退到加载默认 HDR:', fallbackUrl);
         
         try {
@@ -384,4 +389,3 @@ export class RendererInitHelper {
         return !!(backend?.device);
     }
 }
-

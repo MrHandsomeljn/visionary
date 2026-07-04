@@ -36,6 +36,7 @@ export class RecordingCamera {
     private recordingBackground: THREE.Texture | null = null; // 录制渲染器专用的背景
     private originalEnvMap: THREE.Texture | null = null; // 保存原始环境贴图
     private originalBackground: THREE.Texture | THREE.Color | null = null; // 保存原始背景
+    private gaussianRenderFailureWarned = false;
 
     private statusDom: HTMLElement | null = null;
     private cameraInfoDom: HTMLElement | null = null;
@@ -1196,14 +1197,21 @@ export class RecordingCamera {
                     render_success = this.gaussianRenderer.drawSplats(renderer, scene, camera);
                 } catch (gaussianError) {
                     // 导出过程中某一帧高斯路径失败时，回退到 Three.js 直渲染，避免整次导出中断。
-                    console.warn('[RecordingCamera] Gaussian render failed in export frame, fallback to Three.js:', gaussianError);
+                    if (!this.gaussianRenderFailureWarned || (globalThis as any).GS_VIDEO_EXPORT_DEBUG) {
+                        console.warn('[RecordingCamera] Gaussian render failed in export frame, fallback to Three.js:', gaussianError);
+                        this.gaussianRenderFailureWarned = true;
+                    }
                     render_success = false;
                 }
             } 
             
             if (!render_success) {
                 renderer.render(scene, camera);
-                console.warn('fall back in three js render camera recording camera');
+                if ((globalThis as any).GS_VIDEO_EXPORT_DEBUG) {
+                    console.warn('[RecordingCamera] Three.js fallback rendered export frame', {
+                        hasGaussianRenderer: Boolean(this.gaussianRenderer),
+                    });
+                }
             }
 
             const backend = (this.renderer as any).backend;

@@ -1,5 +1,5 @@
 // Base interface for camera controllers
-import { PerspectiveCamera } from '../camera';
+import { PerspectiveCamera } from '../camera/perspective.ts';
 
 export interface IController {
   // Core update method

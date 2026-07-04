@@ -68,7 +68,7 @@ test('video timeline export drives recording camera from timeline pose and updat
 
     assert.match(source, /function applyTimelinePoseToRecordingCamera\(recordingCamera, pose, options = \{\}\)/);
     assert.match(source, /const c2w = invertUnitQuaternion\(pose\.rotation\);/);
-    assert.match(source, /const forward = rotateVectorByQuaternion\(\{ x: 0, y: 0, z: 1 \}, c2w\);/);
+    assert.match(source, /const forward = rotateVectorByQuaternion\(\{ x: 0, y: 0, z: -1 \}, c2w\);/);
     assert.match(source, /recordingCamera\.camera\.lookAt\(/);
     assert.match(source, /recordingCamera\.camera\.fov = clampSceneFov\(pose\.fovDegrees\)/);
     assert.match(source, /function buildExportTimelineController\(recordingCamera, options = \{\}\)/);
@@ -77,6 +77,15 @@ test('video timeline export drives recording camera from timeline pose and updat
     assert.match(source, /options\.onProgress\?\.\(\(\(safeFrame \+ 1\) \/ totalFrames\) \* 100\)/);
     assert.match(source, /function setExportProgress\(percent, visible = pendingExportType === 'video'\)/);
     assert.match(source, /showLoading\(true, t\('loading\.renderingVideo'\), displayPercent, \{ passive: true \}\)/);
+});
+
+test('workspace camera pose records the timeline camera convention', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(source, /const CAMERA_POSE_CONVENTION_TIMELINE_MINUS_Z = 'timeline_w2c_camera_local_negative_z'/);
+    assert.match(source, /cameraPoseConvention: CAMERA_POSE_CONVENTION_TIMELINE_MINUS_Z/);
+    assert.match(source, /function restoreSavedCameraPose\(env\)/);
+    assert.match(source, /app\.setCoreCameraPose\(pose\)/);
 });
 
 test('export render mode labels are modal-specific RGB depth normal translations', () => {
@@ -102,6 +111,22 @@ test('video frame capture waits for WebGPU before copying and does not resize th
     assert.doesNotMatch(recordingManager, /options\.mainRenderer\.setSize\(renderWidth, renderHeight, false\)/);
     assert.doesNotMatch(recordingManager, /const renderer = options\.mainRenderer;[\s\S]*renderer\.setSize\(renderWidth, renderHeight, false\)/);
     assert.match(recordingManager, /options\.recordingCamera\.renderer\.setSize\(renderWidth, renderHeight, false\)/);
+});
+
+test('recording environment fallback does not depend on missing bundled HDR and quiets normal Three fallback', () => {
+    const envMapHelper = readFileSync(new URL('../src/utils/env-map-helper.ts', import.meta.url), 'utf8');
+    const rendererInitHelper = readFileSync(new URL('../src/utils/renderer-init-helper.ts', import.meta.url), 'utf8');
+    const recordingCamera = readFileSync(new URL('../src/exportMedia/RecordingCamera.ts', import.meta.url), 'utf8');
+
+    assert.match(rendererInitHelper, /DEFAULT_FALLBACK_HDR_URL = ""/);
+    assert.doesNotMatch(rendererInitHelper, /\/public\/textures\/hdr\/daytime\.hdr/);
+    assert.match(envMapHelper, /const response = await fetch\(url\)/);
+    assert.match(envMapHelper, /if \(!response\.ok\) \{/);
+    assert.match(envMapHelper, /loader\.parse\(buffer\)/);
+    assert.doesNotMatch(envMapHelper, /loader\.loadAsync\(url\)/);
+    assert.match(recordingCamera, /private gaussianRenderFailureWarned = false/);
+    assert.doesNotMatch(recordingCamera, /console\.warn\('fall back in three js render camera recording camera'\)/);
+    assert.match(recordingCamera, /GS_VIDEO_EXPORT_DEBUG[\s\S]*Three\.js fallback rendered export frame/);
 });
 
 test('timeline video export waits on render callbacks instead of fixed per-frame sleeps', () => {

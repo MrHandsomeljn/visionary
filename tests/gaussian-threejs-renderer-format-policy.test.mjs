@@ -13,9 +13,18 @@ test('fused renderer keeps overlay and blit formats compatible with WebGPU canva
     assert.match(source, /this\.compositeOverlayToCanvas\(device, encoder, targetView\);/);
 });
 
-test('editor no-splats fused fallback composites overlay without direct overlay render', () => {
+test('editor fused viewport composites overlays after scene output without direct canvas overlay render', () => {
     const source = readFileSync(new URL('../src/editor/editor-app.ts', import.meta.url), 'utf8');
 
-    assert.match(source, /const drew = this\.fusedRenderer\.drawSplats\(this\.meshRenderer, this\.meshScene, this\.meshCamera\);[\s\S]*if \(!drew && this\.renderMode !== "depth"\) \{[\s\S]*this\.fusedRenderer\.compositeOverlayToCurrentCanvas\(\);[\s\S]*\}/);
-    assert.doesNotMatch(source, /if \(!drew && this\.renderMode !== "depth"\) \{\s*this\.meshRenderer\.render\(this\.meshScene, this\.meshCamera\);\s*this\.renderViewportOverlayDirect\(\);\s*\}/);
+    assert.match(source, /this\.fusedRenderer\.renderThreeScene\(this\.meshCamera\);\s*this\.renderViewportOverlayWithFusedRenderer\(\);\s*const drew = this\.fusedRenderer\.drawSplats\(this\.meshRenderer, this\.meshScene, this\.meshCamera\);\s*if \(!drew\) \{\s*this\.fusedRenderer\.compositeOverlayToCurrentCanvas\(\);\s*\}/);
+    assert.doesNotMatch(source, /this\.fusedRenderer\.drawSplats\(this\.meshRenderer, this\.meshScene, this\.meshCamera\);\s*this\.renderViewportOverlayDirect\(\);/);
+});
+
+test('fused renderer accumulates multiple editor overlay scenes in one frame', () => {
+    const source = readFileSync(new URL('../src/app/GaussianThreeJSRenderer.ts', import.meta.url), 'utf8');
+
+    assert.match(source, /if \(!this\.overlayRenderedThisFrame\) \{\s*this\.threeRenderer\.clear\(true, false, false\);\s*\}/);
+    assert.match(source, /this\.threeRenderer\.render\(scene, camera\);\s*this\.overlayRenderedThisFrame = true;/);
+    assert.match(source, /const prevAutoClear = \(this\.threeRenderer as any\)\.autoClear;/);
+    assert.match(source, /this\.overlayRenderedThisFrame = false;\s*const RenderTargetClass/);
 });

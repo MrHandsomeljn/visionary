@@ -1006,16 +1006,26 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         const prevClearColor = new THREE.Color();
         (this.threeRenderer as any).getClearColor?.(prevClearColor);
         const prevClearAlpha = (this.threeRenderer as any).getClearAlpha?.() ?? 1;
+        const prevAutoClear = (this.threeRenderer as any).autoClear;
 
         this.threeRenderer.setRenderTarget(this.gizmoOverlayRT);
         (this.threeRenderer as any).setClearColor?.(new THREE.Color(0x00000000), 0);
-        this.threeRenderer.clear(true, false, false);
-        this.threeRenderer.render(scene, camera);
-
-        (this.threeRenderer as any).setClearColor?.(prevClearColor, prevClearAlpha);
-        this.threeRenderer.setRenderTarget(prevRenderTarget);
-
-        this.overlayRenderedThisFrame = true;
+        if (typeof prevAutoClear === "boolean") {
+            (this.threeRenderer as any).autoClear = false;
+        }
+        try {
+            if (!this.overlayRenderedThisFrame) {
+                this.threeRenderer.clear(true, false, false);
+            }
+            this.threeRenderer.render(scene, camera);
+            this.overlayRenderedThisFrame = true;
+        } finally {
+            if (typeof prevAutoClear === "boolean") {
+                (this.threeRenderer as any).autoClear = prevAutoClear;
+            }
+            (this.threeRenderer as any).setClearColor?.(prevClearColor, prevClearAlpha);
+            this.threeRenderer.setRenderTarget(prevRenderTarget);
+        }
     }
 
     private ensureGizmoOverlayRenderTarget(width: number, height: number): void {
@@ -1029,6 +1039,7 @@ export class GaussianThreeJSRenderer extends THREE.Mesh {
         if (this.gizmoOverlayRT) {
             this.gizmoOverlayRT.dispose();
         }
+        this.overlayRenderedThisFrame = false;
 
         const RenderTargetClass =
             (THREE as any).WebGPURenderTarget ??

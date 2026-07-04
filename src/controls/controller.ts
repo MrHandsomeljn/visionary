@@ -1,9 +1,9 @@
 // Camera controller extracted from controller.ts
 
 import { vec2, vec3, quat } from "gl-matrix";
-import { PerspectiveCamera } from '../camera';
-import { IController } from './base-controller';
-import { processKeyboardInput, processMouseInput, processScrollInput } from './input';
+import { PerspectiveCamera } from '../camera/perspective.ts';
+import type { IController } from './base-controller.ts';
+import { processKeyboardInput, processMouseInput, processScrollInput } from './input.ts';
 import { 
   lookAtW2C, 
   calculateOrbitBasis, 
@@ -13,7 +13,7 @@ import {
   applyDecay,
   projectOntoPlaneNormed,
   WORLD_UP 
-} from './orbit';
+} from './orbit.ts';
 
 type CamDebug = {
   pos: [number, number, number];
@@ -275,14 +275,14 @@ export class CameraController implements IController {
       // Use rotationQ to derive +Z as forward_from_rot
       const cw = quat.invert(quat.create(), cam.rotationQ);
       const fFromRot = vec3.transformQuat(vec3.create(), vec3.fromValues(0,0,1), cw);
-      console.log("[CameraDebug]", <CamDebug>{
+      console.log("[CameraDebug]", {
         pos: [cam.positionV[0], cam.positionV[1], cam.positionV[2]],
         center: [this.center[0], this.center[1], this.center[2]],
         dist: vec3.distance(cam.positionV, this.center),
         forward_to_center: [forward[0], forward[1], forward[2]],
         forward_from_rot: [fFromRot[0], fFromRot[1], fFromRot[2]],
         dot: vec3.dot(fFromRot, forward),
-      });
+      } as CamDebug);
     }
   }
 

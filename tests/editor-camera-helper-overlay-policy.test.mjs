@@ -10,6 +10,8 @@ test('camera sequence helpers live in editor overlay scene instead of mesh scene
     assert.match(source, /if \(!this\.editorHelperOverlayScene\) return false;/);
     assert.match(source, /if \(this\.cameraSequenceGroup && this\.cameraSequenceGroup\.parent === this\.editorHelperOverlayScene\) \{/);
     assert.match(source, /this\.editorHelperOverlayScene\.add\(group\);/);
+    assert.match(source, /if \(this\.editorHelperOverlayScene\) \{\s*scenes\.push\(this\.editorHelperOverlayScene\);\s*\}/);
+    assert.match(source, /this\.fusedRenderer\.renderThreeScene\(this\.meshCamera\);\s*this\.renderViewportOverlayWithFusedRenderer\(\);\s*const drew = this\.fusedRenderer\.drawSplats\(this\.meshRenderer, this\.meshScene, this\.meshCamera\);/);
     assert.match(source, /for \(const scene of this\.getViewportOverlayScenes\(\)\) \{\s*this\.fusedRenderer\.renderOverlayScene\(scene, this\.meshCamera\);\s*\}/);
     assert.doesNotMatch(source, /this\.meshScene\.add\(group\);/);
 });
