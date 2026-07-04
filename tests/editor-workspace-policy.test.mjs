@@ -82,6 +82,37 @@ test('local scene loading first opens a local folder and only prompts for worksp
   assert.match(body, /resetAgentConversation\(\);/);
 });
 
+test('scene loading restores saved canvas camera pose after model and timeline restoration', async () => {
+  const source = await readEditorSource();
+  const localBody = getFunctionBody(source, 'async function loadScene()');
+  const snapshotStart = source.indexOf('async function loadSceneFromSnapshot(raw, options = {})');
+  const snapshotEnd = source.indexOf('async function openServerProject', snapshotStart);
+  assert.ok(snapshotStart >= 0, 'expected to find loadSceneFromSnapshot');
+  assert.ok(snapshotEnd > snapshotStart, 'expected to find loadSceneFromSnapshot source range');
+  const snapshotBody = source.slice(snapshotStart, snapshotEnd);
+
+  const localModelLoadIndex = localBody.indexOf('const loadedModel = await app.loadModel');
+  const localTimelineIndex = localBody.indexOf('const loadedTimeline = applySceneTimelineSnapshot');
+  const localRestoreIndex = localBody.indexOf('restoreSavedCameraPose(raw?.env)');
+  assert.ok(localModelLoadIndex >= 0, 'expected local scene load to load models');
+  assert.ok(localTimelineIndex >= 0, 'expected local scene load to apply timeline');
+  assert.ok(localRestoreIndex > localModelLoadIndex, 'local scene load must restore camera pose after model auto-framing');
+  assert.ok(localRestoreIndex > localTimelineIndex, 'local scene load must restore camera pose after timeline state');
+  assert.doesNotMatch(
+    localBody.slice(0, localModelLoadIndex),
+    /restoreSavedCameraPose/,
+    'local scene load must not restore camera pose before model loading'
+  );
+
+  const snapshotLoadIndex = snapshotBody.indexOf('const loadResult = await sceneFs.loadScene');
+  const snapshotTimelineIndex = snapshotBody.indexOf('applySceneTimelineSnapshot(timeline)');
+  const snapshotRestoreIndex = snapshotBody.indexOf('restoreSavedCameraPose(raw?.env)');
+  assert.ok(snapshotLoadIndex >= 0, 'expected snapshot scene load to delegate to SceneFS');
+  assert.ok(snapshotTimelineIndex >= 0, 'expected snapshot scene load to apply timeline');
+  assert.ok(snapshotRestoreIndex > snapshotLoadIndex, 'snapshot scene load must restore camera pose after model auto-framing');
+  assert.ok(snapshotRestoreIndex > snapshotTimelineIndex, 'snapshot scene load must restore camera pose after timeline state');
+});
+
 test('editor exposes a lightweight workspace status indicator in the toolbar', async () => {
   const [html, css, js] = await Promise.all([
     readFile(new URL('../public/editor.html', import.meta.url), 'utf8'),

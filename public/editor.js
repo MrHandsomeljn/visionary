@@ -328,6 +328,8 @@ function createProjectSessionState() {
         activeProjectName: '',
         activeProjectSceneAssetPaths: new Set(),
         activeProjectAgentAssetPaths: new Set(),
+        canonicalAssetReferences: createEmptyCanonicalAssetReferenceSnapshot(),
+        canonicalAssetGcPlan: createEmptyCanonicalAssetGcPlan(),
         projects: [],
         loadingProjects: false,
         lastError: null,
@@ -348,6 +350,7 @@ function createProjectSessionState() {
 const DEFAULT_CAMERA_POSITION_TENSION = 0;
 const DEFAULT_CAMERA_ROTATION_STRENGTH = 1;
 const DEFAULT_CAMERA_TIMING_STRENGTH = 0;
+const CAMERA_POSE_CONVENTION_TIMELINE_MINUS_Z = 'timeline_w2c_camera_local_negative_z';
 
 // 应用状态
 const state = {
@@ -414,24 +417,28 @@ const AGENT_COMPOSER_SKILL_DEFS = [
         id: 'scene',
         value: '$scene-skill',
         labelKey: 'agent.skills.scene',
+        workflow: 'scene-build',
         aliases: ['$scene-skill'],
     },
     {
         id: 'object',
         value: '$object-skill',
         labelKey: 'agent.skills.object',
+        workflow: 'object-insert',
         aliases: ['$object-skill'],
     },
     {
         id: 'character',
         value: '$character-skill',
         labelKey: 'agent.skills.character',
+        workflow: 'character-create',
         aliases: ['$character-skill'],
     },
     {
         id: 'camera',
         value: '$camera-skill',
         labelKey: 'agent.skills.camera',
+        workflow: 'camera-direct',
         aliases: ['$camera-skill', 'camera-skill'],
     },
 ];
@@ -443,6 +450,53 @@ const SCENE_PIPELINE_STEP_DEFS = [
     { key: 'components-3d', titleKey: 'agent.pipelineSteps.components3d' },
     { key: 'insert-scene', titleKey: 'agent.pipelineSteps.insertScene' },
 ];
+
+const CAMERA_PIPELINE_STEP_DEFS = [
+    { key: 'camera-scene-info', titleKey: 'agent.pipelineSteps.cameraSceneInfo' },
+    { key: 'camera-initial-views', titleKey: 'agent.pipelineSteps.cameraInitialViews' },
+    { key: 'camera-director', titleKey: 'agent.pipelineSteps.cameraDirector' },
+    { key: 'camera-trajectory', titleKey: 'agent.pipelineSteps.cameraTrajectory' },
+    { key: 'camera-eval', titleKey: 'agent.pipelineSteps.cameraEval' },
+];
+
+const CAMERA_PIPELINE_STAGE_PLAN = [
+    'camera_scene_info_export',
+    'camera_initial_view_prepare',
+    'camera_director_analysis',
+    'camera_trajectory_generation',
+    'camera_trajectory_eval_render',
+];
+
+const AGENT_PIPELINE_STATUS_DEFS = {
+    running: {
+        labelKey: 'agent.pipelineSteps.pipelineStatuses.running',
+        className: 'is-running',
+    },
+    rendering: {
+        labelKey: 'agent.pipelineSteps.pipelineStatuses.rendering',
+        className: 'is-rendering',
+    },
+    done: {
+        labelKey: 'agent.pipelineSteps.pipelineStatuses.done',
+        className: 'is-done',
+    },
+    skipped: {
+        labelKey: 'agent.pipelineSteps.pipelineStatuses.skipped',
+        className: 'is-skipped',
+    },
+    canceled: {
+        labelKey: 'agent.pipelineSteps.pipelineStatuses.canceled',
+        className: 'is-canceled',
+    },
+    failed: {
+        labelKey: 'agent.pipelineSteps.pipelineStatuses.failed',
+        className: 'is-failed',
+    },
+    pending: {
+        labelKey: 'agent.pipelineSteps.pipelineStatuses.pending',
+        className: 'is-pending',
+    },
+};
 
 // EditorApp 实例 (会在 init 后设置)
 let app = null;
@@ -477,6 +531,7 @@ let agentMessageScrollbarMetricsCache = null;
 let agentMessageScrollbarResizeObserver = null;
 let agentMessageLayoutAnimationRaf = 0;
 const agentThumbnailImageCache = new Map();
+const agentCanonicalAssetBlobCache = new Map();
 let agentWorkbenchResizeRaf = 0;
 let agentWorkbenchCollapseSyncRaf = 0;
 let agentWorkbenchTogglingTimer = 0;
@@ -496,6 +551,9 @@ let serverProjectAutosaveInFlight = null;
 let serverProjectAutosaveQueued = false;
 let modelRenameState = null;
 let lastCanvasViewportSync = null;
+let agentCameraTrajectoryPreview = null;
+let agentCameraRenderJob = null;
+let agentSceneInsertPreview = null;
 const projectApi = new ProjectApiClient();
 const agentSessionActionHandlers = {
     onCancel: null,
@@ -844,12 +902,12 @@ const UI_TEXT = {
                 'scene-build': {
                     title: '场景构建',
                     short: '场景',
-                    starter: '可以从一张参考图或一句场景描述开始。我会先帮你拆出空间结构、主体布置和光照氛围，再给出可继续编辑的场景草案。',
+                    starter: '使用对应的Skill触发对应的生产流程',
                     suggestions: [
-                        '帮我生成这张图对应的场景',
-                        '补全这个房间，保持原有镜头方向',
-                        '把这个空场景扩展成可拍摄的电影空间',
-                        '先给我一个室内场景搭建方案',
+                        '$scene-skill 生成一个月球表面基地',
+                        '$object-skill 在基地旁边生成一个火箭发射站',
+                        '$character-skill 生成一个宇航员，从飞船走向基地',
+                        '$camera-skill 生成环绕基地的航拍环拍镜头',
                     ],
                     progressTitle: '场景构建中',
                     reply: '占位 Agent：已收到“场景构建”指令。\n建议先基于参考图抽取主体、地面和光照，再生成一个可人工接管的场景草案。\n当前不会直接改动右侧场景，后续可把这一步接到真实场景装配。',
@@ -889,12 +947,12 @@ const UI_TEXT = {
                 'camera-direct': {
                     title: '运镜生成',
                     short: '运镜',
-                    starter: '这里可以直接用自然语言生成镜头设计。我会先理解主体、节奏和情绪，再把它拆成相机路径、关键帧和时长分配。',
+                    starter: '使用对应的Skill触发对应的生产流程',
                     suggestions: [
-                        '给这个场景做一个 8 秒推进镜头',
-                        '生成一个从门外推进到人物特写的镜头序列',
-                        '围绕主体做一段缓慢环绕运镜',
-                        '帮我设计一个结尾停留在窗边的镜头',
+                        '$scene-skill 生成一个月球表面基地',
+                        '$object-skill 在基地旁边生成一个火箭发射站',
+                        '$character-skill 生成一个宇航员，从飞船走向基地',
+                        '$camera-skill 生成环绕基地的航拍环拍镜头',
                     ],
                     progressTitle: '镜头规划中',
                     reply: '占位 Agent：已进入“运镜生成”模式。\n我会先把自然语言拆成镜头目标、镜头运动和时长分配，再映射成相机关键帧草案。\n当前不会写入时间轴，但会按这个结构返回建议。',
@@ -919,6 +977,20 @@ const UI_TEXT = {
                 layout: '获取 layout',
                 components3d: '生成组件 3D 资产',
                 insertScene: '最终插入到场景',
+                cameraSceneInfo: '场景信息导出',
+                cameraInitialViews: '渲染初始视图',
+                cameraDirector: '解析导演意图',
+                cameraTrajectory: '相机序列生成',
+                cameraEval: '相机序列优化',
+                pipelineStatuses: {
+                    running: '运行中',
+                    rendering: '渲染中',
+                    done: '已完成',
+                    skipped: '已跳过',
+                    canceled: '已取消',
+                    failed: '失败',
+                    pending: '等待中',
+                },
                 pending: '等待上一步完成',
                 current: '当前步骤',
                 applied: '已应用',
@@ -927,6 +999,7 @@ const UI_TEXT = {
                 layoutDetections: '检测到 {count} 个对象',
                 components3dAssets: '3D 资产 {count} 个',
                 insertSceneAsset: '场景对象 {count} 个',
+                insertScenePreviewReady: '已在画布生成 {count} 个场景对象预览，请检查后应用、重试或取消',
                 insertSceneInserted: '已插入 {count} 个场景对象',
             },
         },
@@ -1437,12 +1510,12 @@ const UI_TEXT = {
                 'scene-build': {
                     title: 'Scene Build',
                     short: 'Scene',
-                    starter: 'Start from one reference image or a scene prompt. I will break down the spatial structure, subject layout, and lighting mood first, then return an editable scene draft.',
+                    starter: 'Use the corresponding Skill to trigger the matching production workflow',
                     suggestions: [
-                        'Build the scene that matches this image',
-                        'Complete this room while keeping the current camera direction',
-                        'Expand this empty setup into a filmable cinematic space',
-                        'Give me an indoor scene construction plan first',
+                        '$scene-skill Generate a lunar surface base',
+                        '$object-skill Generate a rocket launch site next to the base',
+                        '$character-skill Generate an astronaut walking from the spacecraft to the base',
+                        '$camera-skill Generate an aerial orbit shot around the base',
                     ],
                     progressTitle: 'Building scene',
                     reply: 'Placeholder agent: the scene-build request is received.\nI would first extract the main subject, ground plane, and lighting from the reference, then assemble an editable scene draft for manual takeover.\nThis demo does not modify the scene on the right yet, but it is structured to connect to real scene assembly later.',
@@ -1482,12 +1555,12 @@ const UI_TEXT = {
                 'camera-direct': {
                     title: 'Camera Direct',
                     short: 'Camera',
-                    starter: 'Use natural language here to generate shot design directly. I will parse the subject, rhythm, and mood first, then map them into camera paths, keyframes, and timing.',
+                    starter: 'Use the corresponding Skill to trigger the matching production workflow',
                     suggestions: [
-                        'Create an 8-second push-in shot for this scene',
-                        'Generate a shot sequence that pushes from the doorway to a character close-up',
-                        'Make a slow orbit around the main subject',
-                        'Design an ending shot that settles by the window',
+                        '$scene-skill Generate a lunar surface base',
+                        '$object-skill Generate a rocket launch site next to the base',
+                        '$character-skill Generate an astronaut walking from the spacecraft to the base',
+                        '$camera-skill Generate an aerial orbit shot around the base',
                     ],
                     progressTitle: 'Planning camera motion',
                     reply: 'Placeholder agent: camera-direct mode is active.\nI would first decompose the prompt into shot goal, camera motion, and duration allocation, then map that into a draft camera keyframe sequence.\nThis demo does not write into the timeline yet, but it will return suggestions in that structure.',
@@ -1512,6 +1585,20 @@ const UI_TEXT = {
                 layout: 'Layout extraction',
                 components3d: 'Generate component 3D assets',
                 insertScene: 'Insert into scene',
+                cameraSceneInfo: 'Scene info export',
+                cameraInitialViews: 'Render initial views',
+                cameraDirector: 'Parse director intent',
+                cameraTrajectory: 'Generate camera sequence',
+                cameraEval: 'Optimize camera sequence',
+                pipelineStatuses: {
+                    running: 'Running',
+                    rendering: 'Rendering',
+                    done: 'Completed',
+                    skipped: 'Skipped',
+                    canceled: 'Canceled',
+                    failed: 'Failed',
+                    pending: 'Pending',
+                },
                 pending: 'Waiting for previous step',
                 current: 'Current step',
                 applied: 'Applied',
@@ -1520,6 +1607,7 @@ const UI_TEXT = {
                 layoutDetections: '{count} detected objects',
                 components3dAssets: '{count} 3D assets',
                 insertSceneAsset: '{count} scene objects',
+                insertScenePreviewReady: 'Previewed {count} scene objects on the canvas. Review, then apply, retry, or cancel.',
                 insertSceneInserted: 'Inserted {count} scene objects',
             },
         },
@@ -3687,6 +3775,21 @@ function normalizeHydratedAgentItems(items = []) {
     });
 }
 
+function normalizeHydratedAgentStarterItems(items = [], workflowId = state.agentWorkflow) {
+    const normalizedItems = normalizeHydratedAgentItems(items);
+    if (
+        normalizedItems.length === 1
+        && normalizedItems[0]?.kind === 'message'
+        && normalizedItems[0]?.role === 'assistant'
+        && !normalizedItems[0]?.isLoading
+        && (!Array.isArray(normalizedItems[0]?.attachments) || normalizedItems[0].attachments.length === 0)
+        && (!Array.isArray(normalizedItems[0]?.blocks) || normalizedItems[0].blocks.length === 0)
+    ) {
+        return createDefaultAgentMessages(workflowId);
+    }
+    return normalizedItems;
+}
+
 function interruptRunningAgentConversations() {
     let changed = false;
     state.agentWorkflowThreads = Object.fromEntries(
@@ -3971,7 +4074,7 @@ function hydrateAgentConversationSnapshot(snapshot) {
             workflow: workflowId,
             label: matched?.label || AGENT_WORKFLOW_DEFS[workflowId]?.label || workflowId,
             items: Array.isArray(matched?.items) && matched.items.length > 0
-                ? normalizeHydratedAgentItems(matched.items)
+                ? normalizeHydratedAgentStarterItems(matched.items, workflowId)
                 : createDefaultAgentMessages(workflowId),
         };
     });
@@ -4310,6 +4413,36 @@ function createAgentStepExpandToggleIcon() {
     `;
 }
 
+function findAgentWorkflowThreadItemLocation(itemId) {
+    if (!itemId) return null;
+    const currentIndex = state.agentMessages.findIndex((item) => item.id === itemId);
+    if (currentIndex >= 0) {
+        return {
+            workflowId: state.agentWorkflow,
+            thread: ensureAgentWorkflowThread(state.agentWorkflow),
+            items: state.agentMessages,
+            index: currentIndex,
+            isCurrent: true,
+        };
+    }
+    for (const workflowId of Object.keys(AGENT_WORKFLOW_DEFS)) {
+        const thread = ensureAgentWorkflowThread(workflowId);
+        const items = Array.isArray(thread.items) ? thread.items : [];
+        if (items === state.agentMessages) continue;
+        const index = items.findIndex((item) => item.id === itemId);
+        if (index >= 0) {
+            return {
+                workflowId,
+                thread,
+                items,
+                index,
+                isCurrent: false,
+            };
+        }
+    }
+    return null;
+}
+
 function getAgentItemIndexById(itemId) {
     return state.agentMessages.findIndex((item) => item.id === itemId);
 }
@@ -4319,14 +4452,18 @@ function updateAgentSessionById(sessionId, updater, {
     animateLayout = null,
     skipRender = false,
 } = {}) {
-    const index = getAgentItemIndexById(sessionId);
-    if (index < 0) return null;
-    const session = state.agentMessages[index];
+    const location = findAgentWorkflowThreadItemLocation(sessionId);
+    if (!location) return null;
+    const session = location.items[location.index];
     if (!session || session.kind !== 'session') return null;
     const nextSession = updater(session);
     if (!nextSession) return null;
-    state.agentMessages[index] = nextSession;
-    if (!skipRender) {
+    location.items[location.index] = nextSession;
+    location.thread.items = location.items;
+    if (location.isCurrent) {
+        state.agentMessages = location.items;
+    }
+    if (!skipRender && location.isCurrent) {
         renderAgentMessages({ autoScroll, animateLayout });
     }
     schedulePersistAgentConversations();
@@ -4407,6 +4544,120 @@ function patchAgentStepBlock(context, patch) {
     return session;
 }
 
+function patchAgentStepBlockByStepKey(sessionId, attemptId, stepKey, patch) {
+    const context = getAgentStepBlockContextByStepKey(sessionId, attemptId, stepKey);
+    return context ? patchAgentStepBlock(context, patch) : null;
+}
+
+function resetDownstreamScenePipelineStepsForRetry(context) {
+    if (!context?.sessionId || !context.attemptId || !context.stepKey) return null;
+    const retryIndex = SCENE_PIPELINE_STEP_DEFS.findIndex((step) => step.key === context.stepKey);
+    if (retryIndex < 0) return null;
+    clearAgentSceneInsertPreviewForContext(context);
+    const session = updateAgentSessionById(context.sessionId, (session) => ({
+        ...session,
+        attempts: (session.attempts || []).map((attempt) => {
+            if (attempt.id !== context.attemptId) return attempt;
+            const resetBlock = (block) => {
+                if (!block?.stepKey) return block;
+                const stepIndex = SCENE_PIPELINE_STEP_DEFS.findIndex((step) => step.key === block.stepKey);
+                if (stepIndex < 0) return block;
+                if (block.applied || stepIndex <= retryIndex) return block;
+                return {
+                    ...block,
+                    statusText: t('agent.pipelineSteps.pending'),
+                    statusId: 'pending',
+                    value: 0,
+                    indeterminate: false,
+                    images: [],
+                    selectedIndex: 0,
+                    applied: false,
+                    actions: [],
+                    isCurrent: false,
+                    expanded: false,
+                    artifacts: [],
+                    sceneInsertPlan: undefined,
+                };
+            };
+            const nextAttempt = {
+                ...attempt,
+                blocks: (attempt.blocks || []).map(resetBlock),
+                ...(Array.isArray(attempt.steps) ? { steps: attempt.steps.map(resetBlock) } : {}),
+                updatedAt: new Date().toISOString(),
+            };
+            return {
+                ...nextAttempt,
+                pipelineState: deriveScenePipelineState(session, nextAttempt, {
+                    currentStepKey: context.stepKey,
+                    status: 'running',
+                }),
+            };
+        }),
+        updatedAt: new Date().toISOString(),
+    }), {
+        autoScroll: 'preserve-or-pin-bottom',
+        skipRender: true,
+    });
+    if (session) {
+        renderAgentSessionElement(context.sessionId, {
+            autoScroll: 'preserve-or-pin-bottom',
+        });
+    }
+    return session;
+}
+
+function markSceneAttemptCanceled(context) {
+    if (!context?.sessionId || !context.attemptId) return null;
+    const cancelIndex = SCENE_PIPELINE_STEP_DEFS.findIndex((step) => step.key === context.stepKey);
+    return updateAgentSessionById(context.sessionId, (session) => ({
+        ...session,
+        attempts: (session.attempts || []).map((attempt) => {
+            if (attempt.id !== context.attemptId) return attempt;
+            const patchBlock = (block) => {
+                if (!block?.stepKey) return block;
+                const stepIndex = SCENE_PIPELINE_STEP_DEFS.findIndex((step) => step.key === block.stepKey);
+                if (stepIndex < 0) return block;
+                if (block.applied || stepIndex < cancelIndex) {
+                    return {
+                        ...block,
+                        statusId: 'done',
+                        value: 1,
+                        indeterminate: false,
+                        isCurrent: false,
+                        actions: [],
+                    };
+                }
+                return {
+                    ...block,
+                    statusId: 'canceled',
+                    statusText: t('agent.pipelineSteps.canceled'),
+                    value: 0,
+                    indeterminate: false,
+                    isCurrent: false,
+                    actions: [],
+                };
+            };
+            const nextAttempt = {
+                ...attempt,
+                status: 'interrupted',
+                blocks: (attempt.blocks || []).map(patchBlock),
+                ...(Array.isArray(attempt.steps) ? { steps: attempt.steps.map(patchBlock) } : {}),
+                updatedAt: new Date().toISOString(),
+            };
+            return {
+                ...nextAttempt,
+                pipelineState: deriveScenePipelineState(session, nextAttempt, {
+                    status: 'canceled',
+                    currentStepKey: context.stepKey,
+                }),
+            };
+        }),
+        updatedAt: new Date().toISOString(),
+    }), {
+        autoScroll: 'preserve-or-pin-bottom',
+    });
+}
+
 function getInterruptedAgentStepContext(sessionId, attemptId = '') {
     const session = state.agentMessages.find((item) => item?.kind === 'session' && item.id === sessionId);
     if (!session) return null;
@@ -4466,6 +4717,10 @@ async function handleInterruptedAgentStepAction(context, action) {
         return;
     }
     if (action !== 'retry') return;
+    if (liveContext.session?.workflow === 'camera-direct') {
+        await handleAgentSessionAction(liveContext.sessionId, 'retry');
+        return;
+    }
     resumeInterruptedAgentStepAttempt(liveContext);
     const retryContext = getAgentStepBlockContextById(liveContext.sessionId, liveContext.attemptId, liveContext.blockId) || liveContext;
     await handleAgentStepAction(retryContext, 'retry');
@@ -4596,7 +4851,7 @@ function updateAgentStepGalleryDom(context) {
     blockElement.querySelectorAll('[data-agent-step-gallery-nav]').forEach((button) => {
         if (!(button instanceof HTMLButtonElement)) return;
         const direction = button.dataset.agentStepGalleryNav;
-        button.disabled = context.block.applied
+        button.disabled = isAgentStepGalleryNavigationLocked(context.block, context.attempt)
             || images.length <= 1
             || (direction === 'prev' && selectedIndex <= 0)
             || (direction === 'next' && selectedIndex >= images.length - 1);
@@ -4720,83 +4975,7 @@ function serializeAgentSessionStepSourceImage(session, currentAttempt, stepKey) 
 }
 
 function shouldShowAgentPipelineContinue(context) {
-    const pipelineState = context?.attempt?.pipelineState;
-    const block = context?.block;
-    if (!pipelineState || pipelineState.kind !== 'scene-skill' || pipelineState.status === 'completed') return false;
-    if (!block?.stepKey || block.stepKey !== pipelineState.currentStepKey) return false;
-    if (block.applied || block.indeterminate) return false;
-    if (context?.attempt?.status === 'interrupted') return false;
-    if (Array.isArray(block.images) && block.images.length > 0) return false;
-    const stepStatus = pipelineState.steps?.[block.stepKey]?.status || '';
-    return ['ready', 'paused', 'failed', 'running'].includes(stepStatus) || Boolean(block.isCurrent);
-}
-
-function advanceAgentPipelineAfterStepApply(context) {
-    if (!context?.sessionId || !context?.attemptId || !context?.stepKey) return null;
-    const nextStepKey = getNextScenePipelineStepKey(context.stepKey);
-    if (!nextStepKey) return null;
-    const patchPipelineBlocks = (blocks = []) => blocks.map((block) => {
-        if (block?.stepKey === context.stepKey) {
-            return {
-                ...block,
-                applied: true,
-                isCurrent: false,
-                expanded: true,
-                actions: [],
-                statusText: block.statusText || t('agent.pipelineSteps.applied'),
-            };
-        }
-        if (block?.stepKey === nextStepKey) {
-            return {
-                ...block,
-                isCurrent: true,
-                expanded: true,
-                statusText: t('agent.pipelineSteps.current'),
-                actions: Array.isArray(block.images) && block.images.length > 0
-                    ? ['cancel', 'retry', 'apply']
-                    : ['cancel', 'retry'],
-            };
-        }
-        return block;
-    });
-    const session = updateAgentSessionById(context.sessionId, (session) => {
-        const nextSession = {
-            ...session,
-            attempts: (session.attempts || []).map((attempt) => {
-            if (attempt.id !== context.attemptId) return attempt;
-            const nextAttempt = {
-                ...attempt,
-                blocks: patchPipelineBlocks(attempt.blocks || []),
-                ...(Array.isArray(attempt.steps) ? { steps: patchPipelineBlocks(attempt.steps) } : {}),
-                updatedAt: new Date().toISOString(),
-            };
-            return {
-                ...nextAttempt,
-                pipelineState: deriveScenePipelineState(session, nextAttempt),
-            };
-        }),
-            updatedAt: new Date().toISOString(),
-        };
-        return nextSession;
-    }, {
-        autoScroll: 'preserve-or-pin-bottom',
-        skipRender: true,
-    });
-    if (!session) return null;
-    const currentContext = getAgentStepBlockContextByStepKey(context.sessionId, context.attemptId, context.stepKey);
-    const nextContext = getAgentStepBlockContextByStepKey(context.sessionId, context.attemptId, nextStepKey);
-    const renderedCurrent = currentContext
-        ? renderAgentStepBlockElement(currentContext, { autoScroll: 'preserve-or-pin-bottom' })
-        : false;
-    const renderedNext = nextContext
-        ? renderAgentStepBlockElement(nextContext, { autoScroll: 'preserve-or-pin-bottom' })
-        : false;
-    if (!renderedCurrent || !renderedNext) {
-        renderAgentSessionElement(context.sessionId, {
-            autoScroll: 'preserve-or-pin-bottom',
-        });
-    }
-    return nextContext;
+    return false;
 }
 
 function createAgentBlockId(prefix = 'block') {
@@ -4808,6 +4987,7 @@ function createAgentProgressBlock({
     stepKey = '',
     title = '',
     statusText = '',
+    statusId = '',
     value = 0,
     indeterminate = false,
     images = [],
@@ -4816,6 +4996,9 @@ function createAgentProgressBlock({
     actions = [],
     isCurrent = false,
     expanded = false,
+    artifacts = [],
+    sceneInsertPlan = null,
+    galleryLocked = null,
 } = {}) {
     const gallery = Array.isArray(images) ? images : [];
     return {
@@ -4824,6 +5007,7 @@ function createAgentProgressBlock({
         stepKey,
         title,
         statusText,
+        statusId,
         value,
         indeterminate,
         images: gallery,
@@ -4832,6 +5016,9 @@ function createAgentProgressBlock({
         actions: Array.isArray(actions) ? actions.filter(Boolean).map((action) => String(action)) : [],
         isCurrent: Boolean(isCurrent),
         expanded: Boolean(expanded),
+        artifacts: Array.isArray(artifacts) ? artifacts.filter(Boolean).map((artifact) => ({ ...artifact })) : [],
+        ...(sceneInsertPlan && typeof sceneInsertPlan === 'object' ? { sceneInsertPlan } : {}),
+        ...(typeof galleryLocked === 'boolean' ? { galleryLocked } : {}),
     };
 }
 
@@ -4840,18 +5027,22 @@ function createScenePipelineStepBlock({
     titleKey,
     images = [],
     statusText = t('agent.pipelineSteps.pending'),
+    statusId = 'pending',
     value = 0,
     indeterminate = false,
     applied = false,
     actions = [],
     isCurrent = false,
     expanded = false,
+    artifacts = [],
+    galleryLocked = null,
 } = {}) {
     return createAgentProgressBlock({
         id: createAgentBlockId(`step-${key || 'pipeline'}`),
         stepKey: key,
         title: t(titleKey || 'agent.blocks.progress'),
         statusText,
+        statusId,
         value,
         indeterminate,
         images,
@@ -4860,7 +5051,50 @@ function createScenePipelineStepBlock({
         actions,
         isCurrent,
         expanded,
+        artifacts,
+        galleryLocked,
     });
+}
+
+function isCameraPipelineStepKey(stepKey) {
+    return CAMERA_PIPELINE_STAGE_PLAN.includes(String(stepKey || ''));
+}
+
+function isAgentStepGalleryNavigationLocked(block, attempt = null) {
+    if (attempt?.status === 'interrupted') return true;
+    if (typeof block?.galleryLocked === 'boolean') return block.galleryLocked;
+    if (isCameraPipelineStepKey(block?.stepKey)) return false;
+    return Boolean(block?.applied);
+}
+
+function normalizeAgentPipelineStatusId(statusId) {
+    const normalized = String(statusId || '').trim();
+    if (normalized === 'complete') return 'done';
+    if (normalized === 'cancelled' || normalized === 'cancel') return 'canceled';
+    if (normalized === 'fail' || normalized === 'error') return 'failed';
+    if (normalized === 'done' || normalized === 'rendering' || normalized === 'running' || normalized === 'skipped' || normalized === 'canceled' || normalized === 'failed' || normalized === 'pending') {
+        return normalized;
+    }
+    return '';
+}
+
+function getAgentPipelineStatusLabel(statusId) {
+    const normalized = normalizeAgentPipelineStatusId(statusId);
+    const def = AGENT_PIPELINE_STATUS_DEFS[normalized];
+    return def ? t(def.labelKey) : '';
+}
+
+function getAgentPipelineStatusClass(statusId) {
+    const normalized = normalizeAgentPipelineStatusId(statusId);
+    return AGENT_PIPELINE_STATUS_DEFS[normalized]?.className || '';
+}
+
+function shouldShowAgentStepProgressTrack(statusId, block = {}) {
+    const normalized = normalizeAgentPipelineStatusId(statusId);
+    if (normalized === 'running' || normalized === 'rendering') return true;
+    if (normalized === 'pending' || normalized === 'done' || normalized === 'skipped' || normalized === 'canceled' || normalized === 'failed') return false;
+    const value = Number(block?.value);
+    return Boolean(block?.indeterminate) || (Number.isFinite(value) && value > 0 && value < 1);
 }
 
 function createScenePipelineSteps({
@@ -4871,6 +5105,7 @@ function createScenePipelineSteps({
             return {
                 ...mainImageBlock,
                 title: mainImageBlock.title || t(definition.titleKey),
+                statusId: mainImageBlock.statusId || (mainImageBlock.indeterminate ? 'running' : 'done'),
                 isCurrent: !mainImageBlock.applied,
                 expanded: true,
             };
@@ -4880,12 +5115,481 @@ function createScenePipelineSteps({
             key: definition.key,
             titleKey: definition.titleKey,
             statusText: unlocked ? t('agent.pipelineSteps.current') : t('agent.pipelineSteps.pending'),
+            statusId: unlocked ? 'pending' : 'pending',
             value: 0,
             isCurrent: unlocked,
             expanded: false,
-            actions: unlocked ? ['cancel', 'retry'] : [],
+            actions: [],
         });
     });
+}
+
+function createCameraPipelineSteps({
+    task = {},
+    pending = false,
+} = {}) {
+    if (pending) return [];
+    const taskEvents = Array.isArray(task?.events) ? task.events : [];
+    const eventPayloads = taskEvents
+        .map((event) => getAgentTaskEventPayload(event))
+        .filter((payload) => Object.keys(payload).length > 0);
+    const fallbackPayload = {
+        title: task?.title,
+        statusText: task?.statusText,
+        message: task?.statusText,
+        progress: task?.progress,
+        stage: task?.stage,
+        pipelineStages: task?.pipelineStages,
+        pipelineStageStatuses: task?.pipelineStageStatuses,
+        images: task?.images,
+        initialViewImages: task?.initialViewImages,
+        directorIntentText: task?.directorIntentText,
+        artifacts: task?.artifacts,
+    };
+    const payloadInputs = eventPayloads.length > 0
+        ? eventPayloads
+        : (hasCameraTaskPayloadSignal(fallbackPayload) ? [fallbackPayload] : []);
+    if (payloadInputs.length <= 0) return [];
+    const payloads = coalesceAgentTaskStepPayloads(payloadInputs);
+    const plannedStages = getCameraTaskPipelineStages(payloads);
+    const stageStatuses = getCameraTaskStageStatuses(task, plannedStages, payloads);
+    return payloads.map((payload, index) => {
+        const stage = getCameraTaskPayloadStage(payload) || `camera-task-${index + 1}`;
+        const stageIndex = getCameraPipelineStageIndex(stage, plannedStages);
+        const progress = getCameraTaskPayloadProgress(payload);
+        const statusText = getAgentTaskEventStatusText(payload) || String(payload?.detailText || '').trim();
+        const statusId = stageStatuses[stage] || getCameraTaskPayloadStatusId(payload) || 'pending';
+        const isComplete = statusId === 'done';
+        const isActive = !isComplete && (statusId === 'running' || statusId === 'rendering');
+        const definition = getCameraPipelineStepDefinitionForStage(stage);
+        const images = normalizeAgentTaskPayloadImages(payload.images);
+        const artifacts = getPayloadArtifactsForStage(payload, stage);
+        const block = createScenePipelineStepBlock({
+            key: stage || definition.key,
+            titleKey: definition.titleKey,
+            statusText,
+            statusId,
+            value: isComplete ? 1 : isActive ? Math.max(0.01, Math.min(0.99, progress || 0.01)) : 0,
+            indeterminate: isActive,
+            applied: isComplete,
+            actions: [],
+            isCurrent: isActive,
+            expanded: isActive || isComplete || images.length > 0 || artifacts.length > 0,
+            images,
+            artifacts,
+            galleryLocked: false,
+        });
+        const title = String(payload?.title || '').trim();
+        const shouldUsePayloadTitle = definition.titleKey === 'agent.workflows.camera-direct.progressTitle';
+        return title && shouldUsePayloadTitle ? { ...block, title } : block;
+    });
+}
+
+function coalesceAgentTaskStepPayloads(payloads = []) {
+    const byKey = new Map();
+    const plannedStages = getCameraTaskPipelineStages(payloads);
+    plannedStages.forEach((stage) => {
+        const normalizedStage = normalizeCameraPipelineStage(stage);
+        byKey.set(normalizedStage, {
+            stage: normalizedStage,
+            progress: 0,
+            planned: true,
+        });
+    });
+    payloads.forEach((payload, index) => {
+        const stage = getCameraTaskPayloadStage(payload);
+        const title = String(payload?.title || '').trim();
+        const key = stage || title || `camera-task-${index + 1}`;
+        const previous = byKey.get(key);
+        byKey.set(key, {
+            ...(previous || {}),
+            ...payload,
+            stage,
+            title: title || previous?.title || '',
+            started: true,
+            statusId: getCameraTaskPayloadStatusId(payload) || previous?.statusId || '',
+            artifacts: getPayloadArtifactsForStage(payload, stage),
+        });
+        distributeCameraTaskPayloadArtifacts(byKey, payload);
+    });
+    return orderCameraTaskPayloads(byKey, plannedStages);
+}
+
+function getCameraTaskPipelineStages(payloads = []) {
+    const stages = [];
+    CAMERA_PIPELINE_STAGE_PLAN.forEach((stage) => {
+        const normalizedStage = normalizeCameraPipelineStage(stage);
+        if (normalizedStage && !stages.includes(normalizedStage)) {
+            stages.push(normalizedStage);
+        }
+    });
+    for (const payload of payloads) {
+        const payloadStages = Array.isArray(payload?.pipelineStages) ? payload.pipelineStages : [];
+        const normalized = payloadStages
+            .map((item) => String(typeof item === 'string' ? item : item?.stage || '').trim())
+            .map((stage) => normalizeCameraPipelineStage(stage))
+            .filter(Boolean);
+        normalized.forEach((stage) => {
+            if (!stages.includes(stage)) stages.push(stage);
+        });
+    }
+    return stages;
+}
+
+function getCanceledCameraPipelineStageStatuses(plannedStages = CAMERA_PIPELINE_STAGE_PLAN, payloads = []) {
+    const statuses = getCameraTaskStageStatuses({}, plannedStages, payloads);
+    plannedStages.forEach((stage) => {
+        const normalizedStage = normalizeCameraPipelineStage(stage);
+        if (!normalizedStage) return;
+        if (statuses[normalizedStage] !== 'done') {
+            statuses[normalizedStage] = 'canceled';
+        }
+    });
+    return statuses;
+}
+
+function getCameraTaskStageStatuses(task = {}, plannedStages = [], payloads = []) {
+    const statuses = {};
+    const explicitStatuses = Array.isArray(task?.pipelineStageStatuses) ? task.pipelineStageStatuses : [];
+    if (explicitStatuses.length > 0) {
+        explicitStatuses.forEach((item) => {
+            const stage = normalizeCameraPipelineStage(item?.stage || '');
+            const statusId = normalizeAgentPipelineStatusId(item?.statusId || item?.statusKey || '');
+            if (stage && statusId) {
+                statuses[stage] = statusId;
+            }
+        });
+        return applyCameraPipelineImplicitHandoffStatuses(task, statuses);
+    }
+
+    const currentStage = normalizeCameraPipelineStage(task?.stage || '');
+    const currentStatusId = normalizeAgentPipelineStatusId(task?.statusId || '');
+    const currentIndex = currentStage ? plannedStages.map((stage) => normalizeCameraPipelineStage(stage)).indexOf(currentStage) : -1;
+    const firstPayloadIndex = payloads.findIndex((item) => {
+        const stage = normalizeCameraPipelineStage(getCameraTaskPayloadStage(item));
+        return Boolean(stage);
+    });
+    plannedStages.forEach((stage, index) => {
+        const normalizedStage = normalizeCameraPipelineStage(stage);
+        if (!normalizedStage) return;
+        if (currentIndex >= 0) {
+            if (index < currentIndex) {
+                statuses[normalizedStage] = 'done';
+                return;
+            }
+            if (index === currentIndex) {
+                statuses[normalizedStage] = currentStatusId || (normalizedStage === 'camera_initial_view_prepare' || normalizedStage === 'camera_trajectory_eval_render' ? 'rendering' : 'running');
+                return;
+            }
+            statuses[normalizedStage] = 'pending';
+            return;
+        }
+        const payload = payloads.find((item) => normalizeCameraPipelineStage(getCameraTaskPayloadStage(item)) === normalizedStage);
+        const payloadStatusId = normalizeAgentPipelineStatusId(payload?.statusId || '');
+        if (payloadStatusId) {
+            statuses[normalizedStage] = payloadStatusId;
+            return;
+        }
+        if (firstPayloadIndex >= 0 && index === firstPayloadIndex) {
+            statuses[normalizedStage] = currentStatusId || 'pending';
+            return;
+        }
+        statuses[normalizedStage] = 'pending';
+    });
+    return applyCameraPipelineImplicitHandoffStatuses(task, statuses);
+}
+
+function orderCameraTaskPayloads(byKey, plannedStages = []) {
+    const ordered = [];
+    const used = new Set();
+    plannedStages
+        .map((stage) => normalizeCameraPipelineStage(stage))
+        .filter(Boolean)
+        .forEach((stage) => {
+            const payload = byKey.get(stage);
+            if (!payload) return;
+            ordered.push(payload);
+            used.add(stage);
+        });
+    byKey.forEach((payload, key) => {
+        if (used.has(key)) return;
+        ordered.push(payload);
+    });
+    return ordered;
+}
+
+function distributeCameraTaskPayloadArtifacts(byKey, payload = {}) {
+    const initialViewImages = normalizeAgentTaskPayloadImages(payload.initialViewImages);
+    if (initialViewImages.length > 0) {
+        mergeCameraTaskPayload(byKey, 'camera_initial_view_prepare', {
+            stage: 'camera_initial_view_prepare',
+            images: initialViewImages,
+        });
+    }
+    const directorText = String(payload.directorIntentText || '').trim();
+    if (directorText) {
+        mergeCameraTaskPayload(byKey, 'camera_director_analysis', {
+            stage: 'camera_director_analysis',
+            progress: 1,
+            artifacts: [{
+                kind: 'text',
+                title: t('agent.pipelineSteps.cameraDirector'),
+                targetStage: 'camera_director_analysis',
+                text: directorText,
+            }],
+        });
+    }
+    const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+    artifacts.forEach((artifact) => {
+        if (!artifact || typeof artifact !== 'object') return;
+        const targetStage = normalizeCameraPipelineStage(artifact.targetStage || artifact.stage);
+        if (!targetStage) return;
+        mergeCameraTaskPayload(byKey, targetStage, {
+            stage: targetStage,
+            progress: 1,
+            artifacts: [{ ...artifact }],
+        });
+    });
+}
+
+function mergeCameraTaskPayload(byKey, key, patch = {}) {
+    const previous = byKey.get(key) || {};
+    const nextArtifacts = [
+        ...(Array.isArray(previous.artifacts) ? previous.artifacts : []),
+        ...(Array.isArray(patch.artifacts) ? patch.artifacts : []),
+    ];
+    const nextImages = [
+        ...(Array.isArray(previous.images) ? previous.images : []),
+        ...(Array.isArray(patch.images) ? patch.images : []),
+    ];
+    byKey.set(key, {
+        ...previous,
+        ...patch,
+        artifacts: dedupeAgentTaskArtifacts(nextArtifacts),
+        images: dedupeAgentTaskImages(nextImages),
+    });
+}
+
+function getCameraTaskPayloadStage(payload = {}) {
+    const explicitStage = String(payload?.stage || '').trim();
+    if (explicitStage) return normalizeCameraPipelineStage(explicitStage);
+    return normalizeCameraPipelineStage(getCameraPipelineStageForStatusText(getAgentTaskEventStatusText(payload))
+        || getCameraPipelineStageForTitle(payload?.title));
+}
+
+function normalizeCameraPipelineStage(stage) {
+    const normalizedStage = String(stage || '').trim();
+    if (normalizedStage === 'camera_initial_view_render') return 'camera_initial_view_prepare';
+    if (normalizedStage === 'camera_trajectory_eval_optimization') return 'camera_trajectory_eval_render';
+    return normalizedStage;
+}
+
+function getCameraTaskPayloadStatusId(payload = {}) {
+    const explicitStatusId = normalizeAgentPipelineStatusId(payload?.statusId || payload?.statusKey || '');
+    if (explicitStatusId) return explicitStatusId;
+    const statusText = getAgentTaskEventStatusText(payload);
+    if (/^(运行中|Running|生成中|Processing|当前步骤|Current step)/i.test(statusText)) return 'running';
+    if (/^(渲染中|Rendering)/i.test(statusText)) return 'rendering';
+    if (/^(已完成|Completed)/i.test(statusText)) return 'done';
+    if (/^(已跳过|Skipped)/i.test(statusText)) return 'skipped';
+    if (/^(已取消|Canceled|Cancelled)/i.test(statusText)) return 'canceled';
+    if (/^(等待|Waiting|Pending)/i.test(statusText)) return 'pending';
+    return '';
+}
+
+function getCameraPipelineStageIndex(stage, plannedStages = CAMERA_PIPELINE_STAGE_PLAN) {
+    const normalizedStage = normalizeCameraPipelineStage(stage);
+    return plannedStages.map((item) => normalizeCameraPipelineStage(item)).indexOf(normalizedStage);
+}
+
+function getCameraTaskPayloadProgress(payload = {}) {
+    return Math.max(0, Math.min(1, Number(payload?.progress ?? payload?.value ?? payload?.percent) || 0));
+}
+
+function isCameraTaskPayloadStarted(payload = {}) {
+    return payload?.started === true
+        || getCameraTaskPayloadProgress(payload) > 0
+        || Boolean(getAgentTaskEventStatusText(payload));
+}
+
+function hasCameraTaskPayloadSignal(payload = {}) {
+    return Boolean(
+        String(payload?.stage || '').trim()
+        || String(payload?.statusText || payload?.message || '').trim()
+        || Array.isArray(payload?.pipelineStages)
+        || Array.isArray(payload?.images)
+        || Array.isArray(payload?.initialViewImages)
+        || Array.isArray(payload?.artifacts)
+        || String(payload?.directorIntentText || '').trim()
+    );
+}
+
+function getPayloadArtifactsForStage(payload = {}, stage = '') {
+    const normalizedStage = normalizeCameraPipelineStage(stage);
+    const payloadStage = getCameraTaskPayloadStage(payload);
+    const artifacts = Array.isArray(payload?.artifacts) ? payload.artifacts : [];
+    return dedupeAgentTaskArtifacts(artifacts
+        .filter((artifact) => {
+            if (!artifact || typeof artifact !== 'object') return false;
+            const targetStage = normalizeCameraPipelineStage(artifact.targetStage || artifact.stage);
+            if (targetStage) return targetStage === normalizedStage;
+            return payloadStage === normalizedStage;
+        })
+        .map((artifact) => ({ ...artifact })));
+}
+
+function getAgentTaskEventPayload(event) {
+    const item = event?.item && typeof event.item === 'object' ? event.item : {};
+    const candidates = [
+        event?.payload,
+        event?.data,
+        event?.arguments,
+        event?.args,
+        event?.result,
+        event?.visionaryTask,
+        item.arguments,
+        item.result,
+        item.payload,
+        item.visionaryTask,
+        getAgentTaskEventTextResult(item.result || item),
+        event,
+        item,
+    ];
+    for (const candidate of candidates) {
+        const payload = typeof candidate === 'string'
+            ? parseAgentTaskEventJsonObject(candidate)
+            : candidate;
+        if (!payload || typeof payload !== 'object') continue;
+        if (payload.visionaryTask && typeof payload.visionaryTask === 'object') {
+            return payload.visionaryTask;
+        }
+        if (payload.payload && typeof payload.payload === 'object') {
+            return payload.payload;
+        }
+        if (
+            'stage' in payload
+            || 'progress' in payload
+            || 'value' in payload
+            || 'percent' in payload
+            || 'statusText' in payload
+            || 'message' in payload
+            || 'title' in payload
+        ) {
+            return payload;
+        }
+    }
+    return {};
+}
+
+function parseAgentTaskEventJsonObject(value) {
+    const text = String(value || '').trim();
+    if (!text || (!text.startsWith('{') && !text.startsWith('['))) return {};
+    try {
+        const parsed = JSON.parse(text);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function getAgentTaskEventTextResult(value) {
+    if (typeof value === 'string') return value;
+    if (!value || typeof value !== 'object') return '';
+    if (typeof value.text === 'string') return value.text;
+    const content = Array.isArray(value.content) ? value.content : [];
+    const textItem = content.find((item) => item && typeof item === 'object' && typeof item.text === 'string');
+    return textItem?.text || '';
+}
+
+function getAgentTaskEventStatusText(payload = {}) {
+    return String(payload.statusText || payload.message || payload.status || '').trim();
+}
+
+function getCameraPipelineStageForStatusText(statusText) {
+    const text = String(statusText || '').trim();
+    if (/导演意图|场景分析/.test(text)) return 'camera_director_analysis';
+    if (/初始.*视图|初始相机/.test(text)) return 'camera_initial_view_prepare';
+    if (/评估.*渲染/.test(text)) return 'camera_trajectory_eval_render';
+    if (/评估|优化/.test(text)) return 'camera_trajectory_eval_render';
+    if (/分镜相机轨迹|Visionary 相机轨迹格式|相机轨迹生成/.test(text)) return 'camera_trajectory_generation';
+    if (/场景信息|scene\.json|Trajectory_gen 场景信息/.test(text)) return 'camera_scene_info_export';
+    return '';
+}
+
+function getCameraPipelineStageForTitle(title) {
+    const normalizedTitle = String(title || '').trim();
+    const titleMap = new Map([
+        ['相机场景信息导出', 'camera_scene_info_export'],
+        ['相机初始视图准备', 'camera_initial_view_prepare'],
+        ['相机轨迹生成', 'camera_trajectory_generation'],
+    ]);
+    return titleMap.get(normalizedTitle) || '';
+}
+
+function normalizeAgentTaskPayloadImages(images = []) {
+    return (Array.isArray(images) ? images : [])
+        .map((image, index) => {
+            const assetPath = String(image?.relativePath || image?.assetPath || '').trim();
+            if (!assetPath && !image?.src) return null;
+            return {
+                id: image?.id || image?.title || `Image ${index + 1}`,
+                title: image?.title || image?.id || `Image ${index + 1}`,
+                relativePath: assetPath,
+                assetPath,
+                mimeType: image?.mimeType || '',
+                bytes: image?.bytes || 0,
+                metadata: image?.metadata && typeof image.metadata === 'object' ? image.metadata : undefined,
+                src: assetPath
+                    ? projectApi.getAssetUrl(state.projectSession.user, state.projectSession.activeProjectId, assetPath)
+                    : image.src,
+                alt: image?.alt || image?.title || '',
+            };
+        })
+        .filter(Boolean);
+}
+
+function dedupeAgentTaskImages(images = []) {
+    const seen = new Set();
+    return images.filter((image) => {
+        const key = String(image?.relativePath || image?.assetPath || image?.src || image?.id || '').trim();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function dedupeAgentTaskArtifacts(artifacts = []) {
+    const seen = new Set();
+    return artifacts.filter((artifact) => {
+        const artifactStage = normalizeCameraPipelineStage(artifact?.targetStage || artifact?.stage);
+        const key = `${artifact?.kind || ''}:${artifactStage}:${artifact?.text || artifact?.content || ''}:${artifact?.relativePath || artifact?.assetPath || ''}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function getCameraPipelineStepDefinitionForStage(stage) {
+    const normalizedStage = String(stage || '').trim();
+    if (normalizedStage === 'camera_scene_info_export') {
+        return CAMERA_PIPELINE_STEP_DEFS.find((step) => step.key === 'camera-scene-info') || CAMERA_PIPELINE_STEP_DEFS[0];
+    }
+    if (normalizedStage === 'camera_initial_view_prepare' || normalizedStage === 'camera_initial_view_render') {
+        return CAMERA_PIPELINE_STEP_DEFS.find((step) => step.key === 'camera-initial-views') || CAMERA_PIPELINE_STEP_DEFS[1];
+    }
+    if (normalizedStage === 'camera_director_analysis') {
+        return CAMERA_PIPELINE_STEP_DEFS.find((step) => step.key === 'camera-director') || CAMERA_PIPELINE_STEP_DEFS[2];
+    }
+    if (normalizedStage === 'camera_trajectory_generation') {
+        return CAMERA_PIPELINE_STEP_DEFS.find((step) => step.key === 'camera-trajectory') || CAMERA_PIPELINE_STEP_DEFS[3];
+    }
+    if (normalizedStage === 'camera_trajectory_eval_render' || normalizedStage === 'camera_trajectory_eval_optimization') {
+        return CAMERA_PIPELINE_STEP_DEFS.find((step) => step.key === 'camera-eval') || CAMERA_PIPELINE_STEP_DEFS[4];
+    }
+    return {
+        key: normalizedStage || 'camera-task',
+        titleKey: 'agent.workflows.camera-direct.progressTitle',
+    };
 }
 
 function createPendingCodexTaskSession({
@@ -4893,6 +5597,21 @@ function createPendingCodexTaskSession({
     prompt,
     attachments = [],
 } = {}) {
+    if (workflowId === 'camera-direct') {
+        const attempt = createAgentGenerationAttempt({
+            workflow: workflowId,
+            text: t('common.generating'),
+            blocks: [],
+            steps: [],
+            status: 'running',
+        });
+        return createAgentSession({
+            workflow: workflowId,
+            prompt,
+            attachments,
+            attempt,
+        });
+    }
     const mainImageBlock = createAgentProgressBlock({
         title: t('agent.pipelineSteps.mainImage'),
         stepKey: 'main-image',
@@ -5224,6 +5943,12 @@ function buildAgentComposerPromptText(rawPrompt) {
     return `${skill.value} ${prompt}`;
 }
 
+function getAgentWorkflowForPrompt(prompt, fallbackWorkflowId = state.agentWorkflow) {
+    const parsed = parseAgentComposerSkillText(String(prompt || ''));
+    const workflowId = parsed.skill?.workflow || '';
+    return AGENT_WORKFLOW_DEFS[workflowId] ? workflowId : fallbackWorkflowId;
+}
+
 function renderAgentComposerAttachments() {
     if (!dom.agentComposerAttachments) return;
     const attachments = state.agentPendingImages || [];
@@ -5255,12 +5980,17 @@ function getAgentMessageIndexById(messageId) {
 }
 
 function updateAgentMessageById(messageId, updater) {
-    const index = getAgentMessageIndexById(messageId);
-    if (index < 0) return null;
-    const message = state.agentMessages[index];
+    const location = findAgentWorkflowThreadItemLocation(messageId);
+    if (!location) return null;
+    const message = location.items[location.index];
     if (message?.kind === 'session') return null;
     updater(message);
-    renderAgentMessages({ autoScroll: 'preserve-or-pin-bottom' });
+    location.items[location.index] = message;
+    location.thread.items = location.items;
+    if (location.isCurrent) {
+        state.agentMessages = location.items;
+        renderAgentMessages({ autoScroll: 'preserve-or-pin-bottom' });
+    }
     schedulePersistAgentConversations();
     return message;
 }
@@ -5554,10 +6284,13 @@ function renderAgentStepGalleryMain({
 } = {}) {
     const viewerBlock = createAgentStepImageViewer3DBlock(block, selectedImage, selectedIndex);
     const thumbnailSrc = getAgentStepImageThumbnailSrc(selectedImage);
+    const isGalleryLocked = isAgentStepGalleryNavigationLocked(block, {
+        status: isInterruptedAttempt ? 'interrupted' : '',
+    });
     const nav = `
         ${images.length > 1 ? `<span class="agent-step-gallery-count">${selectedIndex + 1} / ${images.length}</span>` : ''}
-        ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-prev" data-agent-step-gallery-nav="prev" data-agent-block-id="${block.id}" ${!isApplied && !isInterruptedAttempt && selectedIndex > 0 ? '' : 'disabled'} aria-label="Previous image">‹</button>` : ''}
-        ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-next" data-agent-step-gallery-nav="next" data-agent-block-id="${block.id}" ${!isApplied && !isInterruptedAttempt && selectedIndex < images.length - 1 ? '' : 'disabled'} aria-label="Next image">›</button>` : ''}
+        ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-prev" data-agent-step-gallery-nav="prev" data-agent-block-id="${block.id}" ${!isGalleryLocked && selectedIndex > 0 ? '' : 'disabled'} aria-label="Previous image">‹</button>` : ''}
+        ${images.length > 1 ? `<button type="button" class="agent-step-gallery-nav is-next" data-agent-step-gallery-nav="next" data-agent-block-id="${block.id}" ${!isGalleryLocked && selectedIndex < images.length - 1 ? '' : 'disabled'} aria-label="Next image">›</button>` : ''}
     `;
     if (viewerBlock) {
         return `
@@ -5583,27 +6316,32 @@ function renderAgentProgressBlock(block, context = {}) {
     const progress = Math.max(0, Math.min(1, Number(block.value) || 0));
     const percentText = block.indeterminate ? t('agent.promptProcessing') : `${Math.round(progress * 100)}%`;
     const images = Array.isArray(block.images) ? block.images : [];
+    const artifacts = Array.isArray(block.artifacts) ? block.artifacts : [];
     const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(block.selectedIndex) || 0));
     const selectedImage = images[selectedIndex] || null;
     const isApplied = Boolean(block.applied);
     const isStepBlock = Boolean(block.stepKey);
     const isInterruptedAttempt = context?.attempt?.status === 'interrupted';
+    const statusId = normalizeAgentPipelineStatusId(block.statusId);
     const actions = isInterruptedAttempt && isStepBlock
         ? []
         : (Array.isArray(block.actions) ? block.actions : []);
-    const isCanceledStep = isStepBlock && /^已取消|^Canceled/i.test(String(block.statusText || ''));
+    const isCanceledStep = isStepBlock && (statusId === 'canceled' || /^已取消|^Canceled/i.test(String(block.statusText || '')));
     const stepThumbnail = isStepBlock ? getAgentStepBlockThumbnail(block) : '';
     const showContinue = isStepBlock && shouldShowAgentPipelineContinue(context);
     const forceCollapsed = isStepBlock && Boolean(context.stepBlocksCollapsed);
     const isHiddenStepBlock = isStepBlock && context.hiddenStepBlockIds instanceof Set && context.hiddenStepBlockIds.has(block.id);
     const isOpen = !isStepBlock || (!forceCollapsed && Boolean(block.expanded || block.isCurrent || (!isApplied && (selectedImage || actions.length > 0 || showContinue))));
-    const stepStateLabel = isApplied
-        ? t('agent.pipelineSteps.applied')
-        : isCanceledStep
-            ? t('common.canceled')
-            : isInterruptedAttempt
-                ? t('common.interrupted')
-                : '';
+    const stepStateLabel = isStepBlock
+        ? getAgentPipelineStatusLabel(statusId)
+        : isApplied
+            ? t('agent.pipelineSteps.applied')
+            : isCanceledStep
+                ? t('common.canceled')
+                : isInterruptedAttempt
+                    ? t('common.interrupted')
+                    : '';
+    const stepStateClass = getAgentPipelineStatusClass(statusId);
     const isCurrentStepStatus = isStepBlock
         && block.isCurrent
         && !isApplied
@@ -5619,7 +6357,12 @@ function renderAgentProgressBlock(block, context = {}) {
     ) {
         statusText = '';
     }
-    const showProgressTrack = !isStepBlock || (!isApplied && !isCanceledStep && !isInterruptedAttempt);
+    const showProgressTrack = !isStepBlock || (
+        shouldShowAgentStepProgressTrack(statusId, block)
+        && !isApplied
+        && !isCanceledStep
+        && !isInterruptedAttempt
+    );
     const showInterruptedStepActions = isInterruptedAttempt && isStepBlock && block.isCurrent && !isApplied && context.sessionId;
     const content = `
             ${isStepBlock ? '' : `
@@ -5642,6 +6385,7 @@ function renderAgentProgressBlock(block, context = {}) {
                     ${renderAgentStepImageMetadata(selectedImage)}
                 </div>
             ` : ''}
+            ${renderAgentBlockArtifacts(artifacts)}
             ${actions.length > 0 ? `
                 <div class="agent-step-actions">
                     ${actions.map((action) => `
@@ -5668,7 +6412,7 @@ function renderAgentProgressBlock(block, context = {}) {
                     ${stepThumbnail ? `<span class="agent-step-summary-thumb"><img src="${escapeHtml(stepThumbnail)}" alt="" loading="eager" decoding="async"></span>` : ''}
                     <span class="agent-block-title">${escapeHtml(block.title || t('agent.blocks.progress'))}</span>
                     <span class="agent-step-summary-meta">
-                        ${stepStateLabel ? `<span class="agent-step-state">${escapeHtml(stepStateLabel)}</span>` : ''}
+                        ${stepStateLabel ? `<span class="agent-step-state ${escapeHtml(stepStateClass)}">${escapeHtml(stepStateLabel)}</span>` : ''}
                         ${showProgressTrack ? `<span class="agent-block-meta">${percentText}</span>` : ''}
                     </span>
                 </summary>
@@ -5682,6 +6426,31 @@ function renderAgentProgressBlock(block, context = {}) {
         <section class="agent-block agent-block-progress" data-agent-block-id="${block.id}" data-agent-session-id="${escapeHtml(context.sessionId || '')}" data-agent-attempt-id="${escapeHtml(context.attemptId || '')}" data-agent-step-key="${escapeHtml(block.stepKey || '')}">
             ${content}
         </section>
+    `;
+}
+
+function renderAgentBlockArtifacts(artifacts = []) {
+    const items = (Array.isArray(artifacts) ? artifacts : [])
+        .map((artifact) => {
+            if (!artifact || typeof artifact !== 'object') return null;
+            const text = String(artifact.text || artifact.content || '').trim();
+            if (!text) return null;
+            return {
+                title: String(artifact.title || '').trim(),
+                text,
+            };
+        })
+        .filter(Boolean);
+    if (items.length <= 0) return '';
+    return `
+        <div class="agent-step-artifacts">
+            ${items.map((item) => `
+                <div class="agent-step-artifact">
+                    ${item.title ? `<div class="agent-step-artifact-title">${escapeHtml(item.title)}</div>` : ''}
+                    <div class="agent-step-artifact-text">${escapeHtml(item.text)}</div>
+                </div>
+            `).join('')}
+        </div>
     `;
 }
 
@@ -5713,7 +6482,7 @@ function renderAgentStepImageMetadata(image) {
         .map((item) => String(item?.label || '').trim())
         .filter(Boolean)
         .slice(0, 4);
-    const detectionCount = Number(metadata.detectionCount) || bboxData.length;
+    const detectionCount = Number(metadata.detectionCount) || 9;
     return `
         <div class="agent-step-metadata">
             <span>${escapeHtml(t('agent.pipelineSteps.layoutDetections', { count: detectionCount }))}</span>
@@ -5990,6 +6759,10 @@ function renderAgentSessionItem(session) {
     const arePipelineStepsCollapsed = Boolean(attempt?.stepBlocksCollapsed);
     const archiveStateLabel = getAgentSessionStatusLabel(session, attempt);
     const isArchivedExpanded = session.archiveState !== 'active' && !session.collapsed;
+    const attemptBlocks = getAgentAttemptStepBlocks(attempt);
+    const isThinkingBeforeMcp = session.archiveState === 'active'
+        && attempt?.status === 'running'
+        && attemptBlocks.length <= 0;
     const actionAvailability = resolveAgentSessionActionAvailability({
         archiveState: session.archiveState,
         attemptStatus: attempt?.status || 'running',
@@ -6027,8 +6800,8 @@ function renderAgentSessionItem(session) {
                             ` : ''}
                         </div>
                     </div>
-                    <div class="agent-message-text">${escapeHtml(attempt?.text || '')}</div>
-                    ${renderAgentBlocks(getAgentAttemptStepBlocks(attempt), { sessionId: session.id, attemptId: attempt?.id || '', attempt, stepBlocksCollapsed: arePipelineStepsCollapsed })}
+                    <div class="agent-message-text ${isThinkingBeforeMcp ? 'agent-thinking-text' : ''}">${escapeHtml(attempt?.text || '')}</div>
+                    ${renderAgentBlocks(attemptBlocks, { sessionId: session.id, attemptId: attempt?.id || '', attempt, stepBlocksCollapsed: arePipelineStepsCollapsed })}
                     ${renderAgentPromptSuggestions(attempt?.promptSuggestions)}
                     <div class="agent-session-footer">
                         ${isArchivedExpanded ? '' : `
@@ -6280,6 +7053,26 @@ function syncAgentImageFrameAspectRatios(root = dom.agentMessageList) {
     });
 }
 
+function syncAgentStepSummaryTitleReserves(root = dom.agentMessageList) {
+    if (!root) return;
+    root.querySelectorAll('.agent-step-summary').forEach((summary) => {
+        if (!(summary instanceof HTMLElement)) return;
+        const styles = window.getComputedStyle(summary);
+        const paddingLeft = Number.parseFloat(styles.paddingLeft) || 0;
+        const paddingRight = Number.parseFloat(styles.paddingRight) || 0;
+        const thumb = summary.querySelector('.agent-step-summary-thumb');
+        const meta = summary.querySelector('.agent-step-summary-meta');
+        const leftReserve = thumb instanceof HTMLElement
+            ? Math.ceil((thumb.offsetLeft - summary.offsetLeft) + thumb.offsetWidth + 6)
+            : Math.ceil(paddingLeft);
+        const rightReserve = meta instanceof HTMLElement
+            ? Math.ceil(summary.clientWidth - meta.offsetLeft + paddingRight)
+            : Math.ceil(paddingRight);
+        summary.style.setProperty('--agent-step-summary-left-reserve', `${leftReserve}px`);
+        summary.style.setProperty('--agent-step-summary-right-reserve', `${rightReserve}px`);
+    });
+}
+
 function getAgentSessionDomElement(sessionId) {
     if (!dom.agentMessageList || !sessionId) return null;
     return dom.agentMessageList.querySelector(`[data-agent-session-id="${escapeCssIdentifier(sessionId)}"]`);
@@ -6527,6 +7320,7 @@ function renderAgentMessages({ autoScroll = 'preserve-or-pin-bottom', animateLay
     )).join('');
     const layoutAnimation = prepareAgentMessageLayoutAnimation(layoutSnapshot);
     syncAgentImageFrameAspectRatios(dom.agentMessageList);
+    syncAgentStepSummaryTitleReserves(dom.agentMessageList);
     retainAgentThumbnailImageCache(dom.agentMessageList);
     if (dom.agentMessageScroll) {
         dom.agentMessageScroll.scrollTop = resolveAgentMessageRefreshScrollTop({
@@ -6798,7 +7592,7 @@ function handleAgentMessageListClick(event) {
     const stepGalleryNav = event.target.closest('[data-agent-step-gallery-nav]');
     if (stepGalleryNav instanceof HTMLElement) {
         const context = getAgentStepBlockContextFromElement(stepGalleryNav);
-        if (!context || context.attempt?.status === 'interrupted' || context.block.applied) return;
+        if (!context || isAgentStepGalleryNavigationLocked(context.block, context.attempt)) return;
         const images = Array.isArray(context.block.images) ? context.block.images : [];
         if (images.length <= 1) return;
         const direction = stepGalleryNav.dataset.agentStepGalleryNav;
@@ -6875,7 +7669,7 @@ function handleAgentMessageListClick(event) {
     if (!(button instanceof HTMLElement)) return;
     const prompt = button.dataset.agentSuggestionText;
     if (!prompt) return;
-    submitAgentPrompt(prompt);
+    fillAgentComposerFromSuggestion(prompt);
 }
 
 function handleAgentWorkflowClick(event) {
@@ -6934,6 +7728,12 @@ function handleAgentComposerKeydown(event) {
 }
 
 function handleAgentComposerInput() {
+    syncAgentComposerSkillFromInput();
+    syncAgentComposerInputEmptyState();
+}
+
+function fillAgentComposerFromSuggestion(prompt) {
+    setAgentComposerInputText(prompt, { focus: true });
     syncAgentComposerSkillFromInput();
     syncAgentComposerInputEmptyState();
 }
@@ -7184,6 +7984,86 @@ function hasCodexTaskSignal(result) {
     return Boolean(result?.task?.started);
 }
 
+function isAgentDebugEnabled(workflowId = '') {
+    if (workflowId === 'camera-direct') return true;
+    try {
+        return localStorage.getItem('VISIONARY_AGENT_DEBUG') === '1';
+    } catch {
+        return false;
+    }
+}
+
+function agentDebugNow() {
+    return typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+}
+
+function logAgentDebug(workflowId, message, details = {}) {
+    if (!isAgentDebugEnabled(workflowId) || typeof console === 'undefined') return;
+    const logger = typeof console.debug === 'function' ? console.debug : console.log;
+    logger.call(console, `[Visionary Agent][${workflowId || 'workflow'}] ${message}`, details);
+}
+
+function summarizeCodexTaskEvents(result) {
+    const events = Array.isArray(result?.task?.events) ? result.task.events : [];
+    return events.map((event, index) => {
+        const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+        const nestedPayload = payload.payload && typeof payload.payload === 'object' ? payload.payload : payload;
+        return {
+            index,
+            type: event?.type || '',
+            title: nestedPayload.title || '',
+            message: nestedPayload.message || nestedPayload.statusText || nestedPayload.status || '',
+            progress: nestedPayload.progress ?? nestedPayload.value ?? nestedPayload.percent ?? '',
+        };
+    });
+}
+
+function startAgentEndpointDebug({
+    workflowId,
+    endpoint,
+    prompt,
+    sessionId = '',
+    attemptId = '',
+} = {}) {
+    const startedAt = agentDebugNow();
+    logAgentDebug(workflowId, `request started: ${endpoint}`, {
+        endpoint,
+        sessionId,
+        attemptId,
+        promptLength: String(prompt || '').length,
+    });
+    const timer = window.setInterval(() => {
+        const elapsedMs = Math.round(agentDebugNow() - startedAt);
+        logAgentDebug(workflowId, `waiting for ${endpoint}`, {
+            elapsedMs,
+            elapsedSec: Math.round(elapsedMs / 1000),
+            likelyState: 'waiting for stream activity or final response; task events update the UI as soon as Codex emits progress',
+        });
+    }, 5000);
+    return {
+        finish(result, error = null) {
+            window.clearInterval(timer);
+            const elapsedMs = Math.round(agentDebugNow() - startedAt);
+            if (error) {
+                logAgentDebug(workflowId, `request failed: ${endpoint}`, {
+                    elapsedMs,
+                    message: error?.message || String(error),
+                });
+                return;
+            }
+            logAgentDebug(workflowId, `request completed: ${endpoint}`, {
+                elapsedMs,
+                threadId: result?.threadId || '',
+                finalTextLength: String(result?.finalText || '').length,
+                task: result?.task || null,
+                taskEvents: summarizeCodexTaskEvents(result),
+            });
+        },
+    };
+}
+
 function replaceAgentSessionAttempt(session, attemptId, nextAttempt) {
     if (!session || session.kind !== 'session' || !attemptId || !nextAttempt) return session;
     return {
@@ -7196,12 +8076,568 @@ function replaceAgentSessionAttempt(session, attemptId, nextAttempt) {
 }
 
 function replaceAgentMessageWithSession(messageId, session) {
-    const index = getAgentMessageIndexById(messageId);
-    if (index < 0 || !session) return null;
-    state.agentMessages[index] = session;
-    renderAgentMessages({ autoScroll: 'preserve-or-pin-bottom' });
+    const location = findAgentWorkflowThreadItemLocation(messageId);
+    if (!location || !session) return null;
+    location.items[location.index] = session;
+    location.thread.items = location.items;
+    if (location.isCurrent) {
+        state.agentMessages = location.items;
+        renderAgentMessages({ autoScroll: 'preserve-or-pin-bottom' });
+    }
     schedulePersistAgentConversations();
     return session;
+}
+
+function shouldUseScenePipelineState(workflowId) {
+    return workflowId === 'scene-build';
+}
+
+function shouldCreatePendingCodexTaskSession(workflowId) {
+    return shouldUseScenePipelineState(workflowId) || workflowId === 'camera-direct';
+}
+
+function normalizeAgentCameraTimelineKeyframes(keyframes = []) {
+    return (Array.isArray(keyframes) ? keyframes : [])
+        .map((item) => {
+            const frame = Math.round(Number(item?.frame));
+            const time = Number.isFinite(Number(item?.time))
+                ? Number(item.time)
+                : frameToTime(Number.isFinite(frame) ? frame : 0);
+            const camera = item?.camera && typeof item.camera === 'object' ? item.camera : {};
+            const position = camera.position && typeof camera.position === 'object' ? camera.position : {};
+            const rotation = camera.rotation && typeof camera.rotation === 'object' ? camera.rotation : {};
+            if (!Number.isFinite(frame)) return null;
+            return {
+                frame,
+                time,
+                camera: {
+                    position: {
+                        x: Number(position.x) || 0,
+                        y: Number(position.y) || 0,
+                        z: Number(position.z) || 0,
+                    },
+                    rotation: {
+                        x: Number(rotation.x) || 0,
+                        y: Number(rotation.y) || 0,
+                        z: Number(rotation.z) || 0,
+                        w: Number(rotation.w) || 1,
+                    },
+                },
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.frame - b.frame);
+}
+
+function normalizeAgentCameraTimelineFovKeyframes(keyframes = []) {
+    return (Array.isArray(keyframes) ? keyframes : [])
+        .map((item) => {
+            const frame = Math.round(Number(item?.frame));
+            if (!Number.isFinite(frame)) return null;
+            const fovDegrees = clampSceneFov(item?.fovDegrees);
+            if (fovDegrees === null) return null;
+            return {
+                frame,
+                time: Number.isFinite(Number(item?.time)) ? Number(item.time) : frameToTime(frame),
+                fovDegrees,
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.frame - b.frame);
+}
+
+function getAgentCameraTrajectoryTimeline(source) {
+    const trajectory = source?.trajectory && typeof source.trajectory === 'object' ? source.trajectory : null;
+    const data = trajectory?.data && typeof trajectory.data === 'object' ? trajectory.data : trajectory;
+    const timeline = data?.timeline && typeof data.timeline === 'object' ? data.timeline : null;
+    return timeline && Array.isArray(timeline.keyframes) ? timeline : null;
+}
+
+function snapshotCameraTrajectoryTimeline() {
+    return {
+        keyframes: state.keyframes.map((keyframe) => ({
+            frame: keyframe.frame,
+            time: keyframe.time,
+            camera: {
+                position: { ...keyframe.camera.position },
+                rotation: { ...keyframe.camera.rotation },
+            },
+        })),
+        fovKeyframes: state.cameraFovKeyframes.map((keyframe) => ({ ...keyframe })),
+        fps: state.timelineFps,
+        durationSec: state.timelineDurationSec,
+        isLooping: state.isLooping,
+        selectedFrame: state.selectedCameraSequenceFrame,
+        cameraSequenceVisible: state.cameraSequenceVisible,
+    };
+}
+
+function restoreCameraTrajectoryTimeline(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return false;
+    state.keyframes = Array.isArray(snapshot.keyframes) ? snapshot.keyframes.map((keyframe) => ({
+        frame: keyframe.frame,
+        time: keyframe.time,
+        camera: {
+            position: { ...keyframe.camera.position },
+            rotation: { ...keyframe.camera.rotation },
+        },
+    })) : [];
+    state.cameraFovKeyframes = Array.isArray(snapshot.fovKeyframes) ? snapshot.fovKeyframes.map((keyframe) => ({ ...keyframe })) : [];
+    state.timelineFps = Math.max(1, Number(snapshot.fps || state.timelineFps || 24));
+    if (dom.timelineFps) dom.timelineFps.value = String(state.timelineFps);
+    state.timelineDurationSec = Math.max(TIMELINE_MIN_DURATION_SEC, Number(snapshot.durationSec || state.timelineDurationSec || TIMELINE_MIN_DURATION_SEC));
+    state.isLooping = Boolean(snapshot.isLooping);
+    dom.btnLoopCamera?.classList.toggle('active', state.isLooping);
+    state.selectedCameraSequenceFrame = Number.isFinite(Number(snapshot.selectedFrame)) ? Number(snapshot.selectedFrame) : null;
+    setCameraSequenceVisibility(Boolean(snapshot.cameraSequenceVisible), true);
+    setTimelineFrame(state.selectedCameraSequenceFrame ?? state.keyframes[0]?.frame ?? 0, {
+        applyPose: true,
+        syncSlider: true,
+        syncGizmo: true,
+    });
+    syncCameraSequenceVisualization();
+    updateTimelineUI();
+    markWorkspaceDirty('agent-camera-trajectory-restore');
+    return true;
+}
+
+function applyAgentCameraTrajectoryTimeline(source) {
+    const timeline = getAgentCameraTrajectoryTimeline(source);
+    if (!timeline) return false;
+    const nextKeyframes = normalizeAgentCameraTimelineKeyframes(timeline.keyframes);
+    if (nextKeyframes.length === 0) return false;
+    if (!agentCameraTrajectoryPreview) {
+        agentCameraTrajectoryPreview = {
+            backup: snapshotCameraTrajectoryTimeline(),
+            source,
+            createdAt: new Date().toISOString(),
+        };
+    } else {
+        agentCameraTrajectoryPreview = {
+            ...agentCameraTrajectoryPreview,
+            source,
+            updatedAt: new Date().toISOString(),
+        };
+    }
+    state.keyframes = nextKeyframes;
+    state.cameraFovKeyframes = normalizeAgentCameraTimelineFovKeyframes(timeline.fovKeyframes);
+    if (Number.isFinite(Number(timeline.fps))) {
+        state.timelineFps = Math.max(1, Number(timeline.fps));
+        if (dom.timelineFps) dom.timelineFps.value = String(state.timelineFps);
+    }
+    if (Number.isFinite(Number(timeline.durationSec))) {
+        state.timelineDurationSec = Math.max(TIMELINE_MIN_DURATION_SEC, Number(timeline.durationSec));
+    }
+    if (typeof timeline.isLooping === 'boolean') {
+        state.isLooping = timeline.isLooping;
+        dom.btnLoopCamera?.classList.toggle('active', state.isLooping);
+    }
+    state.selectedCameraSequenceFrame = nextKeyframes[0]?.frame ?? 0;
+    setCameraSequenceVisibility(true, true);
+    setTimelineFrame(Number(timeline.selectedFrame) || state.selectedCameraSequenceFrame || 0, {
+        applyPose: true,
+        syncSlider: true,
+        syncGizmo: true,
+    });
+    syncCameraSequenceVisualization();
+    updateTimelineUI();
+    markWorkspaceDirty('agent-camera-trajectory');
+    return true;
+}
+
+function commitAgentCameraTrajectoryPreview() {
+    agentCameraTrajectoryPreview = null;
+}
+
+function restoreAgentCameraTrajectoryPreview() {
+    const backup = agentCameraTrajectoryPreview?.backup;
+    agentCameraTrajectoryPreview = null;
+    return restoreCameraTrajectoryTimeline(backup);
+}
+
+function resetAgentCameraTrajectoryPreviewForRetry() {
+    const preview = agentCameraTrajectoryPreview;
+    if (!preview?.backup) return false;
+    const restored = restoreCameraTrajectoryTimeline(preview.backup);
+    agentCameraTrajectoryPreview = {
+        ...preview,
+        source: null,
+        retryingAt: new Date().toISOString(),
+    };
+    return restored;
+}
+
+function getCameraTrajectoryReviewText(result = {}) {
+    const finalText = String(result?.finalText || '').trim();
+    if (finalText) return finalText;
+    return '已把生成的相机轨迹放到时间轴预览，点击“应用”将确认保留当前预览轨迹并清理备份，点击“重试”将重新生成，点击“取消”将放弃并恢复旧轨迹。';
+}
+
+function getCameraPipelineStageStatusesForStage(stage, statusId, options = {}) {
+    const normalizedStage = normalizeCameraPipelineStage(stage);
+    const normalizedStatus = normalizeAgentPipelineStatusId(statusId) || 'running';
+    const currentIndex = CAMERA_PIPELINE_STAGE_PLAN.indexOf(normalizedStage);
+    return CAMERA_PIPELINE_STAGE_PLAN.map((item, index) => {
+        if (index < currentIndex) return { stage: item, statusId: 'done' };
+        if (index === currentIndex) return { stage: item, statusId: normalizedStatus };
+        if (options.skipEvalRender && item === 'camera_trajectory_eval_render') {
+            return { stage: item, statusId: 'skipped' };
+        }
+        if (options.evalRenderStatusId && item === 'camera_trajectory_eval_render') {
+            return { stage: item, statusId: options.evalRenderStatusId };
+        }
+        return { stage: item, statusId: 'pending' };
+    });
+}
+
+function applyCameraPipelineImplicitHandoffStatuses(task = {}, statuses = {}) {
+    const currentStage = normalizeCameraPipelineStage(task?.stage || '');
+    const currentStatusId = normalizeAgentPipelineStatusId(task?.statusId || '');
+    if (
+        currentStage === 'camera_scene_info_export'
+        && (currentStatusId === 'done' || statuses.camera_scene_info_export === 'done')
+        && statuses.camera_scene_info_export === 'done'
+        && statuses.camera_initial_view_prepare === 'pending'
+    ) {
+        return {
+            ...statuses,
+            camera_initial_view_prepare: 'running',
+        };
+    }
+    return statuses;
+}
+
+function cancelAgentCameraRenderJob() {
+    if (!agentCameraRenderJob) return;
+    agentCameraRenderJob = {
+        ...agentCameraRenderJob,
+        status: 'canceled',
+        canceledAt: new Date().toISOString(),
+    };
+}
+
+function isAgentCameraRenderJobActive(job) {
+    return Boolean(job?.jobId && agentCameraRenderJob?.jobId === job.jobId && agentCameraRenderJob.status === 'running');
+}
+
+function getCameraTrajectoryPreparedPath(result = {}) {
+    const prepared = result?.prepared && typeof result.prepared === 'object' ? result.prepared : null;
+    return String(result?.preparedPath || prepared?.relativePath || '').trim();
+}
+
+function normalizeCameraRenderRequests(requests = []) {
+    return (Array.isArray(requests) ? requests : [])
+        .map((request, index) => {
+            const outputPath = String(request?.outputPath || request?.relativePath || '').trim();
+            const resolution = request?.resolution && typeof request.resolution === 'object' ? request.resolution : {};
+            const camera = request?.camera && typeof request.camera === 'object' ? request.camera : {};
+            const width = Math.max(1, Math.round(Number(resolution.width) || 1920));
+            const height = Math.max(1, Math.round(Number(resolution.height) || 1080));
+            if (!outputPath || Object.keys(camera).length <= 0) return null;
+            return {
+                ...request,
+                id: String(request?.id || request?.name || `camera_render_${index + 1}`).trim(),
+                title: String(request?.title || request?.name || `Camera render ${index + 1}`).trim(),
+                outputPath,
+                resolution: { width, height },
+                camera,
+            };
+        })
+        .filter(Boolean);
+}
+
+async function ensureCameraRenderFrameApiLoaded() {
+    return import('../src/exportMedia/renderFrame.js');
+}
+
+function getCameraRenderFrameContext() {
+    const renderer = app?.getMeshRenderer?.();
+    const scene = app?.getMeshScene?.();
+    const fusedRenderer = app?.getFusedRenderer?.();
+    if (!renderer || !scene) {
+        throw new Error(t('messages.renderContextUnavailableImage'));
+    }
+    return {
+        renderer,
+        scene,
+        gaussianModels: fusedRenderer?.getGaussianModels?.() || [],
+    };
+}
+
+function createCameraRenderAssetFromRequest(request, index, blob) {
+    const relativePath = String(request.outputPath || '').trim();
+    return {
+        id: request.id || `camera_render_${index + 1}`,
+        title: request.title || request.id || `Camera render ${index + 1}`,
+        relativePath,
+        assetPath: relativePath,
+        mimeType: blob?.type || 'image/png',
+        bytes: Number(blob?.size || 0),
+        metadata: {
+            kind: 'camera_render',
+            requestName: request.name || request.id || '',
+            width: request.resolution.width,
+            height: request.resolution.height,
+        },
+        src: projectApi.getAssetUrl(state.projectSession.user, state.projectSession.activeProjectId, relativePath),
+        alt: request.title || request.name || '',
+    };
+}
+
+function updateCameraRenderJobProgress(job, {
+    stage,
+    statusId = 'rendering',
+    message = '',
+    progress = 0,
+    images = [],
+    artifacts = [],
+    pipelineStageOptions = {},
+} = {}) {
+    if (!isAgentCameraRenderJobActive(job)) return;
+    const normalizedStage = normalizeCameraPipelineStage(stage || job.stage);
+    const payload = {
+        started: true,
+        title: t(getCameraPipelineStepDefinitionForStage(normalizedStage).titleKey),
+        statusText: message,
+        progress,
+        stage: normalizedStage,
+        statusId,
+        pipelineStageStatuses: getCameraPipelineStageStatusesForStage(normalizedStage, statusId, pipelineStageOptions),
+        ...(normalizedStage === 'camera_initial_view_prepare'
+            ? { initialViewImages: images }
+            : {
+                images,
+                ...(Array.isArray(job?.initialViewImages) && job.initialViewImages.length > 0
+                    ? { initialViewImages: job.initialViewImages }
+                    : {}),
+            }),
+        artifacts,
+    };
+    updateCodexTaskSessionProgress({
+        sessionId: job.sessionId,
+        attemptId: job.attemptId,
+        workflowId: 'camera-direct',
+        task: payload,
+    });
+}
+
+async function renderAgentCameraRequests(job, requests, stage) {
+    const normalizedRequests = normalizeCameraRenderRequests(requests);
+    const images = [];
+    if (normalizedRequests.length <= 0) {
+        throw new Error('Camera render stage did not include any render requests');
+    }
+    const { renderVisionaryFrame } = await ensureCameraRenderFrameApiLoaded();
+    const context = getCameraRenderFrameContext();
+    for (const [index, request] of normalizedRequests.entries()) {
+        if (!isAgentCameraRenderJobActive(job)) {
+            throw new Error('Camera render job was canceled');
+        }
+        updateCameraRenderJobProgress(job, {
+            stage,
+            statusId: 'rendering',
+            message: `${t(getCameraPipelineStepDefinitionForStage(stage).titleKey)} ${index + 1}/${normalizedRequests.length}`,
+            progress: Math.max(0.01, index / normalizedRequests.length),
+            images,
+        });
+        const frame = await renderVisionaryFrame(context, {
+            id: request.id,
+            resolution: request.resolution,
+            camera: request.camera,
+            mode: 'color',
+            outputs: ['blob'],
+            mimeType: 'image/png',
+        });
+        if (!frame.blob) {
+            throw new Error('Camera render did not return an image blob');
+        }
+        await projectApi.writeAsset({
+            user: state.projectSession.user,
+            projectId: state.projectSession.activeProjectId,
+            relativePath: request.outputPath,
+            content: frame.blob,
+        });
+        images.push(createCameraRenderAssetFromRequest(request, index, frame.blob));
+        updateCameraRenderJobProgress(job, {
+            stage,
+            statusId: 'rendering',
+            message: `${t(getCameraPipelineStepDefinitionForStage(stage).titleKey)} ${index + 1}/${normalizedRequests.length}`,
+            progress: Math.min(0.99, (index + 1) / normalizedRequests.length),
+            images,
+        });
+    }
+    return images;
+}
+
+function normalizeCameraTaskResult(result = {}, finalText = '') {
+    return {
+        conversationId: state.agentCodexConversationId,
+        threadId: state.agentCodexThreadId,
+        finalText,
+        task: buildCameraTrajectoryTaskFromResult(result),
+        events: [],
+        images: [],
+    };
+}
+
+function startAgentCameraRenderJob({ sessionId, attemptId }) {
+    cancelAgentCameraRenderJob();
+    agentCameraRenderJob = {
+        jobId: `camera-render-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        sessionId,
+        attemptId,
+        stage: 'camera_initial_view_prepare',
+        status: 'running',
+        createdAt: new Date().toISOString(),
+        initialViewImages: [],
+    };
+    return agentCameraRenderJob;
+}
+
+function hasCameraTrajectoryHostRenderRequest(result = {}) {
+    return Boolean(
+        result?.needsRender === true
+        || Array.isArray(result?.renderRequests)
+        || (result?.stage === 'camera_initial_view_prepare' && getCameraTrajectoryPreparedPath(result))
+    );
+}
+
+async function continueAgentCameraTrajectoryAfterHostRender(job, result, finalText) {
+    const preparedPath = getCameraTrajectoryPreparedPath(result);
+    if (!preparedPath) {
+        throw new Error('Camera trajectory prepare result did not include preparedPath');
+    }
+    updateCameraRenderJobProgress(job, {
+        stage: 'camera_initial_view_prepare',
+        statusId: 'rendering',
+        message: t('agent.pipelineSteps.cameraInitialViews'),
+        progress: 0.01,
+    });
+    const initialImages = await renderAgentCameraRequests(job, result?.renderRequests || [], 'camera_initial_view_prepare');
+    job.initialViewImages = initialImages;
+    updateCameraRenderJobProgress(job, {
+        stage: 'camera_initial_view_prepare',
+        statusId: 'done',
+        message: t('agent.blocks.progressDone'),
+        progress: 1,
+        images: initialImages,
+    });
+    job.stage = 'camera_director_analysis';
+    updateCameraRenderJobProgress(job, {
+        stage: 'camera_director_analysis',
+        statusId: 'running',
+        message: t('agent.pipelineSteps.cameraDirector'),
+        progress: 0.01,
+    });
+
+    let generated = await projectApi.continueCameraTrajectory({
+        user: state.projectSession.user,
+        projectId: state.projectSession.activeProjectId,
+        preparedPath,
+    });
+    if (!isAgentCameraRenderJobActive(job)) return null;
+
+    if (generated?.needsEvalRender === true) {
+        job.stage = 'camera_trajectory_eval_render';
+        const evalImages = await renderAgentCameraRequests(job, generated.evalRenderRequests || [], 'camera_trajectory_eval_render');
+        updateCameraRenderJobProgress(job, {
+            stage: 'camera_trajectory_eval_render',
+            statusId: 'rendering',
+            message: t('agent.pipelineSteps.cameraEval'),
+            progress: 0.99,
+            images: evalImages,
+        });
+        generated = await projectApi.optimizeCameraTrajectory({
+            user: state.projectSession.user,
+            projectId: state.projectSession.activeProjectId,
+            preparedPath,
+        });
+    }
+
+    if (!isAgentCameraRenderJobActive(job)) return null;
+    agentCameraRenderJob = {
+        ...job,
+        status: 'done',
+        completedAt: new Date().toISOString(),
+    };
+    return normalizeCameraTaskResult(generated, finalText);
+}
+
+async function completeCameraDirectResultWithHostRender({ sessionId, attemptId, prompt, result }) {
+    const finalText = getCameraTrajectoryReviewText(result);
+    const cameraResult = result?.task && typeof result.task === 'object' ? result.task : result;
+    if (!hasCameraTrajectoryHostRenderRequest(cameraResult)) return false;
+    const job = startAgentCameraRenderJob({ sessionId, attemptId });
+    try {
+        const completed = await continueAgentCameraTrajectoryAfterHostRender(job, cameraResult, finalText);
+        if (!completed) return true;
+        completeServerCodexAgentSessionAttempt({
+            sessionId,
+            attemptId,
+            workflowId: 'camera-direct',
+            prompt,
+            result: completed,
+        });
+    } catch (error) {
+        if (isAgentCameraRenderJobActive(job)) {
+            updateCameraRenderJobProgress(job, {
+                stage: job.stage,
+                statusId: 'canceled',
+                message: error?.message || String(error),
+                progress: 1,
+            });
+            agentCameraRenderJob = {
+                ...job,
+                status: 'failed',
+                error: error?.message || String(error),
+                failedAt: new Date().toISOString(),
+            };
+            createAgentSessionHandle(sessionId, attemptId).fail(t('messages.codexAgentFailed', {
+                message: error?.message || String(error),
+            }));
+        }
+    }
+    return true;
+}
+
+function markCameraAttemptCanceled(attempt = {}) {
+    const payloads = coalesceAgentTaskStepPayloads(
+        (Array.isArray(attempt.steps) && attempt.steps.length > 0 ? attempt.steps : attempt.blocks || [])
+            .map((block) => ({
+                stage: block?.stepKey,
+                statusId: block?.statusId,
+                progress: block?.value,
+                images: block?.images,
+                artifacts: block?.artifacts,
+            }))
+    );
+    const plannedStages = getCameraTaskPipelineStages(payloads);
+    const stageStatuses = getCanceledCameraPipelineStageStatuses(plannedStages, payloads);
+    const steps = createCameraPipelineSteps({
+        task: {
+            started: true,
+            pipelineStageStatuses: plannedStages.map((stage) => ({
+                stage,
+                statusId: stageStatuses[stage] || 'canceled',
+            })),
+            events: payloads.map((payload) => ({
+                payload: {
+                    ...payload,
+                    statusId: stageStatuses[payload.stage] || 'canceled',
+                    message: stageStatuses[payload.stage] === 'done'
+                        ? payload.statusText || t('agent.blocks.progressDone')
+                        : t('common.canceled'),
+                },
+            })),
+        },
+    });
+    return {
+        ...attempt,
+        status: 'canceled',
+        blocks: steps,
+        steps,
+        updatedAt: new Date().toISOString(),
+    };
 }
 
 function createCodexTaskAttemptFromResult({
@@ -7228,17 +8664,31 @@ function createCodexTaskAttemptFromResult({
             })
             .filter(Boolean)
         : [];
+    if (workflowId === 'camera-direct') {
+        const steps = createCameraPipelineSteps({ task });
+        return createAgentGenerationAttempt({
+            workflow: workflowId,
+            text: getCameraTrajectoryReviewText(result),
+            blocks: steps,
+            steps,
+            status: 'complete',
+        });
+    }
+
+    const taskStatusId = normalizeAgentPipelineStatusId(task.statusId);
+    const isFailedTask = taskStatusId === 'failed';
     const progressBlock = createAgentProgressBlock({
         title: task.title || 'Codex',
         stepKey: 'main-image',
         statusText: task.statusText || t('agent.blocks.progressDone'),
+        statusId: taskStatusId || (progressImages.length > 0 ? 'done' : ''),
         value: task.progress ?? 1,
         indeterminate: false,
         images: progressImages,
         selectedIndex: 0,
         applied: false,
-        actions: progressImages.length > 0 ? ['cancel', 'retry', 'apply'] : [],
-        isCurrent: progressImages.length > 0,
+        actions: progressImages.length > 0 ? ['cancel', 'retry', 'apply'] : (isFailedTask ? ['cancel', 'retry'] : []),
+        isCurrent: progressImages.length > 0 || isFailedTask,
         expanded: true,
     });
     const steps = createScenePipelineSteps({
@@ -7260,6 +8710,9 @@ function createCodexTaskSessionFromResult({
     attachments,
     result,
 } = {}) {
+    if (workflowId === 'camera-direct') {
+        applyAgentCameraTrajectoryTimeline(result?.task);
+    }
     const attempt = createCodexTaskAttemptFromResult({
         workflowId,
         prompt,
@@ -7272,7 +8725,9 @@ function createCodexTaskSessionFromResult({
         attempt,
     });
     const activeAttempt = session.attempts[0];
-    activeAttempt.pipelineState = deriveScenePipelineState(session, activeAttempt);
+    if (shouldUseScenePipelineState(workflowId)) {
+        activeAttempt.pipelineState = deriveScenePipelineState(session, activeAttempt);
+    }
     return session;
 }
 
@@ -7284,6 +8739,9 @@ function completeServerCodexAgentSessionAttempt({
     result,
 } = {}) {
     if (hasCodexTaskSignal(result)) {
+        if (workflowId === 'camera-direct') {
+            applyAgentCameraTrajectoryTimeline(result?.task);
+        }
         const nextAttempt = createCodexTaskAttemptFromResult({
             workflowId,
             prompt,
@@ -7293,6 +8751,7 @@ function completeServerCodexAgentSessionAttempt({
             const nextSession = replaceAgentSessionAttempt(session, attemptId, nextAttempt);
             const attempt = nextSession.attempts?.find((item) => item?.id === attemptId);
             if (!attempt) return nextSession;
+            if (!shouldUseScenePipelineState(workflowId)) return nextSession;
             return replaceAgentSessionAttempt(nextSession, attemptId, {
                 ...attempt,
                 pipelineState: deriveScenePipelineState(nextSession, attempt),
@@ -7313,22 +8772,112 @@ function completeServerCodexAgentSessionAttempt({
     });
 }
 
+function updateCodexTaskSessionProgress({
+    sessionId,
+    attemptId,
+    workflowId,
+    task,
+} = {}) {
+    if (!sessionId || !attemptId || !task?.started) return;
+    if (workflowId === 'camera-direct' && task?.trajectory) {
+        applyAgentCameraTrajectoryTimeline(task);
+    }
+    updateAgentSessionById(sessionId, (session) => {
+        const nextAttempts = (session.attempts || []).map((attempt) => {
+            if (attempt.id !== attemptId) return attempt;
+            const taskImages = Array.isArray(task.images) ? task.images : [];
+            const steps = workflowId === 'camera-direct'
+                ? createCameraPipelineSteps({ task })
+                : getAgentAttemptStepBlocks(attempt).map((block) => {
+                    if (block?.type !== 'progress' || !block.indeterminate) return block;
+                    return {
+                        ...block,
+                        title: task.title || block.title,
+                        statusText: task.statusText || block.statusText || t('common.generating'),
+                        value: task.progress ?? block.value ?? 0.01,
+                        images: taskImages.length > 0 ? taskImages : (Array.isArray(block.images) ? block.images : []),
+                        selectedIndex: taskImages.length > 0 ? taskImages.length - 1 : block.selectedIndex,
+                        expanded: true,
+                    };
+                });
+            return {
+                ...attempt,
+                text: attempt.text || t('common.generating'),
+                blocks: steps,
+                steps,
+                status: 'running',
+                ...(shouldUseScenePipelineState(workflowId)
+                    ? { pipelineState: deriveScenePipelineState(session, { ...attempt, blocks: steps, steps }) }
+                    : {}),
+                updatedAt: new Date().toISOString(),
+            };
+        });
+        return {
+            ...session,
+            attempts: nextAttempts,
+            updatedAt: new Date().toISOString(),
+        };
+    }, {
+        autoScroll: 'preserve-or-pin-bottom',
+    });
+}
+
 function runServerCodexAgentSessionAttempt({
     workflowId,
     prompt,
     sessionId,
     attemptId,
 } = {}) {
-    projectApi.sendCodexAgentMessage({
+    const debug = startAgentEndpointDebug({
+        workflowId,
+        endpoint: '/api/codex-agent/messages',
+        prompt,
+        sessionId,
+        attemptId,
+    });
+    projectApi.sendCodexAgentMessageStream({
         user: state.projectSession.user,
         projectId: state.projectSession.activeProjectId,
         conversationId: getCodexAgentConversationId(),
         threadId: state.agentCodexThreadId,
         prompt,
         workflow: workflowId,
-    }).then((result) => {
+        onTask: (task) => {
+            logAgentDebug(workflowId, 'task update', {
+                sessionId,
+                attemptId,
+                title: task?.title || '',
+                statusText: task?.statusText || '',
+                progress: task?.progress ?? '',
+            });
+            updateCodexTaskSessionProgress({
+                sessionId,
+                attemptId,
+                workflowId,
+                task,
+            });
+        },
+    }).then(async (result) => {
+        debug.finish(result);
         state.agentCodexConversationId = result?.conversationId || state.agentCodexConversationId;
         state.agentCodexThreadId = result?.threadId || state.agentCodexThreadId;
+        if (workflowId === 'camera-direct') {
+            const handled = await completeCameraDirectResultWithHostRender({
+                sessionId,
+                attemptId,
+                prompt,
+                result,
+            });
+            if (handled) return;
+            completeServerCodexAgentSessionAttempt({
+                sessionId,
+                attemptId,
+                workflowId,
+                prompt,
+                result,
+            });
+            return;
+        }
         completeServerCodexAgentSessionAttempt({
             sessionId,
             attemptId,
@@ -7337,9 +8886,56 @@ function runServerCodexAgentSessionAttempt({
             result,
         });
     }).catch((error) => {
+        debug.finish(null, error);
         createAgentSessionHandle(sessionId, attemptId).fail(t('messages.codexAgentFailed', {
             message: error?.message || String(error),
         }));
+    });
+}
+
+function buildCameraTrajectoryTaskFromResult(result, fallbackMessage = '') {
+    const taskPayload = result?.visionaryTask && typeof result.visionaryTask === 'object' ? result.visionaryTask : {};
+    return {
+        started: true,
+        stage: normalizeCameraPipelineStage(taskPayload.stage || 'camera_trajectory_generation'),
+        title: taskPayload.title || t('agent.workflows.camera-direct.progressTitle'),
+        progress: Number.isFinite(Number(taskPayload.progress)) ? Number(taskPayload.progress) : 1,
+        statusText: taskPayload.message || fallbackMessage || t('agent.blocks.progressDone'),
+        statusId: normalizeAgentPipelineStatusId(taskPayload.statusId || '') || 'done',
+        trajectory: result?.trajectory || null,
+        vlmDebug: result?.vlmDebug || result?.generation?.vlmDebug || null,
+        pipelineStages: Array.isArray(taskPayload.pipelineStages) ? taskPayload.pipelineStages : undefined,
+        pipelineStageStatuses: Array.isArray(taskPayload.pipelineStageStatuses) ? taskPayload.pipelineStageStatuses : undefined,
+        initialViewImages: Array.isArray(taskPayload.initialViewImages) ? taskPayload.initialViewImages : undefined,
+        images: Array.isArray(taskPayload.images) ? taskPayload.images : undefined,
+        artifacts: Array.isArray(taskPayload.artifacts) ? taskPayload.artifacts : undefined,
+        directorIntentText: typeof taskPayload.directorIntentText === 'string' ? taskPayload.directorIntentText : undefined,
+        files: Array.isArray(taskPayload.files) ? taskPayload.files : undefined,
+        dependencyTree: taskPayload.dependencyTree || result?.dependencyTree || undefined,
+        warnings: Array.isArray(taskPayload.warnings) ? taskPayload.warnings : undefined,
+        prepared: result?.prepared || taskPayload.prepared || undefined,
+        preparedPath: result?.preparedPath || taskPayload.preparedPath || result?.prepared?.relativePath || undefined,
+        renderRequests: Array.isArray(result?.renderRequests) ? result.renderRequests : Array.isArray(taskPayload.renderRequests) ? taskPayload.renderRequests : undefined,
+        evalRenderRequests: Array.isArray(result?.evalRenderRequests) ? result.evalRenderRequests : Array.isArray(taskPayload.evalRenderRequests) ? taskPayload.evalRenderRequests : undefined,
+        needsRender: typeof result?.needsRender === 'boolean' ? result.needsRender : typeof taskPayload.needsRender === 'boolean' ? taskPayload.needsRender : undefined,
+        needsEvalRender: typeof result?.needsEvalRender === 'boolean' ? result.needsEvalRender : typeof taskPayload.needsEvalRender === 'boolean' ? taskPayload.needsEvalRender : undefined,
+        renderStage: result?.renderStage || taskPayload.renderStage || undefined,
+        events: [],
+    };
+}
+
+function logCameraTrajectoryDebugPath(result) {
+    const debugInfo = result?.vlmDebug || result?.generation?.vlmDebug || null;
+    const manifestPath = String(debugInfo?.relativePath || '').trim();
+    const directory = String(debugInfo?.directory || '').trim();
+    if (!manifestPath && !directory) return;
+    const assetUrl = manifestPath && state.projectSession.user && state.projectSession.activeProjectId
+        ? projectApi.getAssetUrl(state.projectSession.user, state.projectSession.activeProjectId, manifestPath)
+        : '';
+    console.info('[Visionary Camera Debug]', {
+        manifestPath,
+        directory,
+        ...(assetUrl ? { manifestUrl: assetUrl } : {}),
     });
 }
 
@@ -7349,7 +8945,7 @@ function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
         isLoading: true,
     });
     let pendingSession = null;
-    if (/\$scene-skill(?=\s|$)/i.test(String(prompt || ''))) {
+    if (shouldCreatePendingCodexTaskSession(workflowId)) {
         pendingSession = replaceAgentMessageWithSession(handle.messageId, createPendingCodexTaskSession({
             workflowId,
             prompt,
@@ -7357,16 +8953,57 @@ function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
         }));
     }
 
-    projectApi.sendCodexAgentMessage({
+    const debug = startAgentEndpointDebug({
+        workflowId,
+        endpoint: '/api/codex-agent/messages',
+        prompt,
+        sessionId: pendingSession?.id || '',
+        attemptId: pendingSession ? getAgentSessionActiveAttempt(pendingSession)?.id || '' : '',
+    });
+    const activePendingAttemptId = pendingSession ? getAgentSessionActiveAttempt(pendingSession)?.id || '' : '';
+    projectApi.sendCodexAgentMessageStream({
         user: state.projectSession.user,
         projectId: state.projectSession.activeProjectId,
         conversationId: getCodexAgentConversationId(),
         threadId: state.agentCodexThreadId,
         prompt,
         workflow: workflowId,
-    }).then((result) => {
+        onTask: (task) => {
+            logAgentDebug(workflowId, 'task update', {
+                sessionId: pendingSession?.id || '',
+                attemptId: activePendingAttemptId,
+                title: task?.title || '',
+                statusText: task?.statusText || '',
+                progress: task?.progress ?? '',
+            });
+            updateCodexTaskSessionProgress({
+                sessionId: pendingSession?.id || '',
+                attemptId: activePendingAttemptId,
+                workflowId,
+                task,
+            });
+        },
+    }).then(async (result) => {
+        debug.finish(result);
         state.agentCodexConversationId = result?.conversationId || state.agentCodexConversationId;
         state.agentCodexThreadId = result?.threadId || state.agentCodexThreadId;
+        if (workflowId === 'camera-direct' && pendingSession) {
+            const handled = await completeCameraDirectResultWithHostRender({
+                sessionId: pendingSession.id,
+                attemptId: getAgentSessionActiveAttempt(pendingSession)?.id || '',
+                prompt,
+                result,
+            });
+            if (handled) return;
+            completeServerCodexAgentSessionAttempt({
+                sessionId: pendingSession.id,
+                attemptId: getAgentSessionActiveAttempt(pendingSession)?.id || '',
+                workflowId,
+                prompt,
+                result,
+            });
+            return;
+        }
         if (hasCodexTaskSignal(result)) {
             if (pendingSession) {
                 completeServerCodexAgentSessionAttempt({
@@ -7389,6 +9026,7 @@ function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
         handle.updateText(result?.finalText || t('messages.agentExecutionFailed'));
         handle.finish();
     }).catch((error) => {
+        debug.finish(null, error);
         handle.fail(t('messages.codexAgentFailed', {
             message: error?.message || String(error),
         }));
@@ -7401,28 +9039,85 @@ async function handleAgentStepAction(context, action) {
     if (!canUseServerCodexAgent()) return;
     const liveContext = getAgentStepBlockContextById(context?.sessionId, context?.attemptId, context?.blockId) || context;
     if (!liveContext) return;
+    if (action === 'apply' && liveContext.stepKey === 'insert-scene') {
+        const plan = liveContext.block?.sceneInsertPlan;
+        if (!plan || typeof plan !== 'object') {
+            throw new Error(t('messages.agentOperationFailed', { message: 'insert-scene plan is missing' }));
+        }
+        let inserted = { loaded: 0, failed: 0 };
+        try {
+            inserted = commitAgentSceneInsertPreview(liveContext) || await applyAgentSceneInsertPlan(plan);
+            if (inserted.loaded <= 0) {
+                throw new Error(t('messages.loadModelFailed', { name: 'insert-scene' }));
+            }
+        } catch (error) {
+            patchAgentStepBlock(liveContext, {
+                statusText: error?.message || String(error),
+                statusId: 'failed',
+                value: 1,
+                indeterminate: false,
+                applied: false,
+                actions: ['cancel', 'retry', 'apply'],
+            });
+            throw error;
+        }
+        patchAgentStepBlock(liveContext, {
+            statusText: t('agent.pipelineSteps.insertSceneInserted', { count: inserted.loaded }),
+            statusId: 'done',
+            value: 1,
+            indeterminate: false,
+            applied: true,
+            actions: [],
+        });
+        updateAgentSessionById(liveContext.sessionId, (current) => setAgentSessionArchiveState(current, {
+            archiveState: 'applied',
+            summaryLabel: t('common.applied'),
+            thumbnailUrl: getAgentSessionArchiveThumbnail(current),
+        }));
+        return;
+    }
+    clearAgentSceneInsertPreviewForContext(liveContext);
+    if (action === 'retry') {
+        resetDownstreamScenePipelineStepsForRetry(liveContext);
+    }
     const currentImages = Array.isArray(liveContext.block.images) ? liveContext.block.images : [];
     const selectedIndex = Math.max(0, Math.min(currentImages.length - 1, Number(liveContext.block.selectedIndex) || 0));
     patchAgentStepBlock(liveContext, {
         statusText: action === 'retry' ? t('common.generating') : liveContext.block.statusText,
+        statusId: action === 'retry' ? 'running' : liveContext.block.statusId,
         indeterminate: action === 'retry',
     });
-    const result = await projectApi.sendCodexAgentStepAction({
-        user: state.projectSession.user,
-        projectId: state.projectSession.activeProjectId,
-        sessionId: liveContext.sessionId,
-        stepKey: liveContext.stepKey,
-        action,
-        prompt: liveContext.session.prompt || liveContext.attempt.text || '',
-        selectedIndex,
-        images: currentImages.map((image) => serializeAgentStepImage(image)),
-        sourceImages: [
-            serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'main-image'),
-            serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'top-view'),
-            serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'layout'),
-            serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'components-3d'),
-        ].filter(Boolean),
-    });
+    let result;
+    try {
+        result = await projectApi.sendCodexAgentStepAction({
+            user: state.projectSession.user,
+            projectId: state.projectSession.activeProjectId,
+            sessionId: liveContext.sessionId,
+            stepKey: liveContext.stepKey,
+            action,
+            prompt: liveContext.session.prompt || liveContext.attempt.text || '',
+            selectedIndex,
+            images: currentImages.map((image) => serializeAgentStepImage(image)),
+            sourceImages: [
+                serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'main-image'),
+                serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'top-view'),
+                serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'layout'),
+                serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'components-3d'),
+            ].filter(Boolean),
+        });
+    } catch (error) {
+        patchAgentStepBlock(liveContext, {
+            statusText: error?.message || String(error),
+            statusId: 'failed',
+            value: 1,
+            indeterminate: false,
+            applied: false,
+            actions: ['cancel', 'retry'],
+            isCurrent: true,
+            expanded: true,
+        });
+        throw error;
+    }
     const patch = result?.blockPatch || {};
     const nextImages = Array.isArray(patch.images)
         ? patch.images.map((image, index) => {
@@ -7442,47 +9137,63 @@ async function handleAgentStepAction(context, action) {
             };
         })
         : currentImages;
-    if (patch.sceneInsertPlan && typeof patch.sceneInsertPlan === 'object') {
-        let inserted = { loaded: 0, failed: 0 };
+    patchAgentStepBlock(liveContext, {
+        ...patch,
+        images: nextImages,
+        ...(patch.sceneInsertPlan && typeof patch.sceneInsertPlan === 'object' ? { sceneInsertPlan: patch.sceneInsertPlan } : {}),
+    });
+    if (action === 'retry' && liveContext.stepKey === 'insert-scene' && patch.sceneInsertPlan && typeof patch.sceneInsertPlan === 'object') {
         try {
-            inserted = await applyAgentSceneInsertPlan(patch.sceneInsertPlan);
-            if (inserted.loaded <= 0) {
-                throw new Error(t('messages.loadModelFailed', { name: 'insert-scene' }));
+            const preview = await createAgentSceneInsertPreview(liveContext, patch.sceneInsertPlan);
+            if (preview.loaded > 0) {
+                patchAgentStepBlock(liveContext, {
+                    statusText: t('agent.pipelineSteps.insertScenePreviewReady', { count: preview.loaded }),
+                    statusId: 'done',
+                    value: 1,
+                    indeterminate: false,
+                    applied: false,
+                    actions: ['cancel', 'retry', 'apply'],
+                });
             }
         } catch (error) {
             patchAgentStepBlock(liveContext, {
-                ...patch,
-                images: nextImages,
                 statusText: error?.message || String(error),
+                statusId: 'failed',
                 value: 1,
                 indeterminate: false,
                 applied: false,
                 actions: ['cancel', 'retry'],
+                isCurrent: true,
+                expanded: true,
             });
             throw error;
         }
-        patchAgentStepBlock(liveContext, {
-            ...patch,
-            images: nextImages,
-            statusText: t('agent.pipelineSteps.insertSceneInserted', { count: inserted.loaded }),
-            value: 1,
-            indeterminate: false,
-            applied: true,
-            actions: [],
-        });
-    } else {
-        patchAgentStepBlock(liveContext, {
-            ...patch,
-            images: nextImages,
-        });
+    }
+    if (action === 'cancel') {
+        markSceneAttemptCanceled(liveContext);
+        return;
     }
     if (action === 'apply') {
-        const appliedContext = getAgentStepBlockContextById(liveContext.sessionId, liveContext.attemptId, liveContext.blockId) || liveContext;
-        const nextContext = advanceAgentPipelineAfterStepApply(appliedContext);
-        if (nextContext) {
-            await handleAgentStepAction(nextContext, 'retry');
-        }
+        await advanceAgentPipelineAfterStepApply(liveContext);
     }
+}
+
+async function advanceAgentPipelineAfterStepApply(context) {
+    const nextStepKey = getNextScenePipelineStepKey(context?.stepKey || '');
+    if (!nextStepKey) return;
+    patchAgentStepBlockByStepKey(context.sessionId, context.attemptId, nextStepKey, {
+        statusText: t('common.generating'),
+        statusId: 'running',
+        value: 0.01,
+        indeterminate: true,
+        applied: false,
+        actions: [],
+        isCurrent: true,
+        expanded: true,
+    });
+    const nextContext = getAgentStepBlockContextByStepKey(context.sessionId, context.attemptId, nextStepKey);
+    if (!nextContext) return;
+    await handleAgentStepAction(nextContext, 'retry');
 }
 
 async function handleAgentSessionAction(sessionId, action) {
@@ -7500,16 +9211,36 @@ async function handleAgentSessionAction(sessionId, action) {
     };
 
     if (action === 'cancel') {
+        if (session.workflow === 'camera-direct') {
+            cancelAgentCameraRenderJob();
+            restoreAgentCameraTrajectoryPreview();
+        }
+        if (session.workflow === 'scene-build') {
+            clearAgentSceneInsertPreviewForContext({
+                sessionId,
+                attemptId: activeAttempt?.id || '',
+            });
+        }
         updateAgentSessionById(sessionId, (current) => setAgentSessionArchiveState(current, {
             archiveState: 'canceled',
             summaryLabel: t('common.canceled'),
             thumbnailUrl,
         }));
+        if (session.workflow === 'camera-direct' && activeAttempt?.id) {
+            updateAgentSessionById(sessionId, (current) => replaceAgentSessionAttempt(
+                current,
+                activeAttempt.id,
+                markCameraAttemptCanceled(activeAttempt)
+            ));
+        }
         await invokeAgentSessionActionHandler('onCancel', payload);
         return;
     }
 
     if (action === 'apply') {
+        if (session.workflow === 'camera-direct') {
+            commitAgentCameraTrajectoryPreview();
+        }
         updateAgentSessionById(sessionId, (current) => setAgentSessionArchiveState(current, {
             archiveState: 'applied',
             summaryLabel: t('common.applied'),
@@ -7520,12 +9251,43 @@ async function handleAgentSessionAction(sessionId, action) {
     }
 
     if (action === 'retry') {
+        const retryPrompt = session.prompt || activeAttempt?.text || t('messages.retryRequest');
+        if (session.workflow === 'camera-direct') {
+            cancelAgentCameraRenderJob();
+            resetAgentCameraTrajectoryPreviewForRetry();
+            const nextAttempt = createAgentGenerationAttempt({
+                workflow: session.workflow,
+                text: `${t('common.generating')}: ${retryPrompt}`,
+                blocks: [],
+                steps: [],
+                status: 'running',
+            });
+            updateAgentSessionById(sessionId, (current) => appendAgentSessionRetryAttempt(current, nextAttempt), {
+                autoScroll: 'preserve-or-pin-bottom',
+            });
+            await invokeAgentSessionActionHandler('onRetry', {
+                ...payload,
+                nextAttempt,
+            });
+            runServerCodexAgentSessionAttempt({
+                workflowId: session.workflow,
+                prompt: retryPrompt,
+                sessionId,
+                attemptId: nextAttempt.id,
+            });
+            return;
+        }
+        if (session.workflow === 'scene-build') {
+            clearAgentSceneInsertPreviewForContext({
+                sessionId,
+                attemptId: activeAttempt?.id || '',
+            });
+        }
         const interruptedStepContext = getInterruptedAgentStepContext(sessionId, activeAttempt?.id || '');
         if (interruptedStepContext) {
             await handleInterruptedAgentStepAction(interruptedStepContext, 'retry');
             return;
         }
-        const retryPrompt = session.prompt || activeAttempt?.text || t('messages.retryRequest');
         if (canUseServerCodexAgent()) {
             const nextAttempt = createAgentGenerationAttempt({
                 workflow: session.workflow,
@@ -7578,17 +9340,18 @@ function submitAgentPrompt(promptText, attachments = []) {
     if (!prompt && attachments.length === 0) return;
     const attachmentFallback = t('messages.imageInput');
     const effectivePrompt = prompt ? rawPrompt.trimStart() : attachmentFallback;
+    const workflowId = getAgentWorkflowForPrompt(effectivePrompt, state.agentWorkflow);
 
-    const userMessage = createAgentMessage('user', effectivePrompt);
+    const userMessage = createAgentMessage('user', effectivePrompt, workflowId);
     userMessage.attachments = attachments;
     state.agentMessages.push(userMessage);
     renderAgentMessages({ autoScroll: 'always' });
     schedulePersistAgentConversations();
     if (canUseServerCodexAgent()) {
-        startServerCodexAgentResponse(state.agentWorkflow, effectivePrompt, attachments);
+        startServerCodexAgentResponse(workflowId, effectivePrompt, attachments);
         return;
     }
-    startMockAgentResponse(state.agentWorkflow, effectivePrompt, attachments);
+    startMockAgentResponse(workflowId, effectivePrompt, attachments);
 }
 
 function handleAgentComposerSubmit(event) {
@@ -9506,6 +11269,7 @@ function updateModelList() {
                     modelRenameState = null;
                 }
                 app.removeModel(id);
+                refreshCanonicalAssetReferenceState();
                 if (state.selectedModelId === id) {
                     closeEditor();
                 }
@@ -10312,6 +12076,9 @@ function rotateVectorByQuaternion(vector, quaternion) {
     };
 }
 
+// Timeline camera rotations are stored as world-to-camera quaternions. Invert to C2W
+// before applying to Three.js, then derive view direction from local -Z, not +Z.
+// Using +Z makes orbit/lookAt paths face outward even when the positions are correct.
 function applyTimelinePoseToRecordingCamera(recordingCamera, pose, options = {}) {
     if (!recordingCamera?.camera || !pose?.position || !pose?.rotation) return false;
     const px = Number(pose.position.x) || 0;
@@ -10323,7 +12090,7 @@ function applyTimelinePoseToRecordingCamera(recordingCamera, pose, options = {})
         pz
     );
     const c2w = invertUnitQuaternion(pose.rotation);
-    const forward = rotateVectorByQuaternion({ x: 0, y: 0, z: 1 }, c2w);
+    const forward = rotateVectorByQuaternion({ x: 0, y: 0, z: -1 }, c2w);
     const up = rotateVectorByQuaternion({ x: 0, y: 1, z: 0 }, c2w);
     recordingCamera.camera.up.set(up.x, up.y, up.z);
     recordingCamera.camera.lookAt(
@@ -10880,7 +12647,14 @@ function finiteNumberTuple(value, length, fallback = []) {
     return values.length === length ? values : fallback;
 }
 
-function computeObject3DDimensions(root) {
+function roundFiniteNumber(value, digits = 4) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 0;
+    const scale = 10 ** digits;
+    return Math.round(number * scale) / scale;
+}
+
+function computeObject3DWorldBounds(root) {
     if (!root || typeof root.traverse !== 'function') return null;
     root.updateMatrixWorld?.(true);
     const min = [Infinity, Infinity, Infinity];
@@ -10927,10 +12701,50 @@ function computeObject3DDimensions(root) {
         Math.abs(max[1] - min[1]),
         Math.abs(max[2] - min[2]),
     ];
-    return dimensions.every((value) => Number.isFinite(value) && value > 0) ? dimensions : null;
+    if (!dimensions.every((value) => Number.isFinite(value) && value > 0)) return null;
+    return {
+        min: min.map((value) => roundFiniteNumber(value)),
+        max: max.map((value) => roundFiniteNumber(value)),
+        size: dimensions.map((value) => roundFiniteNumber(value)),
+        center: [
+            roundFiniteNumber((min[0] + max[0]) / 2),
+            roundFiniteNumber((min[1] + max[1]) / 2),
+            roundFiniteNumber((min[2] + max[2]) / 2),
+        ],
+    };
+}
+
+function computeObject3DDimensions(root) {
+    const bounds = computeObject3DWorldBounds(root);
+    return bounds?.size || null;
+}
+
+function computeModelWorldBounds(model) {
+    const objectBounds = computeObject3DWorldBounds(model?.object3D);
+    if (objectBounds) return { ...objectBounds, source: 'object3D.worldBounds' };
+
+    const gaussianAabb = model?.gaussianModel?.getWorldAABB?.();
+    const min = finiteNumberTuple(gaussianAabb?.min, 3, []);
+    const max = finiteNumberTuple(gaussianAabb?.max, 3, []);
+    if (min.length === 3 && max.length === 3) {
+        const orderedMin = min.map((value, index) => Math.min(value, max[index]));
+        const orderedMax = min.map((value, index) => Math.max(value, max[index]));
+        const size = orderedMin.map((value, index) => orderedMax[index] - value);
+        if (size.every((value) => Number.isFinite(value) && value > 0)) {
+            return {
+                min: orderedMin.map((value) => roundFiniteNumber(value)),
+                max: orderedMax.map((value) => roundFiniteNumber(value)),
+                size: size.map((value) => roundFiniteNumber(value)),
+                center: orderedMin.map((value, index) => roundFiniteNumber((value + orderedMax[index]) / 2)),
+                source: 'gaussianModel.worldAABB',
+            };
+        }
+    }
+    return null;
 }
 
 function resolveAgentSceneInsertScale(loadedModel, transform = {}, fallbackScale = [1, 1, 1]) {
+    if (transform.scaleMode === 'embedded') return 1;
     const referenceSize = finiteNumberTuple(transform.referenceSize, 3, []);
     const minScale = Number.isFinite(Number(transform.minScale)) ? Number(transform.minScale) : 0.05;
     const maxScale = Number.isFinite(Number(transform.maxScale)) ? Number(transform.maxScale) : 50;
@@ -10950,20 +12764,107 @@ function resolveAgentSceneInsertScale(loadedModel, transform = {}, fallbackScale
         : (scale[0] + scale[1] + scale[2]) / 3;
 }
 
-async function applyAgentSceneInsertPlan(plan) {
+function getAgentSceneInsertPlanItems(plan) {
+    return Array.isArray(plan?.items) ? plan.items : [];
+}
+
+function normalizeAgentCanonicalAssetCacheKey(value) {
+    const normalized = String(value || '').trim().replace(/\\/g, '/');
+    if (!normalized) return '';
+    if (isServerMaterializedAssetPath(normalized)) return normalized.toLowerCase();
+    return normalized;
+}
+
+function getCachedCanonicalizedServerProjectAsset(...keys) {
+    for (const key of keys) {
+        const cacheKey = normalizeAgentCanonicalAssetCacheKey(key);
+        if (!cacheKey) continue;
+        const cached = agentCanonicalAssetBlobCache.get(cacheKey);
+        if (cached) return cached;
+    }
+    return null;
+}
+
+function rememberCanonicalizedServerProjectAsset(asset, ...keys) {
+    if (!asset?.path || !asset?.hash || !asset?.content) return asset;
+    const cacheKeys = [
+        asset.path,
+        `sha256:${asset.hash}`,
+        ...keys,
+    ];
+    cacheKeys.forEach((key) => {
+        const cacheKey = normalizeAgentCanonicalAssetCacheKey(key);
+        if (cacheKey) {
+            agentCanonicalAssetBlobCache.set(cacheKey, asset);
+        }
+    });
+    return asset;
+}
+
+async function canonicalizeServerProjectAssetBlob({ sourcePath, fileName, blob }) {
+    const cached = getCachedCanonicalizedServerProjectAsset(sourcePath);
+    if (cached) return cached;
+    const content = await blob.arrayBuffer();
+    const hashHex = await computeAssetContentHashHex(content);
+    const relativePath = buildServerAssetRelativePath(hashHex, fileName || sourcePath || 'asset.glb');
+    const cachedByHash = getCachedCanonicalizedServerProjectAsset(relativePath, `sha256:${hashHex}`);
+    if (cachedByHash) {
+        return rememberCanonicalizedServerProjectAsset(cachedByHash, sourcePath);
+    }
+    await projectApi.writeAsset({
+        user: state.projectSession.user,
+        projectId: state.projectSession.activeProjectId,
+        relativePath,
+        content,
+    });
+    return rememberCanonicalizedServerProjectAsset({
+        path: relativePath,
+        hash: hashHex,
+        bytes: content.byteLength,
+        content,
+    }, sourcePath);
+}
+
+function clearAgentSceneInsertPreviewForContext(context = null) {
+    const preview = agentSceneInsertPreview;
+    if (!preview) return { loaded: 0, failed: 0 };
+    if (context?.sessionId && preview.sessionId && preview.sessionId !== context.sessionId) {
+        return { loaded: 0, failed: 0 };
+    }
+    if (context?.attemptId && preview.attemptId && preview.attemptId !== context.attemptId) {
+        return { loaded: 0, failed: 0 };
+    }
+    const modelIds = Array.isArray(preview.modelIds) ? preview.modelIds : [];
+    let removed = 0;
+    for (const modelId of modelIds) {
+        if (modelId && app?.removeModel?.(modelId)) {
+            removed++;
+        }
+    }
+    agentSceneInsertPreview = null;
+    refreshCanonicalAssetReferenceState();
+    if (removed > 0) {
+        updateModelList();
+    }
+    return { loaded: removed, failed: 0 };
+}
+
+async function loadAgentSceneInsertPlanModels(plan) {
     if (!app) {
         throw new Error(t('messages.editorNotInitialized'));
     }
     if (!isServerProjectSessionActive()) {
         throw new Error(t('projectSession.loginRequired'));
     }
-    const items = Array.isArray(plan?.items) ? plan.items : [];
+    const items = getAgentSceneInsertPlanItems(plan);
     if (items.length <= 0) {
-        return { loaded: 0, failed: 0 };
+        return { loaded: 0, failed: 0, modelIds: [] };
     }
 
     let loaded = 0;
     let failed = 0;
+    const modelIds = [];
+    const assetReferences = [];
     showLoading(true, t('loading.loadingSceneAssets', { current: 0, total: items.length }), 0);
     try {
         for (let i = 0; i < items.length; i++) {
@@ -10989,12 +12890,17 @@ async function applyAgentSceneInsertPlan(plan) {
                 if (sourceExtension && !targetName.toLowerCase().endsWith(sourceExtension)) {
                     targetName = sanitizeFileName(`${targetName}${sourceExtension}`);
                 }
-                const fileForLoad = new File([blob], targetName, {
+                const canonicalAsset = await canonicalizeServerProjectAssetBlob({
+                    sourcePath,
+                    fileName: targetName,
+                    blob,
+                });
+                const fileForLoad = new File([canonicalAsset.content], targetName, {
                     type: blob.type || 'model/gltf-binary',
                     lastModified: Date.now(),
                 });
                 const loadedModel = await app.loadModel(fileForLoad, {
-                    sourcePath: targetName,
+                    sourcePath: canonicalAsset.path,
                     suppressLoadingOverlay: true,
                 });
                 if (!loadedModel) {
@@ -11002,7 +12908,7 @@ async function applyAgentSceneInsertPlan(plan) {
                 }
                 if (targetName && loadedModel.name !== targetName) {
                     app.renameModel?.(loadedModel.id, targetName, {
-                        sourcePath: targetName,
+                        sourcePath: canonicalAsset.path,
                         sourceFile: fileForLoad,
                     });
                 }
@@ -11013,6 +12919,15 @@ async function applyAgentSceneInsertPlan(plan) {
                 app.setModelRotation(loadedModel.id, rotation[0], rotation[1], rotation[2]);
                 app.setModelScale(loadedModel.id, resolveAgentSceneInsertScale(loadedModel, transform));
                 applyPreviewModeToAllModels(state.exportMode);
+                modelIds.push(loadedModel.id);
+                assetReferences.push({
+                    assetId: `sha256:${canonicalAsset.hash}`,
+                    hash: canonicalAsset.hash,
+                    path: canonicalAsset.path,
+                    bytes: canonicalAsset.bytes,
+                    kind: 'model',
+                    sourcePath,
+                });
                 loaded++;
             } catch (assetError) {
                 failed++;
@@ -11022,11 +12937,56 @@ async function applyAgentSceneInsertPlan(plan) {
     } finally {
         showLoading(false);
     }
+    return { loaded, failed, modelIds, assetReferences };
+}
+
+async function createAgentSceneInsertPreview(context, plan) {
+    clearAgentSceneInsertPreviewForContext(context);
+    const result = await loadAgentSceneInsertPlanModels(plan);
+    if (result.loaded > 0) {
+        updateModelList();
+    }
+    if (result.loaded <= 0) {
+        return result;
+    }
+    agentSceneInsertPreview = {
+        sessionId: context?.sessionId || '',
+        attemptId: context?.attemptId || '',
+        stepKey: 'insert-scene',
+        modelIds: result.modelIds,
+        assetReferences: result.assetReferences,
+        createdAt: new Date().toISOString(),
+        loaded: result.loaded,
+        failed: result.failed,
+    };
+    refreshCanonicalAssetReferenceState();
+    return result;
+}
+
+function commitAgentSceneInsertPreview(context) {
+    const preview = agentSceneInsertPreview;
+    if (!preview) return null;
+    if (context?.sessionId && preview.sessionId && preview.sessionId !== context.sessionId) return null;
+    if (context?.attemptId && preview.attemptId && preview.attemptId !== context.attemptId) return null;
+    const loaded = Array.isArray(preview.modelIds) ? preview.modelIds.length : 0;
+    const failed = Number(preview.failed) || 0;
+    agentSceneInsertPreview = null;
+    refreshCanonicalAssetReferenceState();
     if (loaded > 0) {
         updateModelList();
         markWorkspaceDirty('agent-insert-scene');
     }
     return { loaded, failed };
+}
+
+async function applyAgentSceneInsertPlan(plan) {
+    const result = await loadAgentSceneInsertPlanModels(plan);
+    if (result.loaded > 0) {
+        refreshCanonicalAssetReferenceState();
+        updateModelList();
+        markWorkspaceDirty('agent-insert-scene');
+    }
+    return { loaded: result.loaded, failed: result.failed };
 }
 
 function extractFileName(pathOrUrl) {
@@ -11104,6 +13064,153 @@ function parseSceneTimeline(raw) {
     return timeline;
 }
 
+function applySceneTimelineSnapshot(timeline, {
+    demoSceneActive = false,
+    syncGizmo = true,
+} = {}) {
+    let loadedTimelineKeyframes = [];
+    let loadedTimelineFovKeyframes = [];
+    if (timeline) {
+        if (Number.isFinite(timeline.durationSec)) {
+            state.timelineDurationSec = Math.max(TIMELINE_MIN_DURATION_SEC, Number(timeline.durationSec));
+        }
+        if (
+            timeline.positionInterpolationStrength !== undefined
+            || timeline.rotationInterpolationStrength !== undefined
+            || timeline.timingInterpolationStrength !== undefined
+            ||
+            timeline.positionInterpolationMode
+            || timeline.rotationInterpolationMode
+            || timeline.timingInterpolationMode
+            || timeline.catmullTension !== undefined
+            || timeline.easeStrength !== undefined
+        ) {
+            applyCameraInterpolationSettings({
+                positionStrength: timeline.positionInterpolationStrength,
+                rotationStrength: timeline.rotationInterpolationStrength,
+                timingStrength: timeline.timingInterpolationStrength,
+                positionMode: timeline.positionInterpolationMode,
+                rotationMode: timeline.rotationInterpolationMode,
+                timingMode: timeline.timingInterpolationMode,
+                catmullTension: timeline.catmullTension,
+                easeStrength: timeline.easeStrength,
+            }, { syncVisualization: false });
+        } else if (typeof timeline.interpolationMode === 'string') {
+            applyCameraInterpolationSettings(
+                resolveCameraInterpolationStateFromLegacy(timeline.interpolationMode, timeline.interpolationParam),
+                { syncVisualization: false }
+            );
+        } else {
+            applyCameraInterpolationSettings({
+                positionStrength: DEFAULT_CAMERA_POSITION_TENSION,
+                rotationStrength: DEFAULT_CAMERA_ROTATION_STRENGTH,
+                timingStrength: DEFAULT_CAMERA_TIMING_STRENGTH,
+            }, { syncVisualization: false });
+        }
+        if (Number.isFinite(timeline.playbackSpeed)) {
+            state.timelinePlaybackSpeed = Number(timeline.playbackSpeed);
+            if (dom.timelineSpeed) {
+                dom.timelineSpeed.value = String(state.timelinePlaybackSpeed);
+            }
+        }
+        if (typeof timeline.isLooping === 'boolean') {
+            state.isLooping = timeline.isLooping;
+            dom.btnLoopCamera?.classList.toggle('active', state.isLooping);
+        }
+        if (Number.isFinite(timeline.fps)) {
+            state.timelineFps = Number(timeline.fps);
+            if (dom.timelineFps) {
+                dom.timelineFps.value = String(state.timelineFps);
+            }
+        }
+        loadedTimelineKeyframes = Array.isArray(timeline.keyframes)
+            ? timeline.keyframes
+                .map((item) => {
+                    const time = Number(item?.time);
+                    const frameRaw = Number(item?.frame);
+                    const frame = Number.isFinite(frameRaw)
+                        ? Math.round(frameRaw)
+                        : timeToFrame(Number.isFinite(time) ? time : 0);
+                    const camera = item?.camera;
+                    if (!camera?.position || !camera?.rotation) return null;
+                    return {
+                        frame,
+                        time: frameToTime(frame),
+                        camera: {
+                            position: {
+                                x: Number(camera.position.x) || 0,
+                                y: Number(camera.position.y) || 0,
+                                z: Number(camera.position.z) || 0,
+                            },
+                            rotation: {
+                                x: Number(camera.rotation.x) || 0,
+                                y: Number(camera.rotation.y) || 0,
+                                z: Number(camera.rotation.z) || 0,
+                                w: Number(camera.rotation.w) || 1,
+                            },
+                        },
+                    };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.frame - b.frame)
+            : [];
+        loadedTimelineFovKeyframes = Array.isArray(timeline.fovKeyframes)
+            ? timeline.fovKeyframes
+                .map((item) => {
+                    const time = Number(item?.time);
+                    const frameRaw = Number(item?.frame);
+                    const frame = Number.isFinite(frameRaw)
+                        ? Math.round(frameRaw)
+                        : timeToFrame(Number.isFinite(time) ? time : 0);
+                    const fovDegrees = clampSceneFov(item?.fovDegrees);
+                    if (fovDegrees === null) return null;
+                    return {
+                        frame,
+                        time: frameToTime(frame),
+                        fovDegrees,
+                    };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.frame - b.frame)
+            : loadedTimelineKeyframes
+                .map((item) => {
+                    const fovDegrees = clampSceneFov(item?.camera?.fovDegrees);
+                    if (fovDegrees === null) return null;
+                    return {
+                        frame: Number(item.frame) || 0,
+                        time: Number(item.time) || 0,
+                        fovDegrees,
+                    };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.frame - b.frame);
+
+        state.selectedCameraSequenceFrame = null;
+        const selectedFrame = Number.isFinite(Number(timeline.selectedFrame))
+            ? Number(timeline.selectedFrame)
+            : timeToFrame(Number(timeline.currentTime) || 0);
+        state.keyframes = demoSceneActive ? [] : loadedTimelineKeyframes;
+        state.cameraFovKeyframes = demoSceneActive ? [] : loadedTimelineFovKeyframes;
+        setTimelineFrame(demoSceneActive ? 0 : selectedFrame, {
+            applyPose: true,
+            syncSlider: true,
+            syncGizmo,
+        });
+        updateTimelineUI();
+        syncCameraSequenceVisualization();
+    } else {
+        applyCameraInterpolationSettings({
+            positionMode: CAMERA_POSITION_INTERPOLATION_LINEAR,
+            rotationMode: CAMERA_ROTATION_INTERPOLATION_SLERP,
+            timingMode: CAMERA_TIMING_INTERPOLATION_LINEAR,
+        }, { syncVisualization: false });
+    }
+    return {
+        keyframes: loadedTimelineKeyframes,
+        fovKeyframes: loadedTimelineFovKeyframes,
+    };
+}
+
 function clearWorkspaceAutosaveTimer() {
     if (!workspaceAutosaveTimer) return;
     window.clearTimeout(workspaceAutosaveTimer);
@@ -11120,6 +13227,120 @@ function isServerMaterializedAssetPath(sourcePath) {
 
 function isServerAgentAssetPath(sourcePath) {
     return typeof sourcePath === 'string' && /^agent_history\//i.test(sourcePath);
+}
+
+function createEmptyCanonicalAssetReferenceSnapshot() {
+    return {
+        scene: new Set(),
+        agent: new Set(),
+        preview: new Set(),
+        active: new Set(),
+        all: new Set(),
+    };
+}
+
+function createEmptyCanonicalAssetGcPlan() {
+    return {
+        disabled: true,
+        reason: 'Conservative canonical asset GC is report-only until scene, Agent history, preview, and active run references are all authoritative.',
+        referenced: new Set(),
+        candidates: new Set(),
+        deletable: new Set(),
+    };
+}
+
+function addCanonicalAssetReference(snapshot, owner, relativePath) {
+    const normalized = String(relativePath || '').trim().replace(/\\/g, '/');
+    if (!isServerMaterializedAssetPath(normalized)) return;
+    const ownerSet = snapshot?.[owner];
+    if (ownerSet instanceof Set) {
+        ownerSet.add(normalized);
+    }
+    snapshot?.all?.add?.(normalized);
+}
+
+function collectCanonicalAssetPathsFromValue(value, output = new Set(), seen = new WeakSet()) {
+    if (!value) return output;
+    if (typeof value === 'string') {
+        if (isServerMaterializedAssetPath(value)) {
+            output.add(value.trim().replace(/\\/g, '/'));
+        }
+        return output;
+    }
+    if (typeof value !== 'object') return output;
+    if (seen.has(value)) return output;
+    seen.add(value);
+    if (Array.isArray(value)) {
+        value.forEach((item) => collectCanonicalAssetPathsFromValue(item, output, seen));
+        return output;
+    }
+    ['path', 'relativePath', 'assetPath', 'sourcePath', 'modelPath', 'previewPath', 'thumbnailPath', 'frontRenderPath'].forEach((key) => {
+        collectCanonicalAssetPathsFromValue(value[key], output, seen);
+    });
+    ['assetReferences', 'canonicalAssetReferences', 'assets', 'images', 'items', 'metadata', 'source', 'extras', 'steps', 'blocks', 'attempts', 'workflows'].forEach((key) => {
+        collectCanonicalAssetPathsFromValue(value[key], output, seen);
+    });
+    return output;
+}
+
+function collectCanonicalAssetReferences({
+    scene = null,
+    agentHistory = null,
+    preview = agentSceneInsertPreview,
+    activeSceneAssetPaths = state.projectSession?.activeProjectSceneAssetPaths,
+    activeAgentAssetPaths = state.projectSession?.activeProjectAgentAssetPaths,
+} = {}) {
+    const snapshot = createEmptyCanonicalAssetReferenceSnapshot();
+    const models = app?.getModels?.() || [];
+    models.forEach((model) => {
+        addCanonicalAssetReference(snapshot, 'scene', model?.sourcePath || model?.sourceFile?.name || model?.name || '');
+    });
+    collectCanonicalAssetPathsFromValue(scene).forEach((pathValue) => addCanonicalAssetReference(snapshot, 'scene', pathValue));
+    collectCanonicalAssetPathsFromValue(agentHistory).forEach((pathValue) => addCanonicalAssetReference(snapshot, 'agent', pathValue));
+    collectCanonicalAssetPathsFromValue(preview).forEach((pathValue) => addCanonicalAssetReference(snapshot, 'preview', pathValue));
+    [activeSceneAssetPaths, activeAgentAssetPaths].forEach((paths) => {
+        if (!(paths instanceof Set)) return;
+        paths.forEach((pathValue) => addCanonicalAssetReference(snapshot, 'active', pathValue));
+    });
+    return snapshot;
+}
+
+function buildConservativeCanonicalAssetGcPlan({
+    indexedAssets = new Set(),
+    references = collectCanonicalAssetReferences(),
+} = {}) {
+    const referenced = references?.all instanceof Set ? new Set(references.all) : new Set();
+    const candidates = new Set();
+    if (indexedAssets instanceof Set) {
+        indexedAssets.forEach((pathValue) => {
+            const normalized = String(pathValue || '').trim().replace(/\\/g, '/');
+            if (isServerMaterializedAssetPath(normalized) && !referenced.has(normalized)) {
+                candidates.add(normalized);
+            }
+        });
+    }
+    return {
+        ...createEmptyCanonicalAssetGcPlan(),
+        referenced,
+        candidates,
+        deletable: new Set(),
+    };
+}
+
+function refreshCanonicalAssetReferenceState({ scene, agentHistory, indexedAssets } = {}) {
+    const references = collectCanonicalAssetReferences({ scene, agentHistory });
+    const canonicalIndexedAssets = indexedAssets instanceof Set
+        ? indexedAssets
+        : mergeServerAssetPathSets(
+            state.projectSession.activeProjectSceneAssetPaths,
+            state.projectSession.activeProjectAgentAssetPaths,
+        );
+    state.projectSession.canonicalAssetReferences = references;
+    state.projectSession.canonicalAssetGcPlan = buildConservativeCanonicalAssetGcPlan({
+        indexedAssets: canonicalIndexedAssets,
+        references,
+    });
+    return state.projectSession.canonicalAssetGcPlan;
 }
 
 function collectServerSceneAssetPaths(rawScene) {
@@ -11139,7 +13360,7 @@ function collectServerAgentAssetPaths(agentHistory) {
     const assetIndex = Array.isArray(agentHistory?.asset_index) ? agentHistory.asset_index : [];
     assetIndex.forEach((entry) => {
         const relativePath = String(entry?.path || '').trim();
-        if (isServerAgentAssetPath(relativePath)) {
+        if (isServerAgentAssetPath(relativePath) || isServerMaterializedAssetPath(relativePath)) {
             assetPaths.add(relativePath);
         }
     });
@@ -11153,11 +13374,14 @@ function updateActiveServerProjectAssetCaches({ scene, agentHistory } = {}) {
     if (agentHistory !== undefined) {
         state.projectSession.activeProjectAgentAssetPaths = collectServerAgentAssetPaths(agentHistory);
     }
+    refreshCanonicalAssetReferenceState({ scene, agentHistory });
 }
 
 function clearActiveServerProjectAssetCaches() {
     state.projectSession.activeProjectSceneAssetPaths = new Set();
     state.projectSession.activeProjectAgentAssetPaths = new Set();
+    state.projectSession.canonicalAssetReferences = createEmptyCanonicalAssetReferenceSnapshot();
+    state.projectSession.canonicalAssetGcPlan = createEmptyCanonicalAssetGcPlan();
 }
 
 function mergeServerAssetPathSets(...sets) {
@@ -11381,6 +13605,22 @@ async function buildSceneWorkspaceSnapshot(options = {}) {
             asset.transform = { position, rotationEulerRad, scale: scaleVec };
         }
 
+        const worldBounds = computeModelWorldBounds(model);
+        if (worldBounds) {
+            asset.extras = {
+                ...(asset.extras || {}),
+                visionarySceneInfo: {
+                    ...(asset.extras?.visionarySceneInfo || {}),
+                    coordinateSystem: 'visionary_y_up_xz_ground',
+                    world_bbox_min: worldBounds.min,
+                    world_bbox_max: worldBounds.max,
+                    center_xyz: worldBounds.center,
+                    referenceSize: worldBounds.size,
+                    bounds_source: worldBounds.source,
+                },
+            };
+        }
+
         if (shouldMaterializeAsset) {
             const assetBytes = await resolveModelAssetBytes(model, sourcePath);
             if (assetBytes) {
@@ -11416,6 +13656,7 @@ async function buildSceneWorkspaceSnapshot(options = {}) {
                 depthRangeScale: Number(state.sceneDepthRangeScale || 1.0),
                 cameraFov: Number(state.sceneCameraFov || 45.0),
                 cameraPose: captureCurrentCameraPose(),
+                cameraPoseConvention: CAMERA_POSE_CONVENTION_TIMELINE_MINUS_Z,
                 cameraMode: String(dom.cameraMode?.value || state.cameraMode || 'orbit'),
                 renderMode: state.exportMode || 'color',
                 cameraSequenceVisible: Boolean(state.cameraSequenceVisible),
@@ -12046,9 +14287,6 @@ async function loadScene() {
         if (Number.isFinite(raw?.env?.cameraFov)) {
             applySceneCameraFov(raw.env.cameraFov, true, false);
         }
-        if (raw?.env?.cameraPose) {
-            app.setCameraPose?.(raw.env.cameraPose);
-        }
         if (typeof raw?.env?.cameraMode === 'string') {
             state.cameraMode = raw.env.cameraMode;
             dom.cameraMode && (dom.cameraMode.value = raw.env.cameraMode);
@@ -12154,146 +14392,16 @@ async function loadScene() {
             }
         }
 
-        let loadedTimelineKeyframes = [];
-        if (timeline) {
-            if (Number.isFinite(timeline.durationSec)) {
-                state.timelineDurationSec = Math.max(TIMELINE_MIN_DURATION_SEC, Number(timeline.durationSec));
-            }
-            if (
-                timeline.positionInterpolationStrength !== undefined
-                || timeline.rotationInterpolationStrength !== undefined
-                || timeline.timingInterpolationStrength !== undefined
-                ||
-                timeline.positionInterpolationMode
-                || timeline.rotationInterpolationMode
-                || timeline.timingInterpolationMode
-                || timeline.catmullTension !== undefined
-                || timeline.easeStrength !== undefined
-            ) {
-                applyCameraInterpolationSettings({
-                    positionStrength: timeline.positionInterpolationStrength,
-                    rotationStrength: timeline.rotationInterpolationStrength,
-                    timingStrength: timeline.timingInterpolationStrength,
-                    positionMode: timeline.positionInterpolationMode,
-                    rotationMode: timeline.rotationInterpolationMode,
-                    timingMode: timeline.timingInterpolationMode,
-                    catmullTension: timeline.catmullTension,
-                    easeStrength: timeline.easeStrength,
-                }, { syncVisualization: false });
-            } else if (typeof timeline.interpolationMode === 'string') {
-                applyCameraInterpolationSettings(
-                    resolveCameraInterpolationStateFromLegacy(timeline.interpolationMode, timeline.interpolationParam),
-                    { syncVisualization: false }
-                );
-            } else {
-                applyCameraInterpolationSettings({
-                    positionStrength: DEFAULT_CAMERA_POSITION_TENSION,
-                    rotationStrength: DEFAULT_CAMERA_ROTATION_STRENGTH,
-                    timingStrength: DEFAULT_CAMERA_TIMING_STRENGTH,
-                }, { syncVisualization: false });
-            }
-            if (Number.isFinite(timeline.playbackSpeed)) {
-                state.timelinePlaybackSpeed = Number(timeline.playbackSpeed);
-                if (dom.timelineSpeed) {
-                    dom.timelineSpeed.value = String(state.timelinePlaybackSpeed);
-                }
-            }
-            if (typeof timeline.isLooping === 'boolean') {
-                state.isLooping = timeline.isLooping;
-                dom.btnLoopCamera?.classList.toggle('active', state.isLooping);
-            }
-            if (Number.isFinite(timeline.fps)) {
-                state.timelineFps = Number(timeline.fps);
-                if (dom.timelineFps) {
-                    dom.timelineFps.value = String(state.timelineFps);
-                }
-            }
-            loadedTimelineKeyframes = Array.isArray(timeline.keyframes)
-                ? timeline.keyframes
-                    .map((item) => {
-                        const time = Number(item?.time);
-                        const frameRaw = Number(item?.frame);
-                        const frame = Number.isFinite(frameRaw)
-                            ? Math.round(frameRaw)
-                            : timeToFrame(Number.isFinite(time) ? time : 0);
-                        const camera = item?.camera;
-                        if (!camera?.position || !camera?.rotation) return null;
-                        return {
-                            frame,
-                            time: frameToTime(frame),
-                            camera: {
-                                position: {
-                                    x: Number(camera.position.x) || 0,
-                                    y: Number(camera.position.y) || 0,
-                                    z: Number(camera.position.z) || 0,
-                                },
-                                rotation: {
-                                    x: Number(camera.rotation.x) || 0,
-                                    y: Number(camera.rotation.y) || 0,
-                                    z: Number(camera.rotation.z) || 0,
-                                    w: Number(camera.rotation.w) || 1,
-                                },
-                            },
-                        };
-                    })
-                    .filter(Boolean)
-                    .sort((a, b) => a.frame - b.frame)
-                : [];
-            const loadedTimelineFovKeyframes = Array.isArray(timeline.fovKeyframes)
-                ? timeline.fovKeyframes
-                    .map((item) => {
-                        const time = Number(item?.time);
-                        const frameRaw = Number(item?.frame);
-                        const frame = Number.isFinite(frameRaw)
-                            ? Math.round(frameRaw)
-                            : timeToFrame(Number.isFinite(time) ? time : 0);
-                        const fovDegrees = clampSceneFov(item?.fovDegrees);
-                        if (fovDegrees === null) return null;
-                        return {
-                            frame,
-                            time: frameToTime(frame),
-                            fovDegrees,
-                        };
-                    })
-                    .filter(Boolean)
-                    .sort((a, b) => a.frame - b.frame)
-                : loadedTimelineKeyframes
-                    .map((item) => {
-                        const fovDegrees = clampSceneFov(item?.camera?.fovDegrees);
-                        if (fovDegrees === null) return null;
-                        return {
-                            frame: Number(item.frame) || 0,
-                            time: Number(item.time) || 0,
-                            fovDegrees,
-                        };
-                    })
-                    .filter(Boolean)
-                    .sort((a, b) => a.frame - b.frame);
-
-            state.selectedCameraSequenceFrame = null;
-            const selectedFrame = Number.isFinite(Number(timeline.selectedFrame))
-                ? Number(timeline.selectedFrame)
-                : timeToFrame(Number(timeline.currentTime) || 0);
-            state.keyframes = demoSceneActive ? [] : loadedTimelineKeyframes;
-            state.cameraFovKeyframes = demoSceneActive ? [] : loadedTimelineFovKeyframes;
-            setTimelineFrame(demoSceneActive ? 0 : selectedFrame, { applyPose: true, syncSlider: true });
-            updateTimelineUI();
-            syncCameraSequenceVisualization();
-        } else {
-            applyCameraInterpolationSettings({
-                positionMode: CAMERA_POSITION_INTERPOLATION_LINEAR,
-                rotationMode: CAMERA_ROTATION_INTERPOLATION_SLERP,
-                timingMode: CAMERA_TIMING_INTERPOLATION_LINEAR,
-            }, { syncVisualization: false });
-        }
+        const loadedTimeline = applySceneTimelineSnapshot(timeline, { demoSceneActive });
 
         if (demoSceneActive) {
             setDemoSceneState(createDemoSceneState({
                 folderName: folderHandle?.name || '',
                 models: demoLoadedModels,
-                keyframes: buildDemoKeyframeRevealQueue(loadedTimelineKeyframes),
+                keyframes: buildDemoKeyframeRevealQueue(loadedTimeline.keyframes),
             }));
         }
+        restoreSavedCameraPose(raw?.env);
 
         const agentHistory = await readFileByRelativePath(folderHandle, 'agent_history.json')
             .then((file) => file.text())
@@ -12361,6 +14469,23 @@ async function loadSceneFromSnapshot(raw, options = {}) {
     closeEditor();
     applyCameraPreviewWorkspacePreset(null, false);
     const loadResult = await sceneFs.loadScene(app, { sceneData: raw });
+    const timeline = parseSceneTimeline(raw);
+    if (typeof raw?.env?.cameraSequenceVisible === 'boolean') {
+        setCameraSequenceVisibility(raw.env.cameraSequenceVisible, true);
+    } else if (Array.isArray(timeline?.keyframes) && timeline.keyframes.length > 0) {
+        setCameraSequenceVisibility(true, true);
+    }
+    if (Number.isFinite(Number(raw?.env?.cameraDisplayScale))) {
+        setCameraSequenceDisplayScale(Number(raw.env.cameraDisplayScale), true);
+    }
+    if (typeof raw?.env?.cameraPreviewAspectId === 'string') {
+        applyCameraPreviewAspect(raw.env.cameraPreviewAspectId, true);
+    }
+    if (raw?.env?.cameraPreviewPreset && typeof raw.env.cameraPreviewPreset === 'object') {
+        applyCameraPreviewWorkspacePreset(raw.env.cameraPreviewPreset, false);
+    }
+    applySceneTimelineSnapshot(timeline);
+    restoreSavedCameraPose(raw?.env);
     updateModelList();
     updateTimelineUI();
     syncCameraSequenceVisualization();
@@ -13371,6 +15496,18 @@ function captureCurrentCameraPose() {
         rotation: { ...camera.rotation },
         fovDegrees: Number(app.getSceneCameraFovDegrees?.() || state.sceneCameraFov || 45),
     };
+}
+
+function restoreSavedCameraPose(env) {
+    const pose = env?.cameraPose;
+    if (!pose) return false;
+    if (env?.cameraPoseConvention === CAMERA_POSE_CONVENTION_TIMELINE_MINUS_Z) {
+        return Boolean(app.setCameraPose?.(pose));
+    }
+    if (typeof app.setCoreCameraPose === 'function') {
+        return Boolean(app.setCoreCameraPose(pose));
+    }
+    return Boolean(app.setCameraPose?.(pose));
 }
 
 function syncTimelineDrivenCameraPreviewPose() {
@@ -15531,6 +17668,7 @@ async function init() {
         if (state.keyframes.length === 0) {
             syncTimelineDrivenCameraPreviewPose();
         }
+        markWorkspaceDirty('canvas-camera-pose');
     });
     app.onCameraSequenceSelection?.((frame) => {
         if (syncingCameraSequenceSelection) return;

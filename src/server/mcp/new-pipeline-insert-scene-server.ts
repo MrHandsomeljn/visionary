@@ -77,12 +77,14 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 function emitProgress(title: string, message: string, progress: number): void {
+  const statusId = progress >= 1 ? 'done' : 'running';
   const payload = {
     type: progress <= 0.01 ? 'visionary.task.started' : progress >= 1 ? 'visionary.task.completed' : 'visionary.task.progress',
     payload: {
       title,
       message,
       progress,
+      statusId,
     },
   };
   process.stderr.write(`${JSON.stringify(payload)}\n`);
@@ -103,6 +105,12 @@ async function collectGlbFiles(folder: string): Promise<string[]> {
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.glb'))
     .map((entry) => path.join(folder, entry.name))
     .sort((a, b) => a.localeCompare(b));
+}
+
+function usesEmbeddedGlbPlacement(frontOrientation: JsonRecord): boolean {
+  if (String(frontOrientation.placement_mode || '') === 'glb_embedded_transform') return true;
+  const items = Array.isArray(frontOrientation.items) ? frontOrientation.items.map(readRecord) : [];
+  return items.some((item) => String(item.placement_mode || '') === 'glb_embedded_transform');
 }
 
 function parseImageDirIndex(filePath: string): number {
@@ -468,67 +476,107 @@ export async function generateInsertScene(input: {
   if (glbPaths.length <= 0) {
     throw new Error(`No GLB files found in ${hunyuanDir}`);
   }
-  if (!await pathExists(sourceBboxJsonPath)) {
-    throw new Error(`Layout bbox JSON does not exist: ${sourceBboxJsonPath}`);
-  }
 
-  emitProgress(title, '读取 layout bbox 和正面朝向', 0.35);
-  const imageSize = await readImageSize(sourceTopViewPath) || { width: 1000, height: 1000 };
-  const layoutObjects = loadLayoutObjects(await readJsonFile(sourceBboxJsonPath), imageSize, SCENE_SCALE);
-  if (layoutObjects.length <= 0) {
-    throw new Error(`Layout bbox JSON has no usable objects: ${sourceBboxJsonPath}`);
-  }
-  const frontOrientation = await loadFrontOrientation(frontOrientationPath);
-  const matches = matchGlbToLayoutObjects(glbPaths, layoutObjects);
+  emitProgress(title, '读取组件 3D 资产位姿', 0.35);
+  const rawFrontOrientation = readRecord(await readJsonFile(frontOrientationPath));
   const warnings: string[] = [];
   const items = [];
-  for (const [index, match] of matches.entries()) {
-    const verification = await verifyGlbFile(match.glbPath);
-    if (!verification.ok) {
-      warnings.push(`${path.basename(match.glbPath)} skipped: ${verification.message}`);
-      continue;
+  let imageSize: ImageSize = { width: 1000, height: 1000 };
+  let sourceMode = 'layout_bbox';
+  if (usesEmbeddedGlbPlacement(rawFrontOrientation)) {
+    sourceMode = 'glb_embedded_transform';
+    for (const [index, glbPath] of glbPaths.entries()) {
+      const verification = await verifyGlbFile(glbPath);
+      if (!verification.ok) {
+        warnings.push(`${path.basename(glbPath)} skipped: ${verification.message}`);
+        continue;
+      }
+      const relativeModelPath = toRelative(input.projectRoot, glbPath);
+      const modelExtension = path.extname(glbPath) || '.glb';
+      const label = path.basename(glbPath, modelExtension);
+      items.push({
+        id: `scene_object_${String(index + 1).padStart(3, '0')}`,
+        type: 'glb',
+        name: `${String(index + 1).padStart(2, '0')}-${safeSegment(label, `component-${index + 1}`)}${modelExtension}`,
+        label,
+        path: relativeModelPath,
+        modelPath: relativeModelPath,
+        relativePath: relativeModelPath,
+        source: {
+          glbPath: relativeModelPath,
+          placementMode: 'glb_embedded_transform',
+        },
+        transform: {
+          position: [0, 0, 0],
+          rotationEulerRad: [0, 0, 0],
+          scale: [1, 1, 1],
+          scaleMode: 'embedded',
+        },
+        orientation: {
+          correctionStatus: 'embedded_transform',
+          finalYawDeg: 0,
+        },
+      });
     }
-    const correction = match.layoutObject.hasFront
-      ? correctionForModel(match.glbPath, match.layoutObject, frontOrientation)
-      : { correctionYawDeg: 0, correctionStatus: 'front_point_null' };
-    if (correction.warning) {
-      warnings.push(`${path.basename(match.glbPath)}: ${correction.warning}`);
+  } else {
+    if (!await pathExists(sourceBboxJsonPath)) {
+      throw new Error(`Layout bbox JSON does not exist: ${sourceBboxJsonPath}`);
     }
-    const finalYawDeg = normalizeAngle(match.layoutObject.targetYawDeg + correction.correctionYawDeg);
-    const relativeModelPath = toRelative(input.projectRoot, match.glbPath);
-    const modelExtension = path.extname(match.glbPath) || '.glb';
-    const name = `${String(index + 1).padStart(2, '0')}-${safeSegment(match.layoutObject.label, path.basename(match.glbPath, modelExtension))}${modelExtension}`;
-    items.push({
-      id: `scene_object_${String(index + 1).padStart(3, '0')}`,
-      type: 'glb',
-      name,
-      label: match.layoutObject.label,
-      path: relativeModelPath,
-      modelPath: relativeModelPath,
-      relativePath: relativeModelPath,
-      source: {
-        bboxIndex: match.layoutObject.bboxIndex,
-        glbPath: relativeModelPath,
-        frontPoint: match.layoutObject.frontPoint,
-        hasFront: match.layoutObject.hasFront,
-      },
-      transform: {
-        position: match.layoutObject.anchorPosition,
-        rotationEulerRad: [0, finalYawDeg * Math.PI / 180, 0],
-        scale: [1, 1, 1],
+    imageSize = await readImageSize(sourceTopViewPath) || imageSize;
+    const layoutObjects = loadLayoutObjects(await readJsonFile(sourceBboxJsonPath), imageSize, SCENE_SCALE);
+    if (layoutObjects.length <= 0) {
+      throw new Error(`Layout bbox JSON has no usable objects: ${sourceBboxJsonPath}`);
+    }
+    const frontOrientation = await loadFrontOrientation(frontOrientationPath);
+    const matches = matchGlbToLayoutObjects(glbPaths, layoutObjects);
+    for (const [index, match] of matches.entries()) {
+      const verification = await verifyGlbFile(match.glbPath);
+      if (!verification.ok) {
+        warnings.push(`${path.basename(match.glbPath)} skipped: ${verification.message}`);
+        continue;
+      }
+      const correction = match.layoutObject.hasFront
+        ? correctionForModel(match.glbPath, match.layoutObject, frontOrientation)
+        : { correctionYawDeg: 0, correctionStatus: 'front_point_null' };
+      if (correction.warning) {
+        warnings.push(`${path.basename(match.glbPath)}: ${correction.warning}`);
+      }
+      const finalYawDeg = normalizeAngle(match.layoutObject.targetYawDeg + correction.correctionYawDeg);
+      const relativeModelPath = toRelative(input.projectRoot, match.glbPath);
+      const modelExtension = path.extname(match.glbPath) || '.glb';
+      const name = `${String(index + 1).padStart(2, '0')}-${safeSegment(match.layoutObject.label, path.basename(match.glbPath, modelExtension))}${modelExtension}`;
+      items.push({
+        id: `scene_object_${String(index + 1).padStart(3, '0')}`,
+        type: 'glb',
+        name,
+        label: match.layoutObject.label,
+        path: relativeModelPath,
+        modelPath: relativeModelPath,
+        relativePath: relativeModelPath,
+        source: {
+          bboxIndex: match.layoutObject.bboxIndex,
+          glbPath: relativeModelPath,
+          frontPoint: match.layoutObject.frontPoint,
+          hasFront: match.layoutObject.hasFront,
+        },
+        transform: {
+          position: match.layoutObject.anchorPosition,
+          rotationEulerRad: [0, finalYawDeg * Math.PI / 180, 0],
+          scale: [1, 1, 1],
+          referenceSize: match.layoutObject.referenceSize,
+          scaleMode: 'xyz_min',
+          minScale: MIN_SCALE,
+          maxScale: MAX_SCALE,
+        },
         referenceSize: match.layoutObject.referenceSize,
-        scaleMode: 'xyz_min',
-        minScale: MIN_SCALE,
-        maxScale: MAX_SCALE,
-      },
-      referenceSize: match.layoutObject.referenceSize,
-      orientation: {
-        targetYawDeg: match.layoutObject.targetYawDeg,
-        correctionYawDeg: correction.correctionYawDeg,
-        correctionStatus: correction.correctionStatus,
-        finalYawDeg,
-      },
-    });
+        orientation: {
+          targetYawDeg: match.layoutObject.targetYawDeg,
+          correctionYawDeg: correction.correctionYawDeg,
+          correctionStatus: correction.correctionStatus,
+          finalYawDeg,
+        },
+      });
+    }
   }
   if (items.length <= 0) {
     throw new Error('No valid GLB files could be added to the Visionary scene insert plan.');
@@ -541,11 +589,13 @@ export async function generateInsertScene(input: {
     runId,
     stage: 'insert_scene',
     coordinateSystem: 'visionary_y_up_xz_ground',
-    scaleMode: 'xyz_min',
+    placementMode: sourceMode,
+    scaleMode: sourceMode === 'glb_embedded_transform' ? 'embedded' : 'xyz_min',
     manifestPath: toRelative(input.projectRoot, sceneInsertPlanPath),
     source: {
       hunyuanDir: toRelative(input.projectRoot, hunyuanDir),
       frontOrientationPath: input.components3DFrontOrientationPath,
+      placementMode: sourceMode,
       bboxJsonPath: toRelative(input.projectRoot, sourceBboxJsonPath),
       topViewPath: toRelative(input.projectRoot, sourceTopViewPath),
       imageIndex,
@@ -586,6 +636,7 @@ export async function generateInsertScene(input: {
       title,
       message: `准备插入 ${items.length} 个 Visionary 场景对象`,
       progress: 1,
+      statusId: 'done',
     },
     warnings,
   };
@@ -639,6 +690,7 @@ async function startMcpServer(): Promise<void> {
             title: '最终插入场景',
             message,
             progress: 1,
+            statusId: 'failed',
           },
         };
         return {

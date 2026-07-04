@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -18,6 +18,24 @@ interface GeneratedAsset {
   relativePath: string;
   mimeType: string;
   bytes: number;
+  metadata?: JsonRecord;
+}
+
+interface CanonicalAssetReference {
+  assetId: string;
+  hash: string;
+  path: string;
+  mimeType: string;
+  bytes: number;
+  kind: string;
+  provenance?: JsonRecord;
+}
+
+export interface MainImageApiConfigInput {
+  url?: string;
+  apiKey?: string;
+  model?: string;
+  timeoutMs?: string | number;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,7 +43,7 @@ const __dirname = path.dirname(__filename);
 const VISIONARY_ROOT = path.resolve(__dirname, '../../..');
 const REPO_ROOT = path.resolve(VISIONARY_ROOT, '..');
 const NEW_PIPELINE_ROOT = path.resolve(process.env.VISIONARY_NEW_PIPELINE_ROOT || path.join(REPO_ROOT, 'third-party', 'new_pipeline'));
-const PYTHON_BIN = path.join(NEW_PIPELINE_ROOT, '.venv', 'bin', 'python');
+const DEFAULT_IMAGE_GEN_TIMEOUT_MS = 300_000;
 
 function nowRunId(): string {
   return new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '_');
@@ -59,17 +77,49 @@ function toRelative(projectRoot: string, filePath: string): string {
   return path.relative(projectRoot, filePath).split(path.sep).join('/');
 }
 
-async function fileAsset(projectRoot: string, id: string, filePath: string, mimeType: string): Promise<GeneratedAsset> {
+async function fileAsset(projectRoot: string, id: string, filePath: string, mimeType: string, metadata: JsonRecord = {}): Promise<GeneratedAsset> {
   const info = await stat(filePath);
   return {
     id,
     relativePath: toRelative(projectRoot, filePath),
     mimeType,
     bytes: info.size,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
+}
+
+async function writeCanonicalProjectAsset(input: {
+  projectRoot: string;
+  buffer: Buffer;
+  mimeType: string;
+  sourcePath: string;
+  kind: string;
+}): Promise<CanonicalAssetReference> {
+  const root = path.resolve(input.projectRoot);
+  const hash = createHash('sha256').update(input.buffer).digest('hex');
+  const relativePath = `assets/${hash}${extensionForMimeType(input.mimeType)}`;
+  const targetPath = path.join(root, ...relativePath.split('/'));
+  if (!isPathInside(root, targetPath)) {
+    throw new Error('Resolved canonical asset path escapes project root.');
+  }
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await writeFile(targetPath, input.buffer);
+  return {
+    assetId: `sha256:${hash}`,
+    hash,
+    path: relativePath,
+    mimeType: input.mimeType,
+    bytes: input.buffer.byteLength,
+    kind: input.kind,
+    provenance: {
+      sourcePath: input.sourcePath,
+      stage: 'main-image',
+    },
   };
 }
 
 function emitProgress(title: string, message: string, progress: number): void {
+  const statusId = progress >= 1 ? 'done' : 'running';
   // Codex JSONL task extraction can recognize these shapes when surfaced in MCP events/results.
   const payload = {
     type: progress <= 0.01 ? 'visionary.task.started' : progress >= 1 ? 'visionary.task.completed' : 'visionary.task.progress',
@@ -77,77 +127,24 @@ function emitProgress(title: string, message: string, progress: number): void {
       title,
       message,
       progress,
+      statusId,
     },
   };
   process.stderr.write(`${JSON.stringify(payload)}\n`);
 }
 
-async function runPythonScript(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(PYTHON_BIN, args, {
-      cwd,
-      env: process.env,
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-        return;
-      }
-      reject(new Error(`Python command failed with code ${code}: ${args.join(' ')}\n${stderr || stdout}`));
-    });
-  });
-}
-
-async function latestTxtFile(folder: string): Promise<string> {
-  const { readdir } = await import('node:fs/promises');
-  const entries = await readdir(folder, { withFileTypes: true });
-  const txtFiles = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.txt'))
-    .map((entry) => path.join(folder, entry.name));
-  if (!txtFiles.length) {
-    throw new Error(`No prompt txt file generated in ${folder}`);
-  }
-  const stats = await Promise.all(txtFiles.map(async (filePath) => ({ filePath, info: await stat(filePath) })));
-  stats.sort((a, b) => b.info.mtimeMs - a.info.mtimeMs || a.filePath.localeCompare(b.filePath));
-  return stats[0].filePath;
-}
-
-async function readBatchImages(projectRoot: string, batchDir: string): Promise<GeneratedAsset[]> {
-  const indexRaw = await readFile(path.join(batchDir, 'index.json'), 'utf8');
-  const index = JSON.parse(indexRaw) as { pairs?: Array<{ index?: number; image?: string }> };
-  const pairs = Array.isArray(index.pairs) ? index.pairs : [];
-  const assets: GeneratedAsset[] = [];
-  for (const pair of pairs) {
-    if (typeof pair.image !== 'string') continue;
-    const imagePath = path.join(batchDir, pair.image);
-    assets.push(await fileAsset(projectRoot, `main_image_${String(pair.index ?? assets.length + 1).padStart(3, '0')}`, imagePath, 'image/png'));
-  }
-  return assets;
-}
-
 function dependencyTree(input: {
   runId: string;
   stage: string;
-  sourcePromptPath: string;
-  generatedPromptPath: string;
+  finalPromptPath: string;
   batchDir: string;
   images: GeneratedAsset[];
   projectRoot: string;
+  provider: JsonRecord;
 }): JsonRecord {
-  const sourcePromptId = 'source_prompt';
-  const generatedPromptId = 'generated_prompt';
+  const finalPromptId = 'final_image_prompt';
   const batchId = 'main_image_batch';
+  const providerId = 'image_generation_provider';
   return {
     schema: 'visionary.new_pipeline.dependency_tree',
     version: 1,
@@ -155,14 +152,14 @@ function dependencyTree(input: {
     stage: input.stage,
     nodes: [
       {
-        id: sourcePromptId,
-        kind: 'text_prompt',
-        relativePath: toRelative(input.projectRoot, input.sourcePromptPath),
+        id: finalPromptId,
+        kind: 'image_generation_prompt',
+        relativePath: toRelative(input.projectRoot, input.finalPromptPath),
       },
       {
-        id: generatedPromptId,
-        kind: 'image_generation_prompt',
-        relativePath: toRelative(input.projectRoot, input.generatedPromptPath),
+        id: providerId,
+        kind: 'image_generation_provider',
+        metadata: input.provider,
       },
       {
         id: batchId,
@@ -175,18 +172,19 @@ function dependencyTree(input: {
         relativePath: asset.relativePath,
         mimeType: asset.mimeType,
         bytes: asset.bytes,
+        ...(asset.metadata ? { metadata: asset.metadata } : {}),
       })),
     ],
     edges: [
       {
-        from: sourcePromptId,
-        to: generatedPromptId,
-        relation: 'expanded_into',
-      },
-      {
-        from: generatedPromptId,
+        from: finalPromptId,
         to: batchId,
         relation: 'used_to_generate',
+      },
+      {
+        from: providerId,
+        to: batchId,
+        relation: 'served_generation',
       },
       ...input.images.map((asset) => ({
         from: batchId,
@@ -197,57 +195,221 @@ function dependencyTree(input: {
   };
 }
 
+function resolveImageApiConfig(overrides: MainImageApiConfigInput = {}): {
+  url: string;
+  apiKey: string;
+  timeoutMs: number;
+  provider: JsonRecord;
+} {
+  const url = String(overrides.url || process.env.GEMINI_IMAGE_URL || process.env.VISIONARY_GEMINI_IMAGE_URL || '').trim();
+  if (!url) {
+    throw new Error('GEMINI_IMAGE_URL or VISIONARY_GEMINI_IMAGE_URL is required for main-image generation.');
+  }
+  const apiKey = String(overrides.apiKey || process.env.GENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  if (!apiKey) {
+    throw new Error('GENAI_API_KEY or GEMINI_API_KEY is required for main-image generation.');
+  }
+  const timeoutMs = Math.max(1000, Number(overrides.timeoutMs || process.env.VISIONARY_IMAGE_GEN_TIMEOUT_MS || process.env.IMAGE_GEN_TIMEOUT_MS || DEFAULT_IMAGE_GEN_TIMEOUT_MS) || DEFAULT_IMAGE_GEN_TIMEOUT_MS);
+  const modelFromUrl = url.match(/\/models\/([^:/?]+)/)?.[1] || '';
+  const model = String(overrides.model || process.env.GEMINI_IMAGE_MODEL || modelFromUrl || 'gemini-image').trim();
+  return {
+    url,
+    apiKey,
+    timeoutMs,
+    provider: {
+      provider: 'apiyi',
+      family: 'gemini-image',
+      model,
+      endpoint: url,
+      responseModalities: ['IMAGE'],
+    },
+  };
+}
+
+function extensionForMimeType(mimeType: string): string {
+  const normalized = mimeType.toLowerCase();
+  if (normalized.includes('jpeg') || normalized.includes('jpg')) return '.jpg';
+  if (normalized.includes('webp')) return '.webp';
+  return '.png';
+}
+
+function findInlineImagePart(value: unknown): { data: string; mimeType: string } | null {
+  const response = value && typeof value === 'object' ? value as JsonRecord : {};
+  const candidates = Array.isArray(response.candidates) ? response.candidates : [];
+  for (const candidateValue of candidates) {
+    const candidate = candidateValue && typeof candidateValue === 'object' ? candidateValue as JsonRecord : {};
+    const content = candidate.content && typeof candidate.content === 'object' ? candidate.content as JsonRecord : {};
+    const parts = Array.isArray(content.parts) ? content.parts : [];
+    for (const partValue of parts) {
+      const part = partValue && typeof partValue === 'object' ? partValue as JsonRecord : {};
+      const inlineData = part.inlineData && typeof part.inlineData === 'object'
+        ? part.inlineData as JsonRecord
+        : part.inline_data && typeof part.inline_data === 'object'
+          ? part.inline_data as JsonRecord
+          : {};
+      const data = typeof inlineData.data === 'string' ? inlineData.data : '';
+      if (!data) continue;
+      return {
+        data,
+        mimeType: typeof inlineData.mimeType === 'string'
+          ? inlineData.mimeType
+          : typeof inlineData.mime_type === 'string'
+            ? inlineData.mime_type
+            : 'image/png',
+      };
+    }
+  }
+  return null;
+}
+
+async function requestGeminiImage(input: {
+  prompt: string;
+  config: ReturnType<typeof resolveImageApiConfig>;
+  signal: AbortSignal;
+}): Promise<{ buffer: Buffer; mimeType: string }> {
+  const response = await fetch(input.config.url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${input.config.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              text: input.prompt,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        responseModalities: ['IMAGE'],
+        imageConfig: {
+          aspectRatio: '16:9',
+          imageSize: '1K',
+        },
+      },
+    }),
+    signal: input.signal,
+  });
+  const text = await response.text();
+  let data: unknown;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+  if (!response.ok) {
+    const message = typeof (data as JsonRecord).error === 'object'
+      ? JSON.stringify((data as JsonRecord).error)
+      : text || response.statusText;
+    throw new Error(`Image API request failed (${response.status}): ${message}`);
+  }
+  const image = findInlineImagePart(data);
+  if (!image) {
+    throw new Error('Image API response did not include inline image data.');
+  }
+  return {
+    buffer: Buffer.from(image.data, 'base64'),
+    mimeType: image.mimeType,
+  };
+}
+
+async function writeGeneratedImages(input: {
+  projectRoot: string;
+  prompt: string;
+  batchOutputDir: string;
+  draws: number;
+  config: ReturnType<typeof resolveImageApiConfig>;
+}): Promise<GeneratedAsset[]> {
+  const assets: GeneratedAsset[] = [];
+  const pairs: Array<{ index: number; image: string; prompt: string; mimeType: string; canonicalAssetPath: string }> = [];
+  for (let index = 1; index <= input.draws; index += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), input.config.timeoutMs);
+    try {
+      const image = await requestGeminiImage({
+        prompt: input.prompt,
+        config: input.config,
+        signal: controller.signal,
+      });
+      const stem = `image_${String(index).padStart(3, '0')}`;
+      const imageName = `${stem}${extensionForMimeType(image.mimeType)}`;
+      const imagePath = path.join(input.batchOutputDir, imageName);
+      await writeFile(imagePath, image.buffer);
+      await writeFile(path.join(input.batchOutputDir, `${stem}_prompt.txt`), input.prompt, 'utf8');
+      await writeFile(path.join(input.batchOutputDir, `${stem}.txt`), input.prompt, 'utf8');
+      const runLocalPath = toRelative(input.projectRoot, imagePath);
+      const canonicalAssetReference = await writeCanonicalProjectAsset({
+        projectRoot: input.projectRoot,
+        buffer: image.buffer,
+        mimeType: image.mimeType,
+        sourcePath: runLocalPath,
+        kind: 'image',
+      });
+      assets.push(await fileAsset(input.projectRoot, `main_image_${String(index).padStart(3, '0')}`, imagePath, image.mimeType, {
+        canonicalAssetReference,
+        assetReferences: [canonicalAssetReference],
+      }));
+      pairs.push({
+        index,
+        image: imageName,
+        prompt: `${stem}_prompt.txt`,
+        mimeType: image.mimeType,
+        canonicalAssetPath: canonicalAssetReference.path,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  await writeFile(path.join(input.batchOutputDir, 'index.json'), `${JSON.stringify({
+    schema: 'visionary.main_image_batch',
+    version: 1,
+    provider: input.config.provider,
+    pairs,
+  }, null, 2)}\n`, 'utf8');
+  return assets;
+}
+
 export async function generateMainImage(input: {
   projectRoot: string;
   projectId: string;
   prompt: string;
   draws: number;
   runLabel: string;
+  apiConfig?: MainImageApiConfigInput;
 }): Promise<JsonRecord> {
   const title = '主图生成';
   const runId = nowRunId();
   const outputRoot = projectOutputRoot(input.projectRoot, input.projectId, input.runLabel, runId);
-  const promptSourcePath = path.join(outputRoot, 'source_prompt.txt');
-  const promptOutputDir = path.join(outputRoot, 'prompt_outputs');
+  const finalPromptPath = path.join(outputRoot, 'final_image_prompt.txt');
   const batchOutputDir = path.join(outputRoot, 'main_images');
+  const finalPrompt = input.prompt.trim();
+  const config = resolveImageApiConfig(input.apiConfig);
 
   emitProgress(title, '准备输出目录', 0.01);
-  await mkdir(promptOutputDir, { recursive: true });
   await mkdir(batchOutputDir, { recursive: true });
-  await writeFile(promptSourcePath, input.prompt.trim(), 'utf8');
+  await writeFile(finalPromptPath, finalPrompt, 'utf8');
 
-  emitProgress(title, '生成主图 prompt', 0.18);
-  await runPythonScript([
-    'prompt_image.py',
-    '--prompt-file',
-    promptSourcePath,
-    '--output',
-    promptOutputDir,
-  ], NEW_PIPELINE_ROOT);
-  const generatedPromptPath = await latestTxtFile(promptOutputDir);
-
-  emitProgress(title, '调用图片生成服务', 0.45);
-  await runPythonScript([
-    'batch_generate.py',
-    generatedPromptPath,
-    '--draws',
-    String(input.draws),
-    '--workers',
-    '1',
-    '--output',
+  emitProgress(title, '调用 apiyi Gemini Image / Nano Banana 生图服务', 0.45);
+  const images = await writeGeneratedImages({
+    projectRoot: input.projectRoot,
+    prompt: finalPrompt,
     batchOutputDir,
-  ], NEW_PIPELINE_ROOT);
+    draws: input.draws,
+    config,
+  });
 
   emitProgress(title, '记录输出依赖树', 0.9);
-  const images = await readBatchImages(input.projectRoot, batchOutputDir);
   const tree = dependencyTree({
     runId,
     stage: 'main_image_generation',
-    sourcePromptPath: promptSourcePath,
-    generatedPromptPath,
+    finalPromptPath,
     batchDir: batchOutputDir,
     images,
     projectRoot: input.projectRoot,
+    provider: config.provider,
   });
   const manifestPath = path.join(outputRoot, 'dependency_tree.json');
   await writeFile(manifestPath, `${JSON.stringify(tree, null, 2)}\n`, 'utf8');
@@ -257,8 +419,10 @@ export async function generateMainImage(input: {
     ok: true,
     stage: 'main_image_generation',
     runId,
+    provider: config.provider,
     promptOutput: {
-      relativePath: toRelative(input.projectRoot, generatedPromptPath),
+      relativePath: toRelative(input.projectRoot, finalPromptPath),
+      kind: 'final_image_prompt',
     },
     batchOutput: {
       relativePath: toRelative(input.projectRoot, batchOutputDir),
@@ -272,6 +436,7 @@ export async function generateMainImage(input: {
       title,
       message: `生成 ${images.length} 张主图`,
       progress: 1,
+      statusId: 'done',
     },
     warnings: [],
   };
@@ -327,6 +492,7 @@ async function startMcpServer(): Promise<void> {
             title: '主图生成',
             message,
             progress: 1,
+            statusId: 'failed',
           },
         };
         return {

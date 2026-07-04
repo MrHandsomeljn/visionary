@@ -6,6 +6,7 @@
 import * as THREE from "three/webgpu";
 import { LineSegments2 } from "three/examples/jsm/lines/webgpu/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
+import { clone as cloneSkeletonAwareObject } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { vec3, quat } from "gl-matrix";
 import { GaussianRenderer } from "../renderer/gaussian_renderer";
 import { GaussianModel } from "../app/GaussianModel";
@@ -31,6 +32,7 @@ import { initWebGPU_onnx, WebGPUContext, DEFAULT_DUMMY_MODEL_URL } from "../app/
 import { initOrtEnvironment, getDefaultOrtWasmPaths } from "../config/ort-config";
 import { PointCloud, DynamicPointCloud } from "../point_cloud";
 import { lookAtW2C } from "../controls/orbit";
+import { coreCameraW2CToTimelineW2C, timelineW2CToCoreCameraW2C } from "../camera/camera-pose-conventions";
 import { FBXModelWrapper } from "../models/fbx-model-wrapper";
 import { GLTFModelWrapper } from "../models/gltf-model-wrapper";
 import { GizmoManager } from "../gizmo/gizmo-manager";
@@ -104,6 +106,7 @@ const EDITOR_DEPTH_BASE_EXTENT_KEY = "__editorDepthBaseExtent";
 const EDITOR_CAMERA_SEQUENCE_HELPER_KEY = "__visionaryEditorHelper";
 const EDITOR_CAMERA_SEQUENCE_CURRENT_KEY = "__visionaryEditorCurrentCameraHelper";
 const EDITOR_MODEL_PICK_ID_KEY = "__visionaryEditorModelId";
+const CANONICAL_EDITOR_MESH_ASSET_PATH_RE = /^assets\/[a-f0-9]{64}\.(?:glb|gltf)$/i;
 const CAMERA_SEQUENCE_FRUSTUM_COLOR = 0x22c55e;
 const CAMERA_SEQUENCE_PATH_COLOR = 0x4a90d9;
 const CAMERA_SEQUENCE_CURRENT_COLOR = 0xf59e0b;
@@ -130,11 +133,20 @@ interface EditorModel {
   fbxAnimation?: FBXModelWrapper;
   sourceFile?: File;
   sourcePath?: string;
+  sharedMeshResourceKey?: string;
   animDuration?: number;
   animSpeed?: number;
   animStartTime?: number;
   animEndTime?: number;
   animLoop?: boolean;
+}
+
+interface CachedMeshTemplate {
+  key: string;
+  object3D: THREE.Object3D;
+  animationClips: THREE.AnimationClip[];
+  pointCount: number;
+  refCount: number;
 }
 
 interface EditorCameraPose {
@@ -222,6 +234,7 @@ export class EditorApp {
 
   // Editor state
   private editorModels: Map<string, EditorModel> = new Map();
+  private meshModelTemplateCache: Map<string, CachedMeshTemplate> = new Map();
   private onModelsChangedCallback: ((models: EditorModel[]) => void) | null = null;
   private sceneBackgroundColor: [number, number, number, number] = [112 / 255, 112 / 255, 112 / 255, 1.0];
   private sceneSkyPresetId: string = "night";
@@ -587,11 +600,11 @@ export class EditorApp {
           this.syncGaussianRendererModelTimelineState(this.fusedRenderer);
 
           await this.fusedRenderer.updateDynamicModels(this.meshCamera, (now - this.fusionStartTime) / 500.0);
-          this.renderViewportOverlayWithFusedRenderer();
           this.fusedRenderer.onBeforeRender(this.meshRenderer, this.meshScene, this.meshCamera);
           this.fusedRenderer.renderThreeScene(this.meshCamera);
+          this.renderViewportOverlayWithFusedRenderer();
           const drew = this.fusedRenderer.drawSplats(this.meshRenderer, this.meshScene, this.meshCamera);
-          if (!drew && this.renderMode !== "depth") {
+          if (!drew) {
             this.fusedRenderer.compositeOverlayToCurrentCanvas();
           }
         } else {
@@ -824,7 +837,10 @@ export class EditorApp {
       Number(pose.rotation.w) || 1
     );
     const c2w = w2c.clone().invert();
-    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(c2w);
+    // Camera preview receives the same W2C timeline pose as export/playback.
+    // Three.js cameras face local -Z, matching Blender/Trajectory_gen; local +Z is
+    // the camera back. Keep preview, export, and helpers on -Z to preserve lookAt orbits.
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(c2w);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(c2w);
     this.cameraPreviewCamera.position.set(
       Number(pose.position.x) || 0,
@@ -967,12 +983,17 @@ export class EditorApp {
     return count;
   }
 
-  private removeMeshObject(model: EditorModel): void {
-    const object3D = model.object3D;
-    if (!object3D || !this.meshScene) return;
-    this.applyRenderModeToMeshObject(object3D, "color");
-    this.meshScene.remove(object3D);
-    object3D.traverse((child) => {
+  private getCanonicalMeshTemplateCacheKey(sourcePath = ""): string {
+    const normalized = String(sourcePath || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+    return CANONICAL_EDITOR_MESH_ASSET_PATH_RE.test(normalized) ? normalized.toLowerCase() : "";
+  }
+
+  private cloneMeshTemplate(root: THREE.Object3D): THREE.Object3D {
+    return cloneSkeletonAwareObject(root) as THREE.Object3D;
+  }
+
+  private disposeMeshObjectResources(root: THREE.Object3D): void {
+    root.traverse((child) => {
       const mesh = child as THREE.Mesh;
       if (!mesh || !("isMesh" in mesh) || !(mesh as any).isMesh) return;
       (mesh.geometry as THREE.BufferGeometry | undefined)?.dispose();
@@ -983,6 +1004,32 @@ export class EditorApp {
         material?.dispose?.();
       }
     });
+  }
+
+  private releaseMeshTemplateReference(key?: string): void {
+    if (!key) return;
+    const cached = this.meshModelTemplateCache.get(key);
+    if (!cached) return;
+    cached.refCount = Math.max(0, cached.refCount - 1);
+  }
+
+  private disposeMeshTemplateCache(): void {
+    for (const cached of this.meshModelTemplateCache.values()) {
+      this.disposeMeshObjectResources(cached.object3D);
+    }
+    this.meshModelTemplateCache.clear();
+  }
+
+  private removeMeshObject(model: EditorModel): void {
+    const object3D = model.object3D;
+    if (!object3D || !this.meshScene) return;
+    this.applyRenderModeToMeshObject(object3D, "color");
+    this.meshScene.remove(object3D);
+    if (model.sharedMeshResourceKey) {
+      this.releaseMeshTemplateReference(model.sharedMeshResourceKey);
+      return;
+    }
+    this.disposeMeshObjectResources(object3D);
   }
 
   private createMeshDepthPreviewMaterial(userData: Record<string, unknown>): THREE.MeshDepthMaterial {
@@ -1314,6 +1361,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       let position = { x: 0, y: 0, z: 0 };
       let rotation = { x: 0, y: 0, z: 0 };
       let scale = 1;
+      let sharedMeshResourceKey = "";
 
       if (lowerName.endsWith('.onnx')) {
         // Load ONNX model
@@ -1340,19 +1388,46 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         isDynamic = Boolean(modelEntry.isDynamic);
         pointCount = Number(modelEntry.pointCount ?? 0);
       } else if (this.isMeshFilename(lowerName)) {
-        const loaded = await defaultLoader.loadFile(file, {
-          isGaussian: false,
-          onProgress: (progress) => {
-            if (shouldManageLoadingOverlay) {
-              this.showLoading(true, progress.stage, Math.round(progress.progress * 100));
+        const meshTemplateCacheKey = this.getCanonicalMeshTemplateCacheKey(options.sourcePath || file.name);
+        let animationClips: THREE.AnimationClip[] = [];
+        const cachedTemplate = meshTemplateCacheKey ? this.meshModelTemplateCache.get(meshTemplateCacheKey) : undefined;
+        if (cachedTemplate) {
+          meshObject = this.cloneMeshTemplate(cachedTemplate.object3D);
+          animationClips = cachedTemplate.animationClips;
+          pointCount = cachedTemplate.pointCount;
+          cachedTemplate.refCount += 1;
+          sharedMeshResourceKey = cachedTemplate.key;
+        } else {
+          const loaded = await defaultLoader.loadFile(file, {
+            isGaussian: false,
+            onProgress: (progress) => {
+              if (shouldManageLoadingOverlay) {
+                this.showLoading(true, progress.stage, Math.round(progress.progress * 100));
+              }
             }
+          });
+          if (!isThreeJSDataSource(loaded)) {
+            throw new Error(`File loaded but not recognized as mesh: ${file.name}`);
           }
-        });
-        if (!isThreeJSDataSource(loaded)) {
-          throw new Error(`File loaded but not recognized as mesh: ${file.name}`);
+          const templateObject = loaded.object3D() as THREE.Object3D;
+          animationClips = loaded.animationClips?.() ?? [];
+          const templatePointCount = this.countMeshVertices(templateObject);
+          if (meshTemplateCacheKey) {
+            this.meshModelTemplateCache.set(meshTemplateCacheKey, {
+              key: meshTemplateCacheKey,
+              object3D: templateObject,
+              animationClips,
+              pointCount: templatePointCount,
+              refCount: 1,
+            });
+            meshObject = this.cloneMeshTemplate(templateObject);
+            pointCount = templatePointCount;
+            sharedMeshResourceKey = meshTemplateCacheKey;
+          } else {
+            meshObject = templateObject;
+            pointCount = templatePointCount;
+          }
         }
-        meshObject = loaded.object3D() as THREE.Object3D;
-        const animationClips = loaded.animationClips?.() ?? [];
         const meshAnimation = createEditorMeshAnimationController({
           fileName: lowerName,
           object3D: meshObject,
@@ -1366,7 +1441,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
           isDynamic = true;
         }
         this.addMeshObjectToScene(meshObject);
-        pointCount = this.countMeshVertices(meshObject);
+        if (!Number.isFinite(pointCount) || pointCount <= 0) {
+          pointCount = this.countMeshVertices(meshObject);
+        }
         position = { x: meshObject.position.x, y: meshObject.position.y, z: meshObject.position.z };
         rotation = { x: meshObject.rotation.x, y: meshObject.rotation.y, z: meshObject.rotation.z };
         scale = Number(meshObject.scale.x || 1);
@@ -1429,6 +1506,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         gaussianModel: gaussianModel || undefined,
         sourceFile: file,
         sourcePath: options.sourcePath || file.name,
+        sharedMeshResourceKey: sharedMeshResourceKey || undefined,
         animDuration: Number.isFinite(Number(modelEntry?.animDuration))
           ? Number(modelEntry?.animDuration)
           : (meshAnimationController && Number.isFinite(meshAnimationController.getDuration()) && meshAnimationController.getDuration() > 0
@@ -2419,8 +2497,21 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   getCameraPose(): EditorCameraPose | null {
     const camera = this.getCamera();
     if (!camera) return null;
+    const coreRotation = quat.fromValues(
+      Number(camera.rotation.x) || 0,
+      Number(camera.rotation.y) || 0,
+      Number(camera.rotation.z) || 0,
+      Number(camera.rotation.w) || 1
+    );
+    const timelineRotation = coreCameraW2CToTimelineW2C(coreRotation);
     return {
-      ...camera,
+      position: { ...camera.position },
+      rotation: {
+        x: timelineRotation[0],
+        y: timelineRotation[1],
+        z: timelineRotation[2],
+        w: timelineRotation[3],
+      },
       fovDegrees: this.getSceneCameraFovDegrees(),
     };
   }
@@ -2432,7 +2523,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   /**
    * Set camera pose from timeline keyframe.
    */
-  setCameraPose(pose: Partial<EditorCameraPose> | null | undefined): boolean {
+  private applyCameraPoseToCoreCamera(
+    pose: Partial<EditorCameraPose> | null | undefined,
+    rotationConvention: "core-plus-z" | "timeline-minus-z"
+  ): boolean {
     if (!pose?.position || !pose?.rotation) return false;
 
     const px = Number(pose.position.x);
@@ -2448,7 +2542,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     }
 
     const pos = vec3.fromValues(px, py, pz);
-    const rot = quat.fromValues(qx, qy, qz, qw);
+    const sourceRot = quat.fromValues(qx, qy, qz, qw);
+    const rot = rotationConvention === "timeline-minus-z"
+      ? timelineW2CToCoreCameraW2C(sourceRot)
+      : sourceRot;
     const ok = this.cameraManager.setCameraPose(pos, rot);
     if (!ok) return false;
 
@@ -2457,6 +2554,17 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     }
 
     return true;
+  }
+
+  setCoreCameraPose(pose: Partial<EditorCameraPose> | null | undefined): boolean {
+    return this.applyCameraPoseToCoreCamera(pose, "core-plus-z");
+  }
+
+  /**
+   * Set camera pose from timeline keyframe.
+   */
+  setCameraPose(pose: Partial<EditorCameraPose> | null | undefined): boolean {
+    return this.applyCameraPoseToCoreCamera(pose, "timeline-minus-z");
   }
 
   /**
@@ -2957,10 +3065,12 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const halfWidth = halfHeight * safeAspect;
 
     const center = new THREE.Vector3(0, 0, 0);
-    const tl = new THREE.Vector3(-halfWidth, halfHeight, safeLength);
-    const tr = new THREE.Vector3(halfWidth, halfHeight, safeLength);
-    const bl = new THREE.Vector3(-halfWidth, -halfHeight, safeLength);
-    const br = new THREE.Vector3(halfWidth, -halfHeight, safeLength);
+    // Draw the helper frustum along local -Z. This mirrors Three/Blender camera
+    // forward and keeps the viewport gizmo aligned with actual timeline playback.
+    const tl = new THREE.Vector3(-halfWidth, halfHeight, -safeLength);
+    const tr = new THREE.Vector3(halfWidth, halfHeight, -safeLength);
+    const bl = new THREE.Vector3(-halfWidth, -halfHeight, -safeLength);
+    const br = new THREE.Vector3(halfWidth, -halfHeight, -safeLength);
 
     const edges: Array<[THREE.Vector3, THREE.Vector3]> = [
       [center, tl],
@@ -3328,6 +3438,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     this.renderLoop.stop();
     this.stopMeshRenderLoop();
     this.clearAllModels();
+    this.disposeMeshTemplateCache();
     this.clearCameraSequenceGroupContents();
     if (this.cameraSequenceGroup?.parent) {
       this.cameraSequenceGroup.parent.remove(this.cameraSequenceGroup);

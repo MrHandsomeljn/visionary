@@ -383,6 +383,23 @@ export class ProjectStorage {
     };
   }
 
+  async resolveProjectDir(userInput: string, projectIdInput: string): Promise<string> {
+    const { userId } = normalizeUserIdentity(userInput);
+    const projectId = assertSafeSegment(projectIdInput, 'project id');
+    await this.assertProjectExists(userId, projectId);
+    return this.getProjectDir(userId, projectId);
+  }
+
+  async readProjectCodexApiKey(userInput: string, projectIdInput: string): Promise<string> {
+    const { userId } = normalizeUserIdentity(userInput);
+    const projectId = assertSafeSegment(projectIdInput, 'project id');
+    await this.assertProjectExists(userId, projectId);
+    const authPath = path.join(this.getProjectDir(userId, projectId), CODEX_HOME_DIR, CODEX_AUTH_FILE);
+    if (!(await pathExists(authPath))) return '';
+    const payload = normalizeCodexAuthPayload(await readJsonFile<Record<string, unknown>>(authPath));
+    return payload.OPENAI_API_KEY || payload.CODEX_API_KEY || '';
+  }
+
   async saveScene(input: SaveProjectJsonInput): Promise<ProjectMetadata> {
     return this.saveProjectJson(input, SCENE_FILE);
   }

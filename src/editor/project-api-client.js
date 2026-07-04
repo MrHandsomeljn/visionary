@@ -24,6 +24,77 @@ async function parseApiResponse(response) {
     return payload?.data;
 }
 
+function parseSseMessage(rawMessage) {
+    const message = { event: 'message', data: '' };
+    const dataLines = [];
+    String(rawMessage || '').split(/\r?\n/).forEach((line) => {
+        if (line.startsWith('event:')) {
+            message.event = line.slice('event:'.length).trim() || 'message';
+        } else if (line.startsWith('data:')) {
+            dataLines.push(line.slice('data:'.length).replace(/^ /, ''));
+        }
+    });
+    message.data = dataLines.join('\n');
+    return message;
+}
+
+function dispatchSseMessage(rawMessage, handlers = {}) {
+    if (!String(rawMessage || '').trim()) return undefined;
+    const message = parseSseMessage(rawMessage);
+    const payload = message.data ? JSON.parse(message.data) : null;
+    handlers.onMessage?.({ event: message.event, data: payload });
+    if (message.event === 'error') {
+        const error = new Error(payload?.message || 'Streaming request failed');
+        error.code = payload?.code || 'STREAM_ERROR';
+        throw error;
+    }
+    if (message.event === 'codex-event') {
+        handlers.onEvent?.(payload);
+    } else if (message.event === 'task') {
+        handlers.onTask?.(payload);
+    } else if (message.event === 'result') {
+        return payload;
+    }
+    return undefined;
+}
+
+async function parseSseResponse(response, handlers = {}) {
+    if (!response.ok) {
+        await parseApiResponse(response);
+    }
+    if (!response.body || !window.TextDecoder) {
+        throw new Error('Streaming responses are not supported by this browser');
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result;
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split(/\r?\n\r?\n/);
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+            const maybeResult = dispatchSseMessage(part, handlers);
+            if (maybeResult !== undefined) {
+                result = maybeResult;
+            }
+        }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+        const maybeResult = dispatchSseMessage(buffer, handlers);
+        if (maybeResult !== undefined) {
+            result = maybeResult;
+        }
+    }
+    if (!result) {
+        throw new Error('Streaming request finished without a result');
+    }
+    return result;
+}
+
 export class ProjectApiClient {
     constructor(options = {}) {
         this.baseUrl = String(options.baseUrl || '/api/projects').replace(/\/+$/, '');
@@ -134,6 +205,80 @@ export class ProjectApiClient {
         return parseApiResponse(response);
     }
 
+    async prepareCameraTrajectory({
+        user,
+        projectId,
+        sceneInfoPath,
+        humanText,
+        segmentCount,
+        segmentDuration,
+        fps,
+        keyframeInterval,
+        firstFrameOnly,
+        debugEvalOnly,
+        maxOptimizationRounds,
+        runLabel,
+        sceneBoundsScale,
+    }) {
+        const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}/camera-trajectory/prepare`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                sceneInfoPath,
+                humanText,
+                segmentCount,
+                segmentDuration,
+                fps,
+                keyframeInterval,
+                firstFrameOnly,
+                debugEvalOnly,
+                maxOptimizationRounds,
+                runLabel,
+                sceneBoundsScale,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async continueCameraTrajectory({
+        user,
+        projectId,
+        preparedPath,
+    }) {
+        const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}/camera-trajectory/continue`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                preparedPath,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async optimizeCameraTrajectory({
+        user,
+        projectId,
+        preparedPath,
+    }) {
+        const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}/camera-trajectory/optimize`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                preparedPath,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
     async sendCodexAgentMessage({
         user,
         projectId,
@@ -157,6 +302,35 @@ export class ProjectApiClient {
             }),
         });
         return parseApiResponse(response);
+    }
+
+    async sendCodexAgentMessageStream({
+        user,
+        projectId,
+        conversationId,
+        threadId,
+        prompt,
+        workflow,
+        onEvent,
+        onTask,
+        onMessage,
+    }) {
+        const response = await fetch('/api/codex-agent/messages/stream', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                accept: 'text/event-stream',
+            },
+            body: JSON.stringify({
+                user,
+                projectId,
+                conversationId,
+                threadId,
+                prompt,
+                workflow,
+            }),
+        });
+        return parseSseResponse(response, { onEvent, onTask, onMessage });
     }
 
     async sendCodexAgentStepAction({

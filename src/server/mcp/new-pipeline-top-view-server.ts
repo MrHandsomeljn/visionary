@@ -16,6 +16,23 @@ interface GeneratedAsset {
   bytes: number;
 }
 
+interface TopViewIndexResult {
+  index?: number;
+  output_image?: string;
+  success?: boolean;
+  skipped?: boolean;
+  skip_reason?: string;
+  error?: unknown;
+}
+
+interface TopViewIndex {
+  total?: number;
+  success?: number;
+  skipped?: number;
+  failed?: number;
+  results?: TopViewIndexResult[];
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const VISIONARY_ROOT = path.resolve(__dirname, '../../..');
@@ -65,13 +82,24 @@ async function fileAsset(projectRoot: string, id: string, filePath: string, mime
   };
 }
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function emitProgress(title: string, message: string, progress: number): void {
+  const statusId = progress >= 1 ? 'done' : 'running';
   const payload = {
     type: progress <= 0.01 ? 'visionary.task.started' : progress >= 1 ? 'visionary.task.completed' : 'visionary.task.progress',
     payload: {
       title,
       message,
       progress,
+      statusId,
     },
   };
   process.stderr.write(`${JSON.stringify(payload)}\n`);
@@ -104,9 +132,12 @@ async function runPythonScript(args: string[], cwd: string): Promise<{ stdout: s
   });
 }
 
-async function readTopViewImages(projectRoot: string, outputDir: string): Promise<GeneratedAsset[]> {
+async function readTopViewIndex(outputDir: string): Promise<TopViewIndex> {
   const indexRaw = await readFile(path.join(outputDir, 'topview_index.json'), 'utf8');
-  const index = JSON.parse(indexRaw) as { results?: Array<{ index?: number; output_image?: string; success?: boolean }> };
+  return JSON.parse(indexRaw) as TopViewIndex;
+}
+
+async function readTopViewImages(projectRoot: string, outputDir: string, index: TopViewIndex): Promise<GeneratedAsset[]> {
   const results = Array.isArray(index.results) ? index.results : [];
   const assets: GeneratedAsset[] = [];
   for (const result of results) {
@@ -119,6 +150,63 @@ async function readTopViewImages(projectRoot: string, outputDir: string): Promis
     ));
   }
   return assets;
+}
+
+function summarizeTopViewIndex(index: TopViewIndex): string {
+  const results = Array.isArray(index.results) ? index.results : [];
+  const reasonCounts = new Map<string, number>();
+  for (const result of results) {
+    if (result.success) continue;
+    const reason = String(result.skip_reason || result.error || 'unknown').trim() || 'unknown';
+    reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+  }
+  const reasons = [...reasonCounts.entries()]
+    .map(([reason, count]) => `${reason}:${count}`)
+    .join(', ');
+  return [
+    `success=${Number(index.success || 0)}`,
+    `skipped=${Number(index.skipped || 0)}`,
+    `failed=${Number(index.failed || 0)}`,
+    reasons ? `reasons=${reasons}` : '',
+  ].filter(Boolean).join('; ');
+}
+
+export function assertTopViewImagesPresent(images: unknown[], index: TopViewIndex): void {
+  if (images.length > 0) return;
+  throw new Error(`俯视图生成未返回图片（${summarizeTopViewIndex(index)}）。`);
+}
+
+export async function ensureTopViewPromptFileCompatibility(projectRoot: string, sourceMainImagePath: string): Promise<{
+  promptPath: string;
+  sourcePromptPath: string;
+  created: boolean;
+} | null> {
+  const root = path.resolve(projectRoot);
+  const imagePath = path.resolve(sourceMainImagePath);
+  if (!isPathInside(root, imagePath)) {
+    throw new Error('Resolved main image path escapes project root.');
+  }
+  const parsed = /^image_(\d+)\.(?:png|jpe?g)$/i.exec(path.basename(imagePath));
+  if (!parsed) return null;
+  const stem = `image_${parsed[1]}`;
+  const batchDir = path.dirname(imagePath);
+  const promptPath = path.join(batchDir, `${stem}.txt`);
+  if (await pathExists(promptPath)) {
+    return {
+      promptPath: toRelative(root, promptPath),
+      sourcePromptPath: toRelative(root, promptPath),
+      created: false,
+    };
+  }
+  const sourcePromptPath = path.join(batchDir, `${stem}_prompt.txt`);
+  if (!(await pathExists(sourcePromptPath))) return null;
+  const prompt = await readFile(sourcePromptPath, 'utf8');
+  await writeFile(promptPath, prompt, 'utf8');
+  return {
+    promptPath: toRelative(root, promptPath),
+    sourcePromptPath: toRelative(root, sourcePromptPath),
+    created: true,
+  };
 }
 
 function dependencyTree(input: {
@@ -200,6 +288,7 @@ export async function generateTopView(input: {
 
   emitProgress(title, '准备俯视图输出目录', 0.01);
   await mkdir(topViewsDir, { recursive: true });
+  const promptCompatibility = await ensureTopViewPromptFileCompatibility(input.projectRoot, sourceMainImagePath);
 
   emitProgress(title, '调用 front_to_top.py', 0.35);
   await runPythonScript([
@@ -214,7 +303,9 @@ export async function generateTopView(input: {
   ], NEW_PIPELINE_ROOT);
 
   emitProgress(title, '记录输出依赖树', 0.9);
-  const images = await readTopViewImages(input.projectRoot, topViewsDir);
+  const topViewIndex = await readTopViewIndex(topViewsDir);
+  const images = await readTopViewImages(input.projectRoot, topViewsDir, topViewIndex);
+  assertTopViewImagesPresent(images, topViewIndex);
   const tree = dependencyTree({
     runId,
     sourceMainImagePath: input.mainImagePath,
@@ -243,8 +334,11 @@ export async function generateTopView(input: {
       title,
       message: `生成 ${images.length} 张俯视图`,
       progress: 1,
+      statusId: 'done',
     },
-    warnings: [],
+    warnings: promptCompatibility?.created
+      ? [`Created compatible prompt file ${promptCompatibility.promptPath} from ${promptCompatibility.sourcePromptPath}.`]
+      : [],
   };
 }
 
@@ -296,6 +390,7 @@ async function startMcpServer(): Promise<void> {
             title: '俯视图生成',
             message,
             progress: 1,
+            statusId: 'failed',
           },
         };
         return {

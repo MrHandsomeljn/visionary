@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "dist",
+    // Keep declaration-build cache separate from no-emit typecheck cache because emit settings differ.
+    "tsBuildInfoFile": ".cache/tsconfig.build.tsbuildinfo"
+  }
+}

@@ -6,6 +6,15 @@ import { AgentSessionStore } from '../src/editor/agent-session-store.js';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+const HASH_A = 'a'.repeat(64);
+const CANONICAL_IMAGE_REF = {
+    assetId: `sha256:${HASH_A}`,
+    hash: HASH_A,
+    path: `assets/${HASH_A}.png`,
+    mimeType: 'image/png',
+    bytes: 123,
+    kind: 'image',
+};
 
 class MockWritable {
     constructor(target) {
@@ -114,6 +123,10 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
                         relativePath: 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png',
                         mimeType: 'image/png',
                         bytes: 123,
+                        metadata: {
+                            canonicalAssetReference: CANONICAL_IMAGE_REF,
+                            assetReferences: [CANONICAL_IMAGE_REF],
+                        },
                     },
                 ],
                 selectedIndex: 0,
@@ -213,6 +226,10 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
                                                 src: 'mock://runtime-url',
                                                 mimeType: 'image/png',
                                                 bytes: 123,
+                                                metadata: {
+                                                    canonicalAssetReference: CANONICAL_IMAGE_REF,
+                                                    assetReferences: [CANONICAL_IMAGE_REF],
+                                                },
                                             },
                                         ],
                                     },
@@ -255,6 +272,7 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
     assert.equal(persistedSteps[0].stepKey, 'main-image');
     assert.equal(persistedSteps[0].images[0].src, undefined);
     assert.equal(persistedSteps[0].images[0].assetPath, 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png');
+    assert.deepEqual(persistedSteps[0].images[0].metadata.canonicalAssetReference, CANONICAL_IMAGE_REF);
 
     const openaiMessages = persisted.openai_conversation?.data || [];
     assert.equal(openaiMessages.length, 2);
@@ -265,12 +283,17 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
     assert.equal(openaiMessages[1].content.some((item) => item.type === 'visionary_output_image'), true);
 
     const assetIndex = persisted.asset_index || [];
-    assert.equal(assetIndex.length, 2);
-    assert.equal(assetIndex.every((entry) => String(entry.path || '').startsWith('agent_history/')), true);
+    assert.equal(assetIndex.length, 3);
+    assert.equal(assetIndex.filter((entry) => String(entry.path || '').startsWith('agent_history/')).length, 2);
+    const canonicalEntry = assetIndex.find((entry) => entry.path === CANONICAL_IMAGE_REF.path);
+    assert.equal(canonicalEntry?.canonical, true);
+    assert.equal(canonicalEntry?.assetId, CANONICAL_IMAGE_REF.assetId);
+    assert.equal(canonicalEntry?.hash, CANONICAL_IMAGE_REF.hash);
 
-    for (const entry of assetIndex) {
+    for (const entry of assetIndex.filter((entry) => String(entry.path || '').startsWith('agent_history/'))) {
         assert.ok(workspaceRoot.getFileContent(entry.path) !== null, `asset should exist: ${entry.path}`);
     }
+    assert.equal(workspaceRoot.getFileContent(CANONICAL_IMAGE_REF.path), null);
 });
 
 test('AgentSessionStore exportSnapshot can emit uploadable agent_history asset payloads without bound workspace', async () => {

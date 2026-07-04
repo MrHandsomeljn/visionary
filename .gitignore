@@ -8,6 +8,8 @@ public/scenes
 *.model
 !teaser.png
 node_modules/
+.cache/
+*.tsbuildinfo
 *.exr
 *.DS_Store# Ignore docs and TestModel 
 TestModel/ 

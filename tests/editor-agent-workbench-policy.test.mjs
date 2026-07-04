@@ -54,6 +54,22 @@ test('agent scrollbar sync is coalesced instead of queueing duplicate rAF callba
     );
 });
 
+test('agent 3d viewer reuses canonical GLB templates instead of reloading each block', () => {
+    const source = readFileSync(new URL('../src/editor/agent-preview-manager.ts', import.meta.url), 'utf8');
+
+    assert.match(source, /type CachedViewerAsset = \{/);
+    assert.match(source, /private readonly assetCache = new Map<string, CachedViewerAsset>\(\);/);
+    assert.match(source, /function getCanonicalViewerAssetCacheKey\(assetUrl: string\): string/);
+    assert.match(source, /assets\\\/\[a-f0-9\]\{64\}\\\.\[\^\/\?#\]\+/);
+    assert.match(source, /function cloneCachedViewerAsset\(template: THREE\.Object3D\): THREE\.Object3D/);
+    assert.match(source, /cloneSkeletonAwareObject\(template\)/);
+    assert.match(source, /this\.getOrCreateCachedAsset\(assetCacheKey, block\.assetUrl\)\.promise/);
+    assert.match(source, /cachedAsset\.refCount \+= 1;/);
+    assert.match(source, /this\.releaseCachedAssetReference\(cacheKey\);/);
+    assert.match(source, /disposeCachedAssets\(\);/);
+    assert.doesNotMatch(source, /const object = gltf\.scene;[\s\S]*instance\.scene\.add\(object\);/);
+});
+
 test('agent collapse defers layout-heavy sync outside the click frame', () => {
     const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
@@ -449,7 +465,9 @@ test('agent composer exposes single-select skill chips above the prompt input', 
     assert.match(html, /data-agent-skill-insert="camera"[^>]+data-i18n="agent\.skills\.camera"/);
     assert.match(html, /<div class="agent-composer-prompt-surface">[\s\S]*id="agentComposerInput"[\s\S]*contenteditable="plaintext-only"[\s\S]*data-i18n-placeholder="agent\.inputPlaceholder"[\s\S]*id="agentComposerSkillTokens" class="agent-composer-skill-tokens" contenteditable="false" hidden/);
 
-    assert.match(source, /const AGENT_COMPOSER_SKILL_DEFS = \[[\s\S]*value:\s*'\$scene-skill'[\s\S]*value:\s*'\$object-skill'[\s\S]*value:\s*'\$character-skill'[\s\S]*value:\s*'\$camera-skill'/);
+    assert.match(source, /const AGENT_COMPOSER_SKILL_DEFS = \[[\s\S]*value:\s*'\$scene-skill'[\s\S]*workflow:\s*'scene-build'[\s\S]*value:\s*'\$object-skill'[\s\S]*workflow:\s*'object-insert'[\s\S]*value:\s*'\$character-skill'[\s\S]*workflow:\s*'character-create'[\s\S]*value:\s*'\$camera-skill'[\s\S]*workflow:\s*'camera-direct'/);
+    assert.match(source, /const CAMERA_PIPELINE_STEP_DEFS = \[[\s\S]*key:\s*'camera-scene-info'[\s\S]*key:\s*'camera-initial-views'[\s\S]*key:\s*'camera-director'[\s\S]*key:\s*'camera-trajectory'[\s\S]*key:\s*'camera-eval'/);
+    assert.doesNotMatch(source, /key:\s*'camera-apply'/);
     assert.match(source, /aliases:\s*\['\$camera-skill', 'camera-skill'\]/);
     assert.match(source, /agentComposerSkillId:\s*'',/);
     assert.match(source, /function extractAgentComposerSkillText\(text\)/);
@@ -463,6 +481,48 @@ test('agent composer exposes single-select skill chips above the prompt input', 
     assert.match(source, /const tokenWasRemoved = Boolean\(previousSkillId\) && !isAgentComposerSkillTokenMounted\(\);/);
     assert.match(source, /if \(result\.skill\) \{\s*state\.agentComposerSkillId = result\.skill\.id;\s*\} else if \(tokenWasRemoved\) \{\s*state\.agentComposerSkillId = '';\s*\}/);
     assert.match(source, /function buildAgentComposerPromptText\(rawPrompt\)[\s\S]*return `\$\{skill\.value\} \$\{prompt\}`;/);
+    assert.match(source, /function getAgentWorkflowForPrompt\(prompt, fallbackWorkflowId = state\.agentWorkflow\)/);
+    assert.match(source, /const workflowId = parsed\.skill\?\.workflow \|\| '';/);
+    assert.match(source, /return AGENT_WORKFLOW_DEFS\[workflowId\] \? workflowId : fallbackWorkflowId;/);
+    assert.match(source, /const CAMERA_PIPELINE_STAGE_PLAN = \[[\s\S]*'camera_scene_info_export'[\s\S]*'camera_trajectory_eval_render'[\s\S]*\]/);
+    assert.match(source, /const AGENT_PIPELINE_STATUS_DEFS = \{[\s\S]*running:[\s\S]*rendering:[\s\S]*done:[\s\S]*skipped:[\s\S]*canceled:[\s\S]*pending:[\s\S]*\};/);
+    assert.match(source, /skipped:\s*\{[\s\S]*labelKey: 'agent\.pipelineSteps\.pipelineStatuses\.skipped'[\s\S]*className: 'is-skipped'/);
+    assert.match(source, /function shouldShowAgentStepProgressTrack\(statusId, block = \{\}\) \{[\s\S]*normalized === 'running' \|\| normalized === 'rendering'[\s\S]*normalized === 'pending' \|\| normalized === 'done' \|\| normalized === 'skipped' \|\| normalized === 'canceled' \|\| normalized === 'failed'[\s\S]*block\?\.indeterminate/);
+    assert.match(source, /const showProgressTrack = !isStepBlock \|\| \([\s\S]*shouldShowAgentStepProgressTrack\(statusId, block\)[\s\S]*!isApplied[\s\S]*!isCanceledStep[\s\S]*!isInterruptedAttempt/);
+    assert.match(source, /function createCameraPipelineSteps\(\{[\s\S]*const taskEvents = Array\.isArray\(task\?\.events\) \? task\.events : \[\];[\s\S]*\.map\(\(event\) => getAgentTaskEventPayload\(event\)\)[\s\S]*const payloadInputs = eventPayloads\.length > 0[\s\S]*coalesceAgentTaskStepPayloads\(payloadInputs\)[\s\S]*payloads\.map/);
+    assert.match(source, /function getCameraTaskPipelineStages\(payloads = \[\]\)[\s\S]*const stages = \[\];[\s\S]*CAMERA_PIPELINE_STAGE_PLAN\.forEach\(\(stage\) => \{[\s\S]*payload\?\.pipelineStages[\s\S]*return stages;/);
+    assert.match(source, /const plannedStages = getCameraTaskPipelineStages\(payloads\);[\s\S]*plannedStages\.forEach\(\(stage\) => \{[\s\S]*progress:\s*0,[\s\S]*planned:\s*true/);
+    assert.match(source, /const images = normalizeAgentTaskPayloadImages\(payload\.images\);[\s\S]*const artifacts = getPayloadArtifactsForStage\(payload, stage\);[\s\S]*images,[\s\S]*artifacts,[\s\S]*galleryLocked: false,/);
+    assert.match(source, /function coalesceAgentTaskStepPayloads\(payloads = \[\]\)[\s\S]*byKey\.set\(key,[\s\S]*return orderCameraTaskPayloads\(byKey, plannedStages\);/);
+    assert.match(source, /function orderCameraTaskPayloads\(byKey, plannedStages = \[\]\)[\s\S]*plannedStages[\s\S]*ordered\.push\(payload\);[\s\S]*byKey\.forEach/);
+    assert.match(source, /function distributeCameraTaskPayloadArtifacts\(byKey, payload = \{\}\)[\s\S]*payload\.initialViewImages[\s\S]*'camera_initial_view_prepare'[\s\S]*payload\.directorIntentText[\s\S]*'camera_director_analysis'/);
+    assert.match(source, /function getCameraTaskPayloadStage\(payload = \{\}\)[\s\S]*getCameraPipelineStageForStatusText\(getAgentTaskEventStatusText\(payload\)\)[\s\S]*getCameraPipelineStageForTitle\(payload\?\.title\)/);
+    assert.match(source, /function getCameraTaskStageStatuses\(task = \{\}, plannedStages = \[\], payloads = \[\]\)[\s\S]*pipelineStageStatuses[\s\S]*currentStage[\s\S]*'camera_trajectory_eval_render'[\s\S]*'pending'/);
+    assert.match(source, /function applyCameraPipelineImplicitHandoffStatuses\(task = \{\}, statuses = \{\}\)[\s\S]*currentStage === 'camera_scene_info_export'[\s\S]*camera_initial_view_prepare: 'running'/);
+    assert.match(source, /return applyCameraPipelineImplicitHandoffStatuses\(task, statuses\);/);
+    assert.match(source, /function getPayloadArtifactsForStage\(payload = \{\}, stage = ''\)[\s\S]*targetStage === normalizedStage[\s\S]*payloadStage === normalizedStage/);
+    assert.match(source, /function getCameraTaskPayloadStatusId\(payload = \{\}\)[\s\S]*return 'running';[\s\S]*return 'rendering';[\s\S]*return 'done';[\s\S]*return 'skipped';[\s\S]*return 'canceled';[\s\S]*return 'pending';/);
+    assert.match(source, /function dedupeAgentTaskArtifacts\(artifacts = \[\]\)[\s\S]*artifact\?\.text \|\| artifact\?\.content/);
+    assert.match(source, /function getCameraPipelineStageForTitle\(title\)[\s\S]*'相机场景信息导出', 'camera_scene_info_export'[\s\S]*'相机轨迹生成', 'camera_trajectory_generation'/);
+    assert.match(source, /function getAgentTaskEventPayload\(event\)[\s\S]*item\.arguments[\s\S]*parseAgentTaskEventJsonObject\(candidate\)[\s\S]*payload\.visionaryTask/);
+    assert.match(source, /function getCameraPipelineStepDefinitionForStage\(stage\)[\s\S]*normalizedStage === 'camera_scene_info_export'[\s\S]*normalizedStage === 'camera_trajectory_eval_render'/);
+    assert.match(source, /function renderAgentBlockArtifacts\(artifacts = \[\]\)[\s\S]*agent-step-artifacts[\s\S]*agent-step-artifact-text/);
+    assert.match(source, /function renderAgentProgressBlock\(block, context = \{\}\)[\s\S]*getAgentPipelineStatusLabel\(statusId\)[\s\S]*getAgentPipelineStatusClass\(statusId\)/);
+    assert.doesNotMatch(source, /completedCount = progress >= 1 \? CAMERA_PIPELINE_STEP_DEFS\.length/);
+    assert.doesNotMatch(source, /text:\s*task\.statusText/);
+    assert.match(source, /function applyAgentCameraTrajectoryTimeline\(source\)[\s\S]*agentCameraTrajectoryPreview[\s\S]*state\.keyframes = nextKeyframes[\s\S]*markWorkspaceDirty\('agent-camera-trajectory'\)/);
+    assert.match(source, /function resetAgentCameraTrajectoryPreviewForRetry\(\)[\s\S]*restoreCameraTrajectoryTimeline\(preview\.backup\)[\s\S]*agentCameraTrajectoryPreview = \{[\s\S]*\.\.\.preview[\s\S]*source: null/);
+    assert.match(source, /let agentCameraRenderJob = null;/);
+    assert.match(source, /function cancelAgentCameraRenderJob\(\)[\s\S]*status: 'canceled'/);
+    assert.match(source, /async function renderAgentCameraRequests\(job, requests, stage\)[\s\S]*renderVisionaryFrame\(context,[\s\S]*outputs: \['blob'\][\s\S]*projectApi\.writeAsset\(\{/);
+    assert.match(source, /async function continueAgentCameraTrajectoryAfterHostRender\(job, result, finalText\)[\s\S]*projectApi\.continueCameraTrajectory\(\{[\s\S]*needsEvalRender[\s\S]*projectApi\.optimizeCameraTrajectory\(\{/);
+    assert.match(source, /job\.initialViewImages = initialImages;[\s\S]*job\.stage = 'camera_director_analysis';[\s\S]*projectApi\.continueCameraTrajectory/);
+    assert.match(source, /statusId: 'rendering',[\s\S]*message: t\('agent\.pipelineSteps\.cameraEval'\)[\s\S]*projectApi\.optimizeCameraTrajectory/);
+    assert.match(source, /async function completeCameraDirectResultWithHostRender\(\{ sessionId, attemptId, prompt, result \}\)[\s\S]*hasCameraTrajectoryHostRenderRequest[\s\S]*completeServerCodexAgentSessionAttempt\(\{/);
+    assert.match(source, /function markCameraAttemptCanceled\(attempt = \{\}\)[\s\S]*getCanceledCameraPipelineStageStatuses[\s\S]*statusId: stageStatuses\[payload\.stage\] \|\| 'canceled'/);
+    assert.match(source, /workflowId === 'camera-direct'[\s\S]*applyAgentCameraTrajectoryTimeline\(result\?\.task\)/);
+    assert.match(source, /if \(workflowId === 'camera-direct'\) \{[\s\S]*createAgentGenerationAttempt\(\{[\s\S]*blocks:\s*\[\],[\s\S]*steps:\s*\[\],[\s\S]*status:\s*'running'/);
+    assert.doesNotMatch(source, /createCameraPipelineSteps\(\{ pending: true \}\)/);
     assert.match(source, /const effectivePrompt = prompt \? rawPrompt\.trimStart\(\) : attachmentFallback;/);
     assert.match(source, /dom\.agentComposerInput\?\.addEventListener\('input', handleAgentComposerInput\);/);
     assert.match(source, /dom\.agentComposerSkillToolbar\?\.addEventListener\('click', handleAgentComposerSkillToolbarClick\);/);
@@ -474,4 +534,21 @@ test('agent composer exposes single-select skill chips above the prompt input', 
     assert.match(css, /\.agent-composer-input\s*\{[\s\S]*white-space:\s*pre-wrap;[\s\S]*word-break:\s*break-word;/);
     assert.match(css, /\.agent-composer-skill-tokens\s*\{[\s\S]*display:\s*inline-flex;[\s\S]*align-items:\s*center;[\s\S]*height:\s*18px;/);
     assert.match(css, /\.agent-composer-skill-token\s*\{[\s\S]*height:\s*18px;[\s\S]*min-height:\s*0;[\s\S]*border-radius:\s*999px;[\s\S]*vertical-align:\s*baseline;/);
+});
+
+test('server project snapshots restore persisted camera timeline on open', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const loadSnapshotStart = source.indexOf('async function loadSceneFromSnapshot');
+    const openProjectStart = source.indexOf('async function openServerProject');
+    assert.notEqual(loadSnapshotStart, -1);
+    assert.notEqual(openProjectStart, -1);
+    const loadSnapshotSource = source.slice(loadSnapshotStart, openProjectStart);
+
+    assert.match(source, /function applySceneTimelineSnapshot\(timeline,[\s\S]*state\.keyframes = demoSceneActive \? \[\] : loadedTimelineKeyframes;[\s\S]*state\.cameraFovKeyframes = demoSceneActive \? \[\] : loadedTimelineFovKeyframes;[\s\S]*syncCameraSequenceVisualization\(\);/);
+    assert.match(source, /const loadedTimeline = applySceneTimelineSnapshot\(timeline, \{ demoSceneActive \}\);[\s\S]*buildDemoKeyframeRevealQueue\(loadedTimeline\.keyframes\)/);
+    assert.match(loadSnapshotSource, /const timeline = parseSceneTimeline\(raw\);/);
+    assert.match(loadSnapshotSource, /setCameraSequenceVisibility\(raw\.env\.cameraSequenceVisible, true\);/);
+    assert.match(loadSnapshotSource, /else if \(Array\.isArray\(timeline\?\.keyframes\) && timeline\.keyframes\.length > 0\) \{[\s\S]*setCameraSequenceVisibility\(true, true\);/);
+    assert.match(loadSnapshotSource, /applySceneTimelineSnapshot\(timeline\);/);
+    assert.ok(loadSnapshotSource.indexOf('const loadResult = await sceneFs.loadScene') < loadSnapshotSource.indexOf('applySceneTimelineSnapshot(timeline);'));
 });

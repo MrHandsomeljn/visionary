@@ -1,6 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PluginOption, ViteDevServer } from 'vite';
 import { CodexAgentRuntime } from './codex-agent-runtime.ts';
+import {
+  continueCameraTrajectoryAfterEvalRender,
+  continueCameraTrajectoryAfterRender,
+  prepareCameraTrajectoryRender,
+} from './mcp/new-pipeline-camera-trajectory-server.ts';
 import { ProjectStorage, ProjectStorageError, resolveProjectStorageRoot } from './project-storage.ts';
 
 interface ProjectApiResponse {
@@ -50,6 +55,23 @@ function sendError(res: ServerResponse, error: unknown): void {
       message,
     },
   });
+}
+
+function sendSseHeaders(res: ServerResponse): void {
+  res.statusCode = 200;
+  res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+  res.setHeader('cache-control', 'no-cache, no-transform');
+  res.setHeader('connection', 'keep-alive');
+  res.flushHeaders?.();
+}
+
+function writeSse(res: ServerResponse, event: string, data: unknown): void {
+  res.write(`event: ${event}\n`);
+  const payload = JSON.stringify(data ?? null);
+  for (const line of payload.split(/\r?\n/)) {
+    res.write(`data: ${line}\n`);
+  }
+  res.write('\n');
 }
 
 function getQueryString(url: URL, key: string): string {
@@ -202,6 +224,38 @@ async function handleProjectsRequest(
     }
   }
 
+  if (url.pathname === `${CODEX_AGENT_PREFIX}/messages/stream` && (req.method || 'GET') === 'POST') {
+    sendSseHeaders(res);
+    try {
+      const body = readBodyObject(await readJsonBody(req));
+      writeSse(res, 'ready', { ok: true });
+      const result = await codexAgent.sendMessageStream({
+        user: getBodyString(body, 'user'),
+        projectId: getBodyString(body, 'projectId'),
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
+        threadId: typeof body.threadId === 'string' ? body.threadId : undefined,
+        prompt: getBodyString(body, 'prompt'),
+        workflow: typeof body.workflow === 'string' ? body.workflow : undefined,
+      }, {
+        onEvent: (event) => {
+          writeSse(res, 'codex-event', event);
+        },
+        onTask: (task) => {
+          writeSse(res, 'task', task);
+        },
+      });
+      writeSse(res, 'result', result);
+      res.end();
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? 'Unknown error');
+      const code = error instanceof ProjectStorageError ? error.code : 'INTERNAL_ERROR';
+      writeSse(res, 'error', { code, message });
+      res.end();
+      return true;
+    }
+  }
+
   if (
     (url.pathname === AGENT_STEP_ACTION_PREFIX || url.pathname === `${CODEX_AGENT_PREFIX}/step-actions`)
     && (req.method || 'GET') === 'POST'
@@ -348,6 +402,74 @@ async function handleProjectsRequest(
       const user = resolveUser(url, body);
       const payload = Object.prototype.hasOwnProperty.call(body, 'agentHistory') ? body.agentHistory : body;
       sendOk(res, await storage.saveAgentHistory({ user, projectId, payload }));
+      return true;
+    }
+
+    if (action === 'camera-trajectory' && filePath === 'prepare' && method === 'POST') {
+      const body = readBodyObject(await readJsonBody(req));
+      const user = resolveUser(url, body);
+      const projectRoot = await storage.resolveProjectDir(user, projectId);
+      const projectCodexApiKey = await storage.readProjectCodexApiKey(user, projectId).catch(() => '');
+      const explicitApiKey = typeof body.apiKey === 'string' && body.apiKey.trim() ? body.apiKey : '';
+      const hasExplicitProvider = typeof body.apiProvider === 'string' && body.apiProvider.trim();
+      const hasExplicitModel = typeof body.modelName === 'string' && body.modelName.trim();
+      sendOk(res, await prepareCameraTrajectoryRender({
+        projectRoot,
+        projectId,
+        sceneInfoPath: typeof body.sceneInfoPath === 'string' ? body.sceneInfoPath : undefined,
+        humanText: typeof body.humanText === 'string' ? body.humanText : '',
+        segmentCount: typeof body.segmentCount === 'number' ? body.segmentCount : 1,
+        segmentDuration: typeof body.segmentDuration === 'number' ? body.segmentDuration : 3,
+        fps: typeof body.fps === 'number' ? body.fps : 30,
+        keyframeInterval: typeof body.keyframeInterval === 'number' ? body.keyframeInterval : 5,
+        firstFrameOnly: Boolean(body.firstFrameOnly),
+        debugEvalOnly: Boolean(body.debugEvalOnly),
+        maxOptimizationRounds: typeof body.maxOptimizationRounds === 'number' ? body.maxOptimizationRounds : 1,
+        runLabel: typeof body.runLabel === 'string' ? body.runLabel : 'camera-trajectory',
+        apiKey: explicitApiKey || projectCodexApiKey || undefined,
+        apiBase: typeof body.apiBase === 'string' ? body.apiBase : undefined,
+        apiProvider: hasExplicitProvider
+          ? String(body.apiProvider)
+          : projectCodexApiKey
+            ? 'gpt'
+            : undefined,
+        modelName: hasExplicitModel
+          ? String(body.modelName)
+          : projectCodexApiKey
+            ? String(process.env.VISIONARY_CAMERA_TRAJECTORY_MODEL || process.env.LLM_MODEL_NAME || 'gpt-4o')
+            : undefined,
+        sceneBoundsScale: typeof body.sceneBoundsScale === 'number' ? body.sceneBoundsScale : 3,
+      }));
+      return true;
+    }
+
+    if (action === 'camera-trajectory' && filePath === 'continue' && method === 'POST') {
+      const body = readBodyObject(await readJsonBody(req));
+      const user = resolveUser(url, body);
+      const projectRoot = await storage.resolveProjectDir(user, projectId);
+      const generated = await continueCameraTrajectoryAfterRender({
+        projectRoot,
+        projectId,
+        preparedPath: getBodyString(body, 'preparedPath'),
+      });
+      if (generated && typeof generated === 'object' && (generated as Record<string, unknown>).needsEvalRender === true) {
+        sendOk(res, generated);
+        return true;
+      }
+      sendOk(res, generated);
+      return true;
+    }
+
+    if (action === 'camera-trajectory' && filePath === 'optimize' && method === 'POST') {
+      const body = readBodyObject(await readJsonBody(req));
+      const user = resolveUser(url, body);
+      const projectRoot = await storage.resolveProjectDir(user, projectId);
+      const generated = await continueCameraTrajectoryAfterEvalRender({
+        projectRoot,
+        projectId,
+        preparedPath: getBodyString(body, 'preparedPath'),
+      });
+      sendOk(res, generated);
       return true;
     }
 

@@ -8,11 +8,24 @@ test('project api client exposes Codex agent message endpoint', async () => {
 
     assert.match(clientSource, /async sendCodexAgentMessage\(\{[\s\S]*user,[\s\S]*projectId,[\s\S]*conversationId,[\s\S]*threadId,[\s\S]*prompt,[\s\S]*workflow,[\s\S]*\}\)/);
     assert.match(clientSource, /fetch\('\/api\/codex-agent\/messages'/);
+    assert.match(clientSource, /async sendCodexAgentMessageStream\(\{[\s\S]*onEvent,[\s\S]*onTask,[\s\S]*onMessage,[\s\S]*\}\)/);
+    assert.match(clientSource, /fetch\('\/api\/codex-agent\/messages\/stream'/);
+    assert.match(clientSource, /function parseSseResponse\(response, handlers = \{\}\)/);
     assert.match(clientSource, /async sendCodexAgentStepAction\(\{[\s\S]*sessionId,[\s\S]*stepKey,[\s\S]*action,[\s\S]*selectedIndex,[\s\S]*images,[\s\S]*sourceImages,[\s\S]*\}\)/);
     assert.match(clientSource, /fetch\('\/api\/agent\/step-action'/);
+    assert.match(clientSource, /async prepareCameraTrajectory\(\{[\s\S]*humanText,[\s\S]*segmentCount,[\s\S]*sceneBoundsScale,[\s\S]*\}\)/);
+    assert.match(clientSource, /camera-trajectory\/prepare/);
+    assert.match(clientSource, /async continueCameraTrajectory\(\{[\s\S]*preparedPath,[\s\S]*\}\)/);
+    assert.match(clientSource, /camera-trajectory\/continue/);
+    assert.match(clientSource, /async optimizeCameraTrajectory\(\{[\s\S]*preparedPath,[\s\S]*\}\)/);
+    assert.match(clientSource, /camera-trajectory\/optimize/);
     assert.match(serverSource, /const CODEX_AGENT_PREFIX = '\/api\/codex-agent';/);
     assert.match(serverSource, /const AGENT_STEP_ACTION_PREFIX = '\/api\/agent\/step-action';/);
     assert.match(serverSource, /url\.pathname === `\$\{CODEX_AGENT_PREFIX\}\/messages`/);
+    assert.match(serverSource, /url\.pathname === `\$\{CODEX_AGENT_PREFIX\}\/messages\/stream`/);
+    assert.match(serverSource, /sendSseHeaders\(res\)/);
+    assert.match(serverSource, /writeSse\(res, 'task', task\)/);
+    assert.match(serverSource, /writeSse\(res, 'result', result\)/);
     assert.match(serverSource, /url\.pathname === AGENT_STEP_ACTION_PREFIX/);
     assert.match(serverSource, /url\.pathname === `\$\{CODEX_AGENT_PREFIX\}\/step-actions`/);
     assert.match(serverSource, /await codexAgent\.sendMessage\(\{/);
@@ -34,6 +47,7 @@ test('project api exposes per-user Codex auth status and save endpoints', async 
 
 test('editor routes server project agent prompts through Codex before falling back to mock responses', async () => {
     const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const cssSource = await readFile(new URL('../public/editor.css', import.meta.url), 'utf8');
 
     assert.match(source, /agentCodexConversationId:\s*'',/);
     assert.match(source, /agentCodexThreadId:\s*'',/);
@@ -46,6 +60,8 @@ test('editor routes server project agent prompts through Codex before falling ba
     assert.match(runtimeStatusSource, /!state\.projectSession\.codexAuthHasAuth/);
     assert.match(runtimeStatusSource, /agentRuntimeReady/);
     assert.match(source, /function canUseServerCodexAgent\(\) \{\s*return getAgentRuntimeStatus\(\)\.ready;\s*\}/);
+    assert.match(source, /function startAgentEndpointDebug\(\{[\s\S]*waiting for \$\{endpoint\}[\s\S]*taskEvents: summarizeCodexTaskEvents\(result\)/);
+    assert.match(source, /function isAgentDebugEnabled\(workflowId = ''\) \{[\s\S]*workflowId === 'camera-direct'/);
     assert.doesNotMatch(source, /messages\.codexAgentRunning/);
     const runSessionAttemptStart = source.indexOf('function runServerCodexAgentSessionAttempt');
     const startResponseStart = source.indexOf('function startServerCodexAgentResponse');
@@ -57,18 +73,36 @@ test('editor routes server project agent prompts through Codex before falling ba
     assert.match(startResponseSource, /const handle = openAgentAssistantMessage\(\{/);
     assert.match(startResponseSource, /workflow: workflowId,/);
     assert.match(startResponseSource, /isLoading: true,/);
-    assert.match(startResponseSource, /projectApi\.sendCodexAgentMessage\(\{/);
+    assert.match(startResponseSource, /projectApi\.sendCodexAgentMessageStream\(\{/);
+    assert.match(source, /function shouldCreatePendingCodexTaskSession\(workflowId\) \{[\s\S]*shouldUseScenePipelineState\(workflowId\) \|\| workflowId === 'camera-direct'/);
+    assert.match(startResponseSource, /if \(shouldCreatePendingCodexTaskSession\(workflowId\)\) \{[\s\S]*createPendingCodexTaskSession/);
+    assert.doesNotMatch(startResponseSource, /\$scene-skill\(\?=\\s\|\$\)/);
+    assert.doesNotMatch(startResponseSource, /\/\\\$camera-skill\(\?=\\s\|\$\)\/i/);
+    assert.doesNotMatch(startResponseSource, /runVisionaryCameraTrajectoryAgentResponse\(\{/);
+    assert.match(startResponseSource, /const debug = startAgentEndpointDebug\(\{/);
+    assert.match(startResponseSource, /debug\.finish\(result\);/);
+    assert.match(startResponseSource, /debug\.finish\(null, error\);/);
     assert.match(startResponseSource, /conversationId: getCodexAgentConversationId\(\),/);
     assert.match(startResponseSource, /threadId: state\.agentCodexThreadId,/);
     assert.match(startResponseSource, /workflow: workflowId,/);
+    assert.match(source, /function findAgentWorkflowThreadItemLocation\(itemId\) \{/);
+    assert.match(source, /function updateAgentSessionById\(sessionId, updater,[\s\S]*const location = findAgentWorkflowThreadItemLocation\(sessionId\);[\s\S]*location\.items\[location\.index\] = nextSession;[\s\S]*if \(!skipRender && location\.isCurrent\)/);
+    assert.match(source, /function updateAgentMessageById\(messageId, updater\) \{[\s\S]*const location = findAgentWorkflowThreadItemLocation\(messageId\);[\s\S]*if \(location\.isCurrent\)/);
     const submitPromptStart = source.indexOf('function submitAgentPrompt');
     assert.notEqual(submitPromptStart, -1);
     const submitPromptSource = source.slice(submitPromptStart);
-    assert.ok(submitPromptSource.indexOf('if (canUseServerCodexAgent()) {') < submitPromptSource.indexOf('startMockAgentResponse(state.agentWorkflow, effectivePrompt, attachments);'));
-    assert.match(submitPromptSource, /startServerCodexAgentResponse\(state\.agentWorkflow, effectivePrompt, attachments\);/);
+    assert.match(submitPromptSource, /const workflowId = getAgentWorkflowForPrompt\(effectivePrompt, state\.agentWorkflow\);/);
+    assert.doesNotMatch(submitPromptSource, /setAgentWorkflow\(workflowId\);/);
+    assert.ok(submitPromptSource.indexOf('if (canUseServerCodexAgent()) {') < submitPromptSource.indexOf('startMockAgentResponse(workflowId, effectivePrompt, attachments);'));
+    assert.match(submitPromptSource, /startServerCodexAgentResponse\(workflowId, effectivePrompt, attachments\);/);
     assert.match(submitPromptSource, /return;/);
+    assert.match(submitPromptSource, /startMockAgentResponse\(workflowId, effectivePrompt, attachments\);/);
     const runSessionAttemptSource = source.slice(runSessionAttemptStart, startResponseStart);
-    assert.match(runSessionAttemptSource, /projectApi\.sendCodexAgentMessage\(\{/);
+    assert.match(runSessionAttemptSource, /projectApi\.sendCodexAgentMessageStream\(\{/);
+    assert.match(runSessionAttemptSource, /if \(workflowId === 'camera-direct'\) \{[\s\S]*completeCameraDirectResultWithHostRender\(\{/);
+    assert.match(runSessionAttemptSource, /const debug = startAgentEndpointDebug\(\{/);
+    assert.match(runSessionAttemptSource, /debug\.finish\(result\);/);
+    assert.match(runSessionAttemptSource, /debug\.finish\(null, error\);/);
     assert.match(runSessionAttemptSource, /conversationId: getCodexAgentConversationId\(\),/);
     assert.match(runSessionAttemptSource, /threadId: state\.agentCodexThreadId,/);
     assert.match(runSessionAttemptSource, /workflow: workflowId,/);
@@ -78,6 +112,7 @@ test('editor routes server project agent prompts through Codex before falling ba
     const completeAttemptSource = source.slice(completeAttemptStart, runSessionAttemptStart);
     assert.match(completeAttemptSource, /if \(hasCodexTaskSignal\(result\)\)/);
     assert.match(completeAttemptSource, /createCodexTaskAttemptFromResult\(\{/);
+    assert.match(completeAttemptSource, /if \(!shouldUseScenePipelineState\(workflowId\)\) return nextSession;/);
     assert.match(completeAttemptSource, /replaceAgentSessionAttempt\(nextSession, attemptId,/);
     assert.match(completeAttemptSource, /deriveScenePipelineState\(nextSession, attempt\)/);
 
@@ -85,6 +120,11 @@ test('editor routes server project agent prompts through Codex before falling ba
     assert.notEqual(sessionActionStart, -1);
     assert.notEqual(submitPromptStart, -1);
     const sessionActionSource = source.slice(sessionActionStart, submitPromptStart);
+    assert.match(sessionActionSource, /if \(session\.workflow === 'camera-direct'\) \{[\s\S]*createAgentGenerationAttempt\(\{[\s\S]*blocks:\s*\[\],[\s\S]*steps:\s*\[\],[\s\S]*status:\s*'running'[\s\S]*runServerCodexAgentSessionAttempt\(\{/);
+    assert.match(sessionActionSource, /if \(session\.workflow === 'camera-direct'\) \{[\s\S]*cancelAgentCameraRenderJob\(\);[\s\S]*resetAgentCameraTrajectoryPreviewForRetry\(\);/);
+    assert.match(sessionActionSource, /runServerCodexAgentSessionAttempt\(\{[\s\S]*workflowId: session\.workflow,[\s\S]*prompt: retryPrompt,[\s\S]*sessionId,[\s\S]*attemptId: nextAttempt\.id/);
+    assert.doesNotMatch(sessionActionSource, /runVisionaryCameraTrajectoryAgentResponse\(\{/);
+    assert.ok(sessionActionSource.indexOf("if (session.workflow === 'camera-direct')") < sessionActionSource.indexOf('const interruptedStepContext = getInterruptedAgentStepContext'));
     assert.match(sessionActionSource, /if \(canUseServerCodexAgent\(\)\) \{/);
     assert.match(sessionActionSource, /runServerCodexAgentSessionAttempt\(\{/);
     assert.match(sessionActionSource, /workflowId: session\.workflow,/);
@@ -99,6 +139,8 @@ test('editor renders Codex pending state as a spinner inside the assistant bubbl
     assert.match(source, /isLoading = false,[\s\S]*\} = \{\}\) \{/);
     assert.match(source, /message\.isLoading = Boolean\(isLoading\);/);
     assert.match(source, /const isLoading = isAssistant && message\.isLoading;/);
+    assert.match(source, /const isThinkingBeforeMcp = session\.archiveState === 'active'[\s\S]*attempt\?\.status === 'running'[\s\S]*attemptBlocks\.length <= 0;/);
+    assert.match(source, /agent-message-text \$\{isThinkingBeforeMcp \? 'agent-thinking-text' : ''\}/);
     assert.match(source, /agent-message-loading-spinner/);
     assert.match(source, /message\.isLoading = false;/);
     assert.match(
@@ -109,10 +151,13 @@ test('editor renders Codex pending state as a spinner inside the assistant bubbl
         css,
         /\.agent-message-loading-spinner\s*\{[\s\S]*position:\s*absolute;[\s\S]*top:\s*10px;[\s\S]*right:\s*12px;[\s\S]*animation:\s*spin 0\.8s linear infinite;[\s\S]*\}/
     );
+    assert.match(css, /\.agent-thinking-text::after\s*\{[\s\S]*animation:\s*agentThinkingDots 1\.2s steps\(1, end\) infinite;[\s\S]*\}/);
+    assert.match(css, /@keyframes agentThinkingDots\s*\{[\s\S]*content:\s*'\.';[\s\S]*content:\s*'\.\.';[\s\S]*content:\s*'\.\.\.';[\s\S]*\}/);
 });
 
 test('editor shows Codex generation controls only after an explicit task signal', async () => {
     const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const cssSource = await readFile(new URL('../public/editor.css', import.meta.url), 'utf8');
     const startFunction = source.match(/function startServerCodexAgentResponse\(workflowId, prompt, attachments = \[\]\) \{[\s\S]*?\n\}/)?.[0] || '';
     const createSessionFunction = source.match(/function createCodexTaskSessionFromResult\([\s\S]*?\n\}/)?.[0] || '';
 
@@ -129,10 +174,10 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.match(source, /createAgentProgressBlock\(\{[\s\S]*images: progressImages/);
     assert.match(source, /selectedIndex: 0/);
     assert.match(source, /applied: false/);
-    assert.match(source, /actions: progressImages\.length > 0 \? \['cancel', 'retry', 'apply'\] : \[\]/);
+    assert.match(source, /actions: progressImages\.length > 0 \? \['cancel', 'retry', 'apply'\] : \(isFailedTask \? \['cancel', 'retry'\] : \[\]\)/);
     assert.match(source, /const steps = createScenePipelineSteps\(\{[\s\S]*mainImageBlock: progressBlock/);
     assert.match(source, /steps,/);
-    assert.match(source, /renderAgentBlocks\(getAgentAttemptStepBlocks\(attempt\)/);
+    assert.match(source, /const attemptBlocks = getAgentAttemptStepBlocks\(attempt\);[\s\S]*renderAgentBlocks\(attemptBlocks,/);
     assert.match(source, /<details class="agent-block agent-block-progress agent-step-block/);
     assert.match(source, /class="agent-step-gallery/);
     assert.match(source, /data-agent-step-gallery-nav="prev"/);
@@ -149,13 +194,18 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.match(source, /if \(!projectId\) return '';/);
     assert.match(source, /function createAgentStepImageViewer3DBlock\(block, image, selectedIndex = 0\)/);
     assert.match(source, /assetUrl: getAgentStepImageProjectAssetUrl\(glbPath\)/);
+    assert.match(source, /function isCameraPipelineStepKey\(stepKey\) \{[\s\S]*CAMERA_PIPELINE_STAGE_PLAN\.includes\(String\(stepKey \|\| ''\)\);[\s\S]*\}/);
+    assert.match(source, /function isAgentStepGalleryNavigationLocked\(block, attempt = null\) \{[\s\S]*attempt\?\.status === 'interrupted'[\s\S]*typeof block\?\.galleryLocked === 'boolean'[\s\S]*isCameraPipelineStepKey\(block\?\.stepKey\)[\s\S]*Boolean\(block\?\.applied\);[\s\S]*\}/);
     assert.match(source, /function renderAgentStepGalleryMain\(\{/);
+    assert.match(source, /const isGalleryLocked = isAgentStepGalleryNavigationLocked\(block,[\s\S]*!isGalleryLocked && selectedIndex > 0[\s\S]*!isGalleryLocked && selectedIndex < images\.length - 1/);
     assert.match(source, /data-agent-viewer-block-id="\$\{escapeHtml\(viewerBlock\.id\)\}"/);
     assert.doesNotMatch(source, /class="agent-step-viewer-thumb"/);
     assert.match(source, /renderAgentStepGalleryMain\(\{ block, images, selectedImage, selectedIndex, isApplied, isInterruptedAttempt \}\)/);
     assert.match(source, /function updateAgentStepSelectedIndex\(context, selectedIndex\)/);
     assert.match(source, /function updateAgentStepGalleryDom\(context\)/);
     assert.match(source, /galleryMain\.innerHTML = renderAgentStepGalleryMain\(\{/);
+    assert.match(source, /button\.disabled = isAgentStepGalleryNavigationLocked\(context\.block, context\.attempt\)/);
+    assert.match(source, /if \(!context \|\| isAgentStepGalleryNavigationLocked\(context\.block, context\.attempt\)\) return;/);
     assert.match(source, /void syncAgent3DBlocks\(\);/);
     assert.match(source, /skipRender: true/);
     assert.match(source, /function renderAgentStepBlockElement\(context, \{ autoScroll = 'preserve-or-pin-bottom' \} = \{\}\)/);
@@ -173,23 +223,22 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.match(source, /handleAgentStepAction\(context, action\)\.catch/);
     assert.match(source, /function handleAgentStepAction\(context, action\)/);
     assert.match(source, /projectApi\.sendCodexAgentStepAction\(\{/);
+    assert.match(source, /failed:\s*\{[\s\S]*labelKey: 'agent\.pipelineSteps\.pipelineStatuses\.failed'[\s\S]*className: 'is-failed'/);
+    assert.match(source, /failed: '失败'/);
+    assert.match(source, /failed: 'Failed'/);
+    assert.match(cssSource, /\.agent-step-state\.is-failed/);
+    assert.match(source, /normalized === 'failed'/);
     assert.match(source, /const liveContext = getAgentStepBlockContextById\(context\?\.sessionId, context\?\.attemptId, context\?\.blockId\) \|\| context;/);
+    assert.match(source, /catch \(error\) \{[\s\S]*patchAgentStepBlock\(liveContext, \{[\s\S]*statusId: 'failed'[\s\S]*actions: \['cancel', 'retry'\]/);
     assert.match(source, /function getSelectedAgentStepSourceImageFromSession\(session, currentAttempt, stepKey\)/);
     assert.match(source, /sourceImages: \[[\s\S]*serializeAgentSessionStepSourceImage\(liveContext\.session, liveContext\.attempt, 'main-image'\)[\s\S]*serializeAgentSessionStepSourceImage\(liveContext\.session, liveContext\.attempt, 'top-view'\)[\s\S]*serializeAgentSessionStepSourceImage\(liveContext\.session, liveContext\.attempt, 'layout'\)[\s\S]*serializeAgentSessionStepSourceImage\(liveContext\.session, liveContext\.attempt, 'components-3d'\)/);
     assert.doesNotMatch(source, /serializeAgentSessionStepSourceImage\(liveContext\.session, liveContext\.attempt, 'front-view'\)/);
-    assert.match(source, /const appliedContext = getAgentStepBlockContextById\(liveContext\.sessionId, liveContext\.attemptId, liveContext\.blockId\) \|\| liveContext;[\s\S]*const nextContext = advanceAgentPipelineAfterStepApply\(appliedContext\);/);
-    const advanceStepStart = source.indexOf('function advanceAgentPipelineAfterStepApply');
-    const createBlockIdStart = source.indexOf('function createAgentBlockId', advanceStepStart);
-    assert.notEqual(advanceStepStart, -1);
-    assert.notEqual(createBlockIdStart, -1);
-    const advanceStepSource = source.slice(advanceStepStart, createBlockIdStart);
-    assert.match(advanceStepSource, /skipRender: true/);
-    assert.match(advanceStepSource, /renderAgentStepBlockElement\(currentContext/);
-    assert.match(advanceStepSource, /renderAgentStepBlockElement\(nextContext/);
+    assert.match(source, /await advanceAgentPipelineAfterStepApply\(liveContext\)/);
+    assert.match(source, /await handleAgentStepAction\(nextContext, 'retry'\)/);
     assert.match(source, /sourceStepKey: stepKey/);
     assert.match(source, /const isCurrentStepStatus = isStepBlock[\s\S]*\/\^\(当前步骤\|Current step\)\$\/i\.test\(String\(block\.statusText \|\| ''\)\.trim\(\)\);/);
     assert.match(source, /let statusText = block\.statusText;[\s\S]*isInterruptedAttempt[\s\S]*\|\| isCurrentStepStatus[\s\S]*statusText = '';/);
-    assert.match(source, /const showProgressTrack = !isStepBlock \|\| \(!isApplied && !isCanceledStep && !isInterruptedAttempt\);/);
+    assert.match(source, /const showProgressTrack = !isStepBlock \|\| \([\s\S]*shouldShowAgentStepProgressTrack\(statusId, block\)[\s\S]*!isApplied[\s\S]*!isCanceledStep[\s\S]*!isInterruptedAttempt[\s\S]*\);/);
     assert.match(source, /const forceCollapsed = isStepBlock && Boolean\(context\.stepBlocksCollapsed\);/);
     assert.match(source, /const isOpen = !isStepBlock \|\| \(!forceCollapsed && Boolean\(block\.expanded \|\| block\.isCurrent \|\| \(!isApplied && \(selectedImage \|\| actions\.length > 0 \|\| showContinue\)\)\)\);/);
     assert.match(source, /\$\{showProgressTrack \? `<span class="agent-block-meta">\$\{percentText\}<\/span>` : ''\}/);
@@ -199,7 +248,7 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.match(source, /if \(metadata\.kind === 'layout_bbox'\) return 1;[\s\S]*return null;/);
     assert.match(source, /renderAgentImageAspectStyle\(selectedImage\)/);
     assert.match(source, /loading="eager" decoding="async"/);
-    assert.match(source, /const stepStateLabel = isApplied[\s\S]*\? t\('agent\.pipelineSteps\.applied'\)[\s\S]*: isCanceledStep[\s\S]*\? t\('common\.canceled'\)[\s\S]*: isInterruptedAttempt[\s\S]*\? t\('common\.interrupted'\)[\s\S]*: '';/);
+    assert.match(source, /const statusId = normalizeAgentPipelineStatusId\(block\.statusId\);[\s\S]*const stepStateLabel = isStepBlock[\s\S]*getAgentPipelineStatusLabel\(statusId\)[\s\S]*: isApplied[\s\S]*\? t\('agent\.pipelineSteps\.applied'\)[\s\S]*: isCanceledStep[\s\S]*\? t\('common\.canceled'\)[\s\S]*: isInterruptedAttempt[\s\S]*\? t\('common\.interrupted'\)[\s\S]*: '';/);
     assert.doesNotMatch(source, /agent-step-current-tag/);
     assert.match(source, /function getAgentPipelineProgressLabel\(attempt\)/);
     assert.match(source, /t\('common\.progressCount', \{[\s\S]*current: completed,[\s\S]*total: scopedBlocks\.length/);
@@ -239,8 +288,8 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.doesNotMatch(renderMetadataFunction, /metadata\.glbPaths/);
     assert.doesNotMatch(renderMetadataFunction, /components3dAssets/);
     assert.match(source, /patchAgentStepBlock\(liveContext, \{[\s\S]*images: nextImages/);
-    assert.match(source, /if \(patch\.sceneInsertPlan && typeof patch\.sceneInsertPlan === 'object'\) \{/);
-    assert.match(source, /await applyAgentSceneInsertPlan\(patch\.sceneInsertPlan\)/);
+    assert.match(source, /\.\.\.\(patch\.sceneInsertPlan && typeof patch\.sceneInsertPlan === 'object' \? \{ sceneInsertPlan: patch\.sceneInsertPlan \} : \{\}\)/);
+    assert.doesNotMatch(source, /await applyAgentSceneInsertPlan\(patch\.sceneInsertPlan\)/);
     assert.match(source, /function buildAgentStepStatesSnapshot\(\)/);
     assert.match(source, /stepStates: buildAgentStepStatesSnapshot\(\)/);
     assert.match(source, /function buildAgentPipelineStatesSnapshot\(\)/);
@@ -264,15 +313,17 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.match(source, /window\.addEventListener\('beforeunload', interruptAgentTasksForPageExit\);/);
     assert.match(source, /const isInterruptedAttempt = context\?\.attempt\?\.status === 'interrupted';/);
     assert.match(source, /const actions = isInterruptedAttempt && isStepBlock[\s\S]*\? \[\][\s\S]*: \(Array\.isArray\(block\.actions\) \? block\.actions : \[\]\);/);
-    assert.match(source, /const isCanceledStep = isStepBlock && \/\^已取消\|\^Canceled\/i\.test\(String\(block\.statusText \|\| ''\)\);/);
+    assert.match(source, /const isCanceledStep = isStepBlock && \(statusId === 'canceled' \|\| \/\^已取消\|\^Canceled\/i\.test\(String\(block\.statusText \|\| ''\)\)\);/);
     assert.match(source, /let statusText = block\.statusText;/);
     assert.match(source, /isInterruptedAttempt[\s\S]*\|\| isCurrentStepStatus[\s\S]*\|\| \(isApplied && \/\^已应用\|\^Applied\/i\.test\(String\(block\.statusText \|\| ''\)\)\)/);
-    assert.match(source, /const showProgressTrack = !isStepBlock \|\| \(!isApplied && !isCanceledStep && !isInterruptedAttempt\);/);
+    assert.match(source, /const showProgressTrack = !isStepBlock \|\| \([\s\S]*shouldShowAgentStepProgressTrack\(statusId, block\)[\s\S]*!isApplied[\s\S]*!isCanceledStep[\s\S]*!isInterruptedAttempt[\s\S]*\);/);
     assert.match(source, /const showInterruptedStepActions = isInterruptedAttempt && isStepBlock && block\.isCurrent && !isApplied && context\.sessionId;/);
     assert.match(source, /showInterruptedStepActions \? `[\s\S]*data-agent-interrupted-step-action="cancel"[\s\S]*data-agent-interrupted-step-action="retry"/);
     assert.match(source, /function getInterruptedAgentStepContext\(sessionId, attemptId = ''\)/);
     assert.match(source, /function resumeInterruptedAgentStepAttempt\(context\)/);
     assert.match(source, /function handleInterruptedAgentStepAction\(context, action\)/);
+    assert.match(source, /if \(liveContext\.session\?\.workflow === 'camera-direct'\) \{[\s\S]*await handleAgentSessionAction\(liveContext\.sessionId, 'retry'\);[\s\S]*return;/);
+    assert.ok(source.indexOf("if (liveContext.session?.workflow === 'camera-direct')") < source.indexOf('resumeInterruptedAgentStepAttempt(liveContext);'));
     assert.match(source, /resumeInterruptedAgentStepAttempt\(liveContext\);[\s\S]*await handleAgentStepAction\(retryContext, 'retry'\);/);
     assert.match(source, /const interruptedStepActionButton = event\.target\.closest\('\[data-agent-interrupted-step-action\]'\)/);
     assert.match(source, /handleInterruptedAgentStepAction\(context, action\)\.catch/);
@@ -294,18 +345,128 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.doesNotMatch(startFunction, /createAgentSession/);
 });
 
-test('editor applies insert-scene plan directly into the Visionary scene', async () => {
+test('editor applies insert-scene plan only after final user confirmation', async () => {
     const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const stepActionStart = source.indexOf('async function handleAgentStepAction(context, action)');
+    const sessionActionStart = source.indexOf('async function handleAgentSessionAction', stepActionStart);
+    const stepActionSource = source.slice(stepActionStart, sessionActionStart);
+    const createPreviewStart = source.indexOf('async function createAgentSceneInsertPreview');
+    const commitPreviewStart = source.indexOf('function commitAgentSceneInsertPreview', createPreviewStart);
+    const applyPlanStart = source.indexOf('async function applyAgentSceneInsertPlan', commitPreviewStart);
+    const createPreviewSource = source.slice(createPreviewStart, commitPreviewStart);
+    const commitPreviewSource = source.slice(commitPreviewStart, applyPlanStart);
 
     assert.match(source, /async function applyAgentSceneInsertPlan\(plan\) \{/);
+    assert.match(source, /let agentSceneInsertPreview = null;/);
+    assert.match(source, /const agentCanonicalAssetBlobCache = new Map\(\);/);
+    assert.match(source, /function getCachedCanonicalizedServerProjectAsset\(\.\.\.keys\)/);
+    assert.match(source, /function rememberCanonicalizedServerProjectAsset\(asset, \.\.\.keys\)/);
+    assert.match(source, /async function canonicalizeServerProjectAssetBlob\(\{ sourcePath, fileName, blob \}\)/);
+    assert.match(source, /const cached = getCachedCanonicalizedServerProjectAsset\(sourcePath\);[\s\S]*if \(cached\) return cached;/);
+    assert.match(source, /const hashHex = await computeAssetContentHashHex\(content\)/);
+    assert.match(source, /const relativePath = buildServerAssetRelativePath\(hashHex, fileName \|\| sourcePath \|\| 'asset\.glb'\)/);
+    assert.match(source, /const cachedByHash = getCachedCanonicalizedServerProjectAsset\(relativePath, `sha256:\$\{hashHex\}`\);[\s\S]*return rememberCanonicalizedServerProjectAsset\(cachedByHash, sourcePath\)/);
+    assert.match(source, /await projectApi\.writeAsset\(\{[\s\S]*relativePath,[\s\S]*content/);
+    assert.match(source, /return rememberCanonicalizedServerProjectAsset\(\{[\s\S]*path: relativePath,[\s\S]*hash: hashHex,[\s\S]*content,[\s\S]*\}, sourcePath\);/);
+    assert.match(source, /function clearAgentSceneInsertPreviewForContext\(context = null\)/);
+    assert.match(source, /async function loadAgentSceneInsertPlanModels\(plan\)/);
+    assert.match(source, /async function createAgentSceneInsertPreview\(context, plan\)/);
+    assert.match(source, /function commitAgentSceneInsertPreview\(context\)/);
+    assert.match(source, /canonicalAssetReferences: createEmptyCanonicalAssetReferenceSnapshot\(\)/);
+    assert.match(source, /canonicalAssetGcPlan: createEmptyCanonicalAssetGcPlan\(\)/);
+    assert.match(source, /function collectCanonicalAssetReferences\(\{/);
+    assert.match(source, /function buildConservativeCanonicalAssetGcPlan\(\{/);
+    assert.match(source, /disabled: true,[\s\S]*reason: 'Conservative canonical asset GC is report-only/);
+    assert.match(source, /deletable: new Set\(\)/);
+    assert.match(source, /collectCanonicalAssetPathsFromValue\(scene\)\.forEach\(\(pathValue\) => addCanonicalAssetReference\(snapshot, 'scene', pathValue\)\)/);
+    assert.match(source, /collectCanonicalAssetPathsFromValue\(agentHistory\)\.forEach\(\(pathValue\) => addCanonicalAssetReference\(snapshot, 'agent', pathValue\)\)/);
+    assert.match(source, /collectCanonicalAssetPathsFromValue\(preview\)\.forEach\(\(pathValue\) => addCanonicalAssetReference\(snapshot, 'preview', pathValue\)\)/);
+    assert.match(source, /paths\.forEach\(\(pathValue\) => addCanonicalAssetReference\(snapshot, 'active', pathValue\)\)/);
+    assert.match(source, /refreshCanonicalAssetReferenceState\(\);[\s\S]*if \(state\.selectedModelId === id\)/);
+    assert.match(source, /agentSceneInsertPreview = null;[\s\S]*refreshCanonicalAssetReferenceState\(\);[\s\S]*if \(removed > 0\)/);
+    assert.match(createPreviewSource, /agentSceneInsertPreview = \{[\s\S]*assetReferences: result\.assetReferences,[\s\S]*\};[\s\S]*refreshCanonicalAssetReferenceState\(\);/);
+    assert.match(commitPreviewSource, /agentSceneInsertPreview = null;[\s\S]*refreshCanonicalAssetReferenceState\(\);[\s\S]*markWorkspaceDirty\('agent-insert-scene'\)/);
+    assert.match(source, /if \(isServerAgentAssetPath\(relativePath\) \|\| isServerMaterializedAssetPath\(relativePath\)\) \{/);
+    assert.match(stepActionSource, /if \(action === 'apply' && liveContext\.stepKey === 'insert-scene'\)/);
+    assert.match(stepActionSource, /const plan = liveContext\.block\?\.sceneInsertPlan/);
+    assert.match(stepActionSource, /inserted = commitAgentSceneInsertPreview\(liveContext\) \|\| await applyAgentSceneInsertPlan\(plan\)/);
+    assert.match(stepActionSource, /clearAgentSceneInsertPreviewForContext\(liveContext\)/);
+    assert.match(stepActionSource, /await createAgentSceneInsertPreview\(liveContext, patch\.sceneInsertPlan\)/);
+    assert.match(stepActionSource, /statusText: t\('agent\.pipelineSteps\.insertScenePreviewReady', \{ count: preview\.loaded \}\)/);
+    assert.match(stepActionSource, /setAgentSessionArchiveState\(current, \{[\s\S]*archiveState: 'applied'[\s\S]*summaryLabel: t\('common\.applied'\)/);
+    assert.match(source, /insertScenePreviewReady: '已在画布生成 \{count\} 个场景对象预览，请检查后应用、重试或取消'/);
+    assert.match(source, /insertScenePreviewReady: 'Previewed \{count\} scene objects on the canvas\. Review, then apply, retry, or cancel\.'/);
+    assert.match(stepActionSource, /\.\.\.\(patch\.sceneInsertPlan && typeof patch\.sceneInsertPlan === 'object' \? \{ sceneInsertPlan: patch\.sceneInsertPlan \} : \{\}\)/);
     assert.match(source, /projectApi\.getAssetUrl\(\s*state\.projectSession\.user,[\s\S]*state\.projectSession\.activeProjectId,[\s\S]*sourcePath/);
-    assert.match(source, /const fileForLoad = new File\(\[blob\], targetName/);
-    assert.match(source, /await app\.loadModel\(fileForLoad, \{[\s\S]*sourcePath: targetName,[\s\S]*suppressLoadingOverlay: true/);
+    assert.match(source, /const canonicalAsset = await canonicalizeServerProjectAssetBlob\(\{[\s\S]*sourcePath,[\s\S]*fileName: targetName,[\s\S]*blob/);
+    assert.match(source, /assetId: `sha256:\$\{canonicalAsset\.hash\}`/);
+    assert.match(source, /path: canonicalAsset\.path/);
+    assert.match(source, /const fileForLoad = new File\(\[canonicalAsset\.content\], targetName/);
+    assert.match(source, /await app\.loadModel\(fileForLoad, \{[\s\S]*sourcePath: canonicalAsset\.path,[\s\S]*suppressLoadingOverlay: true/);
+    assert.match(source, /app\.renameModel\?\.\(loadedModel\.id, targetName, \{[\s\S]*sourcePath: canonicalAsset\.path/);
     assert.match(source, /app\.setModelPosition\(loadedModel\.id, position\[0\], position\[1\], position\[2\]\)/);
     assert.match(source, /app\.setModelRotation\(loadedModel\.id, rotation\[0\], rotation\[1\], rotation\[2\]\)/);
     assert.match(source, /app\.setModelScale\(loadedModel\.id, resolveAgentSceneInsertScale\(loadedModel, transform\)\)/);
+    assert.match(source, /if \(transform\.scaleMode === 'embedded'\) return 1;/);
     assert.match(source, /function computeObject3DDimensions\(root\)/);
-    assert.match(source, /markWorkspaceDirty\('agent-insert-scene'\)/);
+    assert.doesNotMatch(createPreviewSource, /markWorkspaceDirty\('agent-insert-scene'\)/);
+    assert.match(commitPreviewSource, /markWorkspaceDirty\('agent-insert-scene'\)/);
+    assert.match(source, /session\.workflow === 'scene-build'[\s\S]*clearAgentSceneInsertPreviewForContext\(\{[\s\S]*sessionId,[\s\S]*attemptId: activeAttempt\?\.id \|\| ''/);
+});
+
+test('editor scene step retry invalidates downstream unconfirmed stage state', async () => {
+    const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const resetStart = source.indexOf('function resetDownstreamScenePipelineStepsForRetry');
+    const stepActionStart = source.indexOf('async function handleAgentStepAction(context, action)');
+    const advanceStart = source.indexOf('async function advanceAgentPipelineAfterStepApply', stepActionStart);
+    assert.notEqual(resetStart, -1);
+    assert.notEqual(stepActionStart, -1);
+    assert.notEqual(advanceStart, -1);
+    const resetSource = source.slice(resetStart, stepActionStart);
+    const stepActionSource = source.slice(stepActionStart, advanceStart);
+
+    assert.match(resetSource, /const retryIndex = SCENE_PIPELINE_STEP_DEFS\.findIndex\(\(step\) => step\.key === context\.stepKey\)/);
+    assert.match(resetSource, /if \(block\.applied \|\| stepIndex <= retryIndex\) return block;/);
+    assert.match(resetSource, /images:\s*\[\]/);
+    assert.match(resetSource, /selectedIndex:\s*0/);
+    assert.match(resetSource, /applied:\s*false/);
+    assert.match(resetSource, /actions:\s*\[\]/);
+    assert.match(resetSource, /artifacts:\s*\[\]/);
+    assert.match(resetSource, /sceneInsertPlan:\s*undefined/);
+    assert.match(resetSource, /pipelineState: deriveScenePipelineState\(session, nextAttempt, \{/);
+    assert.match(resetSource, /clearAgentSceneInsertPreviewForContext\(context\)/);
+    assert.match(stepActionSource, /if \(action === 'retry'\) \{[\s\S]*resetDownstreamScenePipelineStepsForRetry\(liveContext\);[\s\S]*\}/);
+});
+
+test('editor preserves failed initial scene-build task state with retry and cancel actions', async () => {
+    const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const attemptStart = source.indexOf('function createCodexTaskAttemptFromResult');
+    const sessionStart = source.indexOf('function createCodexTaskSessionFromResult', attemptStart);
+    assert.notEqual(attemptStart, -1);
+    assert.notEqual(sessionStart, -1);
+    const attemptSource = source.slice(attemptStart, sessionStart);
+
+    assert.match(attemptSource, /const taskStatusId = normalizeAgentPipelineStatusId\(task\.statusId\);/);
+    assert.match(attemptSource, /const isFailedTask = taskStatusId === 'failed';/);
+    assert.match(attemptSource, /statusId: taskStatusId \|\| \(progressImages\.length > 0 \? 'done' : ''\)/);
+    assert.match(attemptSource, /actions: progressImages\.length > 0 \? \['cancel', 'retry', 'apply'\] : \(isFailedTask \? \['cancel', 'retry'\] : \[\]\)/);
+    assert.match(attemptSource, /isCurrent: progressImages\.length > 0 \|\| isFailedTask/);
+});
+
+test('editor streams task images into the active agent progress step', async () => {
+    const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const css = await readFile(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const runtimeSource = await readFile(new URL('../src/server/codex-agent-runtime.ts', import.meta.url), 'utf8');
+
+    assert.match(source, /const taskImages = Array\.isArray\(task\.images\) \? task\.images : \[\];/);
+    assert.match(source, /images: taskImages\.length > 0 \? taskImages : \(Array\.isArray\(block\.images\) \? block\.images : \[\]\)/);
+    assert.match(source, /selectedIndex: taskImages\.length > 0 \? taskImages\.length - 1 : block\.selectedIndex/);
+    assert.match(source, /function renderAgentBlockArtifacts\(artifacts = \[\]\)/);
+    assert.match(css, /\.agent-step-artifacts\s*\{[\s\S]*display:\s*grid;[\s\S]*\}/);
+    assert.match(css, /\.agent-step-artifact-text\s*\{[\s\S]*white-space:\s*pre-wrap;[\s\S]*overflow-wrap:\s*anywhere;[\s\S]*\}/);
+    assert.match(runtimeSource, /initialViewImages\?: CodexGeneratedImage\[\];/);
+    assert.match(runtimeSource, /task\.initialViewImages = initialViewImages;/);
+    assert.match(runtimeSource, /task\.directorIntentText = payload\.directorIntentText\.trim\(\);/);
 });
 
 test('insert-scene MCP produces a scene insert plan instead of Blender output', async () => {

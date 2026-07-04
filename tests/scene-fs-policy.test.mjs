@@ -32,6 +32,21 @@ test('EditorApp can suppress per-model loading overlay during batch scene restor
     assert.match(source, /if \(shouldManageLoadingOverlay\) \{\s*this\.showLoading\(false\);\s*\}/s);
 });
 
+test('EditorApp reuses canonical GLB mesh templates for repeated scene models', () => {
+    const source = readFileSync(new URL('../src/editor/editor-app.ts', import.meta.url), 'utf8');
+
+    assert.match(source, /const CANONICAL_EDITOR_MESH_ASSET_PATH_RE = \/\^assets\\\/\[a-f0-9\]\{64\}\\\.\(\?:glb\|gltf\)\$\/i;/);
+    assert.match(source, /private meshModelTemplateCache: Map<string, CachedMeshTemplate> = new Map\(\);/);
+    assert.match(source, /private getCanonicalMeshTemplateCacheKey\(sourcePath = ""\): string/);
+    assert.match(source, /this\.meshModelTemplateCache\.get\(meshTemplateCacheKey\)/);
+    assert.match(source, /meshObject = this\.cloneMeshTemplate\(cachedTemplate\.object3D\);/);
+    assert.match(source, /cachedTemplate\.refCount \+= 1;/);
+    assert.match(source, /this\.meshModelTemplateCache\.set\(meshTemplateCacheKey, \{/);
+    assert.match(source, /sharedMeshResourceKey: sharedMeshResourceKey \|\| undefined/);
+    assert.match(source, /if \(model\.sharedMeshResourceKey\) \{[\s\S]*this\.releaseMeshTemplateReference\(model\.sharedMeshResourceKey\);[\s\S]*return;[\s\S]*\}/);
+    assert.match(source, /this\.disposeMeshTemplateCache\(\);/);
+});
+
 test('EditorApp exposes getModelManager for SceneFS transform restore compatibility', () => {
     const source = readFileSync(new URL('../src/editor/editor-app.ts', import.meta.url), 'utf8');
 

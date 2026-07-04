@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,16 @@ interface GeneratedAsset {
   mimeType: string;
   bytes: number;
   metadata?: JsonRecord;
+}
+
+interface CanonicalAssetReference {
+  assetId: string;
+  hash: string;
+  path: string;
+  mimeType: string;
+  bytes: number;
+  kind: string;
+  provenance?: JsonRecord;
 }
 
 interface Component3DItem {
@@ -40,23 +51,14 @@ const NEW_PIPELINE_ROOT = path.resolve(process.env.VISIONARY_NEW_PIPELINE_ROOT |
 const PYTHON_BIN = path.join(NEW_PIPELINE_ROOT, '.venv', 'bin', 'python');
 const DEFAULT_COMPONENTS_3D_DEMO_GLB_DIR = path.join(
   VISIONARY_ROOT,
-  '.visionary-projects',
-  'ljn-codex-6b3e59d3fd',
-  'ljn-codex-test-e2bf4ba1be',
-  'agent_history',
   'assets',
-  'new_pipeline',
-  'ljn-codex-test-e2bf4ba1be',
-  '20260623_components-3d-existing-glb-demo',
-  'main_images',
-  'pipeline_output',
-  'hunyuan_outputs',
-  'image_001',
+  'mock-components-3d',
+  'moon-visionary-workspace',
 );
 const COMPONENTS_3D_DEMO_GLB_DIR = path.resolve(
   process.env.VISIONARY_COMPONENTS_3D_DEMO_GLB_DIR || DEFAULT_COMPONENTS_3D_DEMO_GLB_DIR,
 );
-const COMPONENTS_3D_DEMO_ASSET_COUNT = 7;
+const COMPONENTS_3D_DEMO_ASSET_COUNT = 9;
 
 function nowRunId(): string {
   return new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '_');
@@ -110,13 +112,48 @@ async function fileAsset(projectRoot: string, id: string, filePath: string, mime
   };
 }
 
-function emitProgress(title: string, message: string, progress: number): void {
+async function writeCanonicalProjectAssetFromFile(input: {
+  projectRoot: string;
+  filePath: string;
+  mimeType: string;
+  kind: string;
+  sourcePath: string;
+}): Promise<CanonicalAssetReference> {
+  const root = path.resolve(input.projectRoot);
+  const buffer = await readFile(input.filePath);
+  const hash = createHash('sha256').update(buffer).digest('hex');
+  const extension = (path.extname(input.filePath) || '.bin').toLowerCase();
+  const relativePath = `assets/${hash}${extension}`;
+  const targetPath = path.join(root, ...relativePath.split('/'));
+  if (!isPathInside(root, targetPath)) {
+    throw new Error('Resolved canonical asset path escapes project root.');
+  }
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await writeFile(targetPath, buffer);
+  return {
+    assetId: `sha256:${hash}`,
+    hash,
+    path: relativePath,
+    mimeType: input.mimeType,
+    bytes: buffer.byteLength,
+    kind: input.kind,
+    provenance: {
+      sourcePath: input.sourcePath,
+      stage: 'components-3d',
+    },
+  };
+}
+
+function emitProgress(title: string, message: string, progress: number, extras: JsonRecord = {}): void {
+  const statusId = progress >= 1 ? 'done' : 'running';
   const payload = {
     type: progress <= 0.01 ? 'visionary.task.started' : progress >= 1 ? 'visionary.task.completed' : 'visionary.task.progress',
     payload: {
       title,
       message,
       progress,
+      statusId,
+      ...extras,
     },
   };
   process.stderr.write(`${JSON.stringify(payload)}\n`);
@@ -151,6 +188,7 @@ async function runPythonScript(args: string[], cwd: string): Promise<{ stdout: s
 
 async function runBlenderScript(args: string[]): Promise<{ stdout: string; stderr: string }> {
   const blenderBin = process.env.BLENDER_BIN || 'blender';
+  const timeoutMs = Math.max(1000, Number(process.env.VISIONARY_BLENDER_TIMEOUT_MS || 15000) || 15000);
   return new Promise((resolve, reject) => {
     const child = spawn(blenderBin, ['--background', '--python', ...args], {
       cwd: VISIONARY_ROOT,
@@ -165,8 +203,16 @@ async function runBlenderScript(args: string[]): Promise<{ stdout: string; stder
     child.stderr.on('data', (chunk) => {
       stderr += String(chunk);
     });
-    child.on('error', reject);
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`Blender script timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
     child.on('close', (code) => {
+      clearTimeout(timer);
       if (code === 0) {
         resolve({ stdout, stderr });
         return;
@@ -229,6 +275,7 @@ async function writeVisionaryFrontOrientation(input: {
   sourceBatchDir: string;
   imageIndex: number;
   bboxJsonPath: string;
+  embeddedPlacement?: boolean;
 }): Promise<string> {
   const stem = imageStem(input.imageIndex);
   const hunyuanDir = path.join(input.sourceBatchDir, 'pipeline_output', 'hunyuan_outputs', stem);
@@ -245,8 +292,11 @@ async function writeVisionaryFrontOrientation(input: {
       has_clear_front: Boolean(numberTuple(annotation.front_point, 2)),
       correction_yaw_deg: 0,
       confidence: 1,
-      status: 'visionary_layout_default',
-      warning: 'Blender/VLM front selection skipped; Visionary scene insertion uses layout direction directly.',
+      status: input.embeddedPlacement ? 'visionary_embedded_transform' : 'visionary_layout_default',
+      placement_mode: input.embeddedPlacement ? 'glb_embedded_transform' : 'layout_bbox',
+      warning: input.embeddedPlacement
+        ? 'Scene insertion uses the GLB embedded transform directly; layout bbox placement is skipped.'
+        : 'Blender/VLM front selection skipped; Visionary scene insertion uses layout direction directly.',
     };
   });
   await writeFile(orientationPath, `${JSON.stringify({
@@ -256,6 +306,7 @@ async function writeVisionaryFrontOrientation(input: {
     image_index: input.imageIndex,
     hunyuan_dir: hunyuanDir,
     source: 'visionary_components_3d_mcp',
+    placement_mode: input.embeddedPlacement ? 'glb_embedded_transform' : 'layout_bbox',
     front_world_axis: '+X',
     correction_semantics: 'final_yaw_deg = target_yaw_deg + correction_yaw_deg',
     submitted_count: annotations.length,
@@ -293,6 +344,32 @@ async function writeComponentPreviewSvg(input: {
   <text x="296" y="260" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="22" fill="#64748b">Visionary layout placement ready</text>
   <rect x="296" y="316" width="244" height="46" rx="23" fill="#dcfce7"/>
   <text x="320" y="347" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="21" font-weight="650" fill="#166534">${status}</text>
+</svg>
+`, 'utf8');
+}
+
+async function writeGradientThumbnailSvg(input: {
+  outputPath: string;
+  label: string;
+  index: number;
+}): Promise<void> {
+  const label = svgText(input.label || 'GLB asset');
+  const hue = (input.index * 47) % 360;
+  await writeFile(input.outputPath, `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(${hue}, 78%, 58%)"/>
+      <stop offset="0.55" stop-color="hsl(${(hue + 55) % 360}, 70%, 46%)"/>
+      <stop offset="1" stop-color="hsl(${(hue + 120) % 360}, 72%, 32%)"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="28" fill="url(#g)"/>
+  <g fill="none" stroke="rgba(255,255,255,0.88)" stroke-width="18" stroke-linejoin="round">
+    <path d="M256 104l132 76v152l-132 76-132-76V180z"/>
+    <path d="M256 104v152l132 76M256 256l-132 76"/>
+  </g>
+  <rect x="44" y="392" width="424" height="72" rx="18" fill="rgba(15,23,42,0.42)"/>
+  <text x="256" y="436" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="700" fill="#fff">${label}</text>
 </svg>
 `, 'utf8');
 }
@@ -336,26 +413,18 @@ async function writeMockHunyuanOutputs(input: {
   const hunyuanDir = path.join(input.sourceBatchDir, 'pipeline_output', 'hunyuan_outputs', stem);
   await rm(hunyuanDir, { recursive: true, force: true });
   await mkdir(hunyuanDir, { recursive: true });
-  const entries = await readdir(singleObjectsDir, { withFileTypes: true }).catch(() => []);
-  const objectImages = entries
-    .filter((entry) => entry.isFile() && /\.(png|jpe?g)$/i.test(entry.name))
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b));
-  const annotationObjects = input.annotations.map((annotation, index) => (
-      `object_${String(index + 1).padStart(2, '0')}_${safeSegment(String(annotation.label || `component_${index + 1}`), `component_${index + 1}`)}`
-  ));
-  const sourceObjectIds = objectImages.length > 0
-    ? objectImages.map((imageName) => path.basename(imageName, path.extname(imageName)))
-    : annotationObjects;
-  const objectIds = Array.from({ length: COMPONENTS_3D_DEMO_ASSET_COUNT }, (_, index) => (
-    sourceObjectIds[index] || `object_${String(index + 1).padStart(2, '0')}_demo_component_${index + 1}`
-  ));
   const demoGlbPaths = await collectDemoGlbFiles();
   const glbBuffer = minimalGlbBuffer();
   const results = [];
-  for (const [index, objectId] of objectIds.entries()) {
-    const modelPath = path.join(hunyuanDir, `${objectId}_model.glb`);
+  for (let index = 0; index < COMPONENTS_3D_DEMO_ASSET_COUNT; index += 1) {
     const demoGlbPath = demoGlbPaths.length > 0 ? demoGlbPaths[index % demoGlbPaths.length] : '';
+    const sourceName = demoGlbPath ? path.basename(demoGlbPath, path.extname(demoGlbPath)) : `demo_component_${index + 1}`;
+    const annotation = input.annotations[index] || {};
+    const objectId = `object_${String(index + 1).padStart(2, '0')}_${safeSegment(
+      String(annotation.label || sourceName || `component_${index + 1}`),
+      `component_${index + 1}`,
+    )}`;
+    const modelPath = path.join(hunyuanDir, `${objectId}_model.glb`);
     if (demoGlbPath) {
       await copyFile(demoGlbPath, modelPath);
     } else {
@@ -368,6 +437,7 @@ async function writeMockHunyuanOutputs(input: {
       job_id: `mock-hunyuan-${String(index + 1).padStart(3, '0')}`,
       model_paths: [modelPath],
       demo_source_path: demoGlbPath || null,
+      placement_mode: 'glb_embedded_transform',
       error: null,
       input_order: index,
     });
@@ -637,12 +707,12 @@ async function copyComponentOutputs(input: {
   projectRoot: string;
   outputRoot: string;
   items: Component3DItem[];
+  renderFrontThumbnails?: boolean;
+  onProgress?: (images: GeneratedAsset[], index: number, total: number) => void;
 }): Promise<GeneratedAsset[]> {
   const previewsDir = path.join(input.outputRoot, 'previews');
-  const modelsDir = path.join(input.outputRoot, 'models');
   const frontRendersDir = path.join(input.outputRoot, 'front_renders');
   await mkdir(previewsDir, { recursive: true });
-  await mkdir(modelsDir, { recursive: true });
   await mkdir(frontRendersDir, { recursive: true });
 
   const assets: GeneratedAsset[] = [];
@@ -653,11 +723,19 @@ async function copyComponentOutputs(input: {
   for (const [index, item] of input.items.entries()) {
     const itemSlug = safeSegment(`${String(index + 1).padStart(3, '0')}-${item.label}`, `component-${index + 1}`);
     const copiedModelPaths: string[] = [];
-    for (const [modelIndex, modelPath] of item.modelPaths.entries()) {
+    const canonicalModelReferences: CanonicalAssetReference[] = [];
+    for (const modelPath of item.modelPaths) {
       if (!modelPath || !await pathExists(modelPath)) continue;
-      const modelTarget = path.join(modelsDir, `${itemSlug}-${modelIndex + 1}${path.extname(modelPath) || '.glb'}`);
-      await copyFile(modelPath, modelTarget);
-      copiedModelPaths.push(toRelative(input.projectRoot, modelTarget));
+      const sourcePath = toRelative(input.projectRoot, modelPath);
+      const canonicalAssetReference = await writeCanonicalProjectAssetFromFile({
+        projectRoot: input.projectRoot,
+        filePath: modelPath,
+        mimeType: path.extname(modelPath).toLowerCase() === '.gltf' ? 'model/gltf+json' : 'model/gltf-binary',
+        kind: 'model',
+        sourcePath,
+      });
+      canonicalModelReferences.push(canonicalAssetReference);
+      copiedModelPaths.push(canonicalAssetReference.path);
     }
     const hasPreview = Boolean(item.previewPath && await pathExists(item.previewPath));
     const previewTarget = hasPreview
@@ -682,21 +760,35 @@ async function copyComponentOutputs(input: {
       await copyFile(item.frontRenderPath, frontRenderTarget);
     } else if (copiedModelPaths[0]) {
       frontRenderTarget = path.join(frontRendersDir, `${itemSlug}-front.png`);
-      try {
-        await runBlenderScript([
-          path.join(VISIONARY_ROOT, 'scripts', 'render-glb-front-thumbnail.py'),
-          '--',
-          '--glb',
-          path.resolve(input.projectRoot, copiedModelPaths[0]),
-          '--output',
-          frontRenderTarget,
-          '--resolution',
-          String(Number(process.env.VISIONARY_COMPONENTS_3D_FRONT_RENDER_RESOLUTION || 512) || 512),
-          '--yaw',
-          String(Number(item.selectedYaw) || 0),
-        ]);
-      } catch (error) {
-        frontRenderTarget = '';
+      if (input.renderFrontThumbnails) {
+        try {
+          await runBlenderScript([
+            path.join(VISIONARY_ROOT, 'scripts', 'render-glb-front-thumbnail.py'),
+            '--',
+            '--glb',
+            path.resolve(input.projectRoot, copiedModelPaths[0]),
+            '--output',
+            frontRenderTarget,
+            '--resolution',
+            String(Number(process.env.VISIONARY_COMPONENTS_3D_FRONT_RENDER_RESOLUTION || 512) || 512),
+            '--yaw',
+            String(Number(item.selectedYaw) || 0),
+          ]);
+        } catch (error) {
+          frontRenderTarget = path.join(frontRendersDir, `${itemSlug}-front.svg`);
+          await writeGradientThumbnailSvg({
+            outputPath: frontRenderTarget,
+            label: item.label,
+            index,
+          });
+        }
+      } else {
+        frontRenderTarget = path.join(frontRendersDir, `${itemSlug}-front.svg`);
+        await writeGradientThumbnailSvg({
+          outputPath: frontRenderTarget,
+          label: item.label,
+          index,
+        });
       }
     }
     const sourceGlbPaths = (await Promise.all(
@@ -704,7 +796,7 @@ async function copyComponentOutputs(input: {
     )).filter(Boolean);
     const frontOrientationPath = await existingRelativePath(item.frontOrientationPath);
     const candidateSheetPath = await existingRelativePath(item.candidateSheetPath);
-    assets.push(await fileAsset(
+    const asset = await fileAsset(
       input.projectRoot,
       item.id,
       previewTarget,
@@ -714,6 +806,8 @@ async function copyComponentOutputs(input: {
         assetType: 'image',
         label: item.label,
         glbPaths: copiedModelPaths,
+        canonicalAssetReferences: canonicalModelReferences,
+        assetReferences: canonicalModelReferences,
         sourceGlbPaths,
         thumbnailPath: frontRenderTarget ? toRelative(input.projectRoot, frontRenderTarget) : '',
         frontRenderPath: frontRenderTarget ? toRelative(input.projectRoot, frontRenderTarget) : '',
@@ -723,7 +817,9 @@ async function copyComponentOutputs(input: {
         confidence: item.confidence,
         status: item.status,
       },
-    ));
+    );
+    assets.push(asset);
+    input.onProgress?.(assets, index + 1, input.items.length);
   }
   return assets;
 }
@@ -844,6 +940,7 @@ export async function generateComponents3D(input: {
   const outputRoot = projectOutputRoot(input.projectRoot, input.projectId, input.runLabel, runId);
   const sourceBatchDir = path.dirname(sourceMainImagePath);
   const layoutAnnotations = await readLayoutAnnotations(sourceLayoutBboxPath);
+  const demoGlbPaths = await collectDemoGlbFiles();
   const targetCount = COMPONENTS_3D_DEMO_ASSET_COUNT;
   const stem = imageStem(imageIndex);
   const hunyuanDir = path.join(sourceBatchDir, 'pipeline_output', 'hunyuan_outputs', stem);
@@ -858,32 +955,26 @@ export async function generateComponents3D(input: {
     layoutBboxJsonPath: input.layoutBboxJsonPath,
   });
 
-  await ensureObjectListAndSingleObjects({
-    sourceBatchDir,
-    imageIndex,
-  });
-
-  emitProgress(title, `写入 demo 组件 3D 资产，已提交 0/${targetCount}，已完成 0/${targetCount}`, 0.48);
+  emitProgress(title, `写入 demo 组件 3D 资产，已提交 0/${targetCount}，已完成 0/${targetCount}`, 0.35);
   await writeMockHunyuanOutputs({
     sourceBatchDir,
     imageIndex,
     annotations: layoutAnnotations,
   });
   const completedCount = Math.min(await countGeneratedGlbs(sourceBatchDir, imageIndex), targetCount);
-  let frontOrientationPath = '';
-  const orientationResult = await renderAndSelectFrontOrientation({ hunyuanDir });
-  frontOrientationPath = orientationResult.orientationPath;
-  warnings.push(...orientationResult.warnings);
-  if (!await pathExists(frontOrientationPath)) {
-    const fallback = await writeVisionaryFrontOrientation({
-      sourceBatchDir,
-      imageIndex,
-      bboxJsonPath: sourceLayoutBboxPath,
-    });
-    frontOrientationPath = fallback;
-    warnings.push('Front orientation fallback was generated because VLM selection did not produce front_orientation.json.');
+  const frontOrientationPath = await writeVisionaryFrontOrientation({
+    sourceBatchDir,
+    imageIndex,
+    bboxJsonPath: sourceLayoutBboxPath,
+    // Mocked GLBs already carry inconsistent anchor/object-center offsets; origin insertion preserves the intended combined scene.
+    embeddedPlacement: true,
+  });
+  if (demoGlbPaths.length > 0) {
+    warnings.push(`Using embedded transforms from ${COMPONENTS_3D_DEMO_GLB_DIR}; layout placement is skipped.`);
+  } else {
+    warnings.push('No demo GLB assets were found; wrote a minimal fallback GLB and inserted it at origin with embedded transform placement.');
   }
-  emitProgress(title, `写入 Visionary 资产朝向，已提交 ${targetCount}/${targetCount}，已完成 ${completedCount}/${targetCount}`, 0.84);
+  emitProgress(title, `写入 Visionary 资产位姿，已提交 ${targetCount}/${targetCount}，已完成 ${completedCount}/${targetCount}`, 0.84);
 
   emitProgress(title, '整理 3D 资产预览和依赖树', 0.9);
   const componentItems = await readComponents3DItems({
@@ -894,6 +985,19 @@ export async function generateComponents3D(input: {
     projectRoot: input.projectRoot,
     outputRoot,
     items: componentItems,
+    renderFrontThumbnails: process.env.VISIONARY_COMPONENTS_3D_RENDER_FRONT_THUMBNAILS === '1',
+    onProgress: (completedImages, completed, total) => {
+      emitProgress(
+        title,
+        `整理 3D 资产预览，已完成 ${completed}/${Math.max(total, targetCount)}`,
+        0.9 + (Math.min(completed, Math.max(total, targetCount)) / Math.max(total, targetCount)) * 0.08,
+        {
+          images: completedImages,
+          completedCount: completed,
+          totalCount: Math.max(total, targetCount),
+        },
+      );
+    },
   });
   const tree = dependencyTree({
     runId,
@@ -933,6 +1037,7 @@ export async function generateComponents3D(input: {
       title,
       message: `已提交 ${targetCount}/${targetCount}，已完成 ${completedCount}/${targetCount} 个组件 3D 资产`,
       progress: 1,
+      statusId: 'done',
     },
     warnings: images.length > 0 ? warnings : [...warnings, '未找到可展示的 3D 资产预览图。'],
   };
@@ -988,6 +1093,7 @@ async function startMcpServer(): Promise<void> {
             title: '组件 3D 资产生成',
             message,
             progress: 1,
+            statusId: 'failed',
           },
         };
         return {

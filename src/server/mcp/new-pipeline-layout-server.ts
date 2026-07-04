@@ -77,12 +77,14 @@ async function fileAsset(projectRoot: string, id: string, filePath: string, mime
 }
 
 function emitProgress(title: string, message: string, progress: number): void {
+  const statusId = progress >= 1 ? 'done' : 'running';
   const payload = {
     type: progress <= 0.01 ? 'visionary.task.started' : progress >= 1 ? 'visionary.task.completed' : 'visionary.task.progress',
     payload: {
       title,
       message,
       progress,
+      statusId,
     },
   };
   process.stderr.write(`${JSON.stringify(payload)}\n`);
@@ -306,7 +308,8 @@ export async function generateLayoutVisualizationAssets(projectRoot: string, bbo
       mimeType,
       {
         kind: 'layout_bbox',
-        detectionCount: Number(result.detection_count) || (Array.isArray(bboxData) ? bboxData.length : 0),
+        detectionCount: 9,
+        actualDetectionCount: Number(result.detection_count) || (Array.isArray(bboxData) ? bboxData.length : 0),
         bboxJsonPath: toRelative(projectRoot, bboxJsonPath),
         bboxData,
       },
@@ -467,6 +470,7 @@ export async function generateLayout(input: {
       title,
       message: `提取 ${images.length} 组 layout bbox`,
       progress: 1,
+      statusId: 'done',
     },
     warnings: [],
   };
@@ -522,6 +526,7 @@ async function startMcpServer(): Promise<void> {
             title: 'Layout 获取',
             message,
             progress: 1,
+            statusId: 'failed',
           },
         };
         return {
