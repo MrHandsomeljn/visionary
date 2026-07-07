@@ -542,7 +542,7 @@ let preferredRightSidebarWidth = null;
 let preferredAgentWorkbenchWidth = null;
 let sidebarWidthDebugHistory = [];
 let cameraControlDebugSamples = [];
-let cameraControlDebugLastDragLogAt = 0;
+const CAMERA_CONTROL_DEBUG_MUTED_LOG_KINDS = new Set(['drag', 'wheel']);
 let demoSceneModelRevealTimer = 0;
 let workspaceAutosaveTimer = 0;
 let workspaceSaveInFlight = null;
@@ -1985,15 +1985,11 @@ function isInvalidProjectNameError(error) {
 }
 
 function logCameraControlDebug(kind = 'unknown') {
+    if (CAMERA_CONTROL_DEBUG_MUTED_LOG_KINDS.has(kind)) {
+        return null;
+    }
     const info = app?.getCameraControlDebugInfo?.();
     if (!info) return null;
-    const now = performance.now();
-    if (kind === 'drag' && now - cameraControlDebugLastDragLogAt < 120) {
-        return info;
-    }
-    if (kind === 'drag') {
-        cameraControlDebugLastDragLogAt = now;
-    }
     const sample = {
         time: new Date().toISOString(),
         kind,
@@ -10140,9 +10136,11 @@ function syncCameraSequenceDragButton() {
 
 function syncSelectedCameraSequenceFrameToApp() {
     if (!app?.setSelectedCameraSequenceFrame) return;
-    const frame = Number.isFinite(Number(state.selectedCameraSequenceFrame))
-        ? clampTimelineFrame(state.selectedCameraSequenceFrame)
-        : null;
+    const frame = state.selectedModelId
+        ? null
+        : Number.isFinite(Number(state.selectedCameraSequenceFrame))
+            ? clampTimelineFrame(state.selectedCameraSequenceFrame)
+            : null;
     syncingCameraSequenceSelection = true;
     try {
         app.setSelectedCameraSequenceFrame(frame);
@@ -10975,7 +10973,6 @@ function registerDebugHooks() {
         getCameraControlDebugSamples: () => cameraControlDebugSamples.slice(),
         clearCameraControlDebugSamples: () => {
             cameraControlDebugSamples = [];
-            cameraControlDebugLastDragLogAt = 0;
             return true;
         },
         logCameraControlDebugInfo: (kind = 'manual') => logCameraControlDebug(kind),
@@ -11396,7 +11393,11 @@ function selectModel(id, options = {}) {
     // 填充编辑器值
     updateEditorValues(model);
     updateModelAnimationControls(id);
-    app.refreshSelectedModelViewportGizmo?.();
+    if (state.viewportGizmoMode) {
+        app.setViewportGizmoMode?.(state.viewportGizmoMode);
+    } else {
+        app.refreshSelectedModelViewportGizmo?.();
+    }
     syncViewportGizmoControls();
     updateModelList();
     if (!silent) {
@@ -17627,6 +17628,8 @@ async function init() {
         showError(t('messages.editorAppModuleLoadFailed', { message: error.message }));
         return;
     }
+    globalThis.visionaryDebugGizmo = (reason = 'manual') => app?.debugViewportGizmoState?.(reason);
+    globalThis.__visionaryDebugGizmo = globalThis.visionaryDebugGizmo;
 
     // 初始化编辑器应用
     setBootLoadingStatus(t('loading.bootInitializingWebGpu'));
@@ -17701,6 +17704,10 @@ async function init() {
             return;
         }
         state.selectedCameraSequenceFrame = Math.round(Number(frame));
+        if (!state.cameraSequenceDragEnabled) {
+            state.cameraSequenceDragEnabled = true;
+            app.setCameraSequenceEditEnabled?.(true);
+        }
         if (state.selectedModelId) {
             closeEditor();
         }
@@ -17718,6 +17725,8 @@ async function init() {
             setViewportGizmoMode('translate', true);
         }
         setTimelineFrame(state.selectedCameraSequenceFrame, { applyPose: false, syncSlider: true });
+        syncCameraSequenceDragButton();
+        syncCameraSequenceInteractionEnabled();
         syncCameraSequenceVisualization();
         syncViewportGizmoControls();
     });

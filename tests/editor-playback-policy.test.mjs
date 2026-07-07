@@ -13,6 +13,18 @@ test('scene camera interaction no longer pauses timeline playback', () => {
     assert.doesNotMatch(callbackBody, /相机动画: 已暂停（手动控制）/);
 });
 
+test('camera control debug does not print high-frequency drag and wheel interactions', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const match = source.match(/function logCameraControlDebug\(kind = 'unknown'\) \{([\s\S]*?)\n\}/);
+
+    assert.ok(match, 'expected to find logCameraControlDebug');
+    const body = match[1];
+
+    assert.match(source, /const CAMERA_CONTROL_DEBUG_MUTED_LOG_KINDS = new Set\(\['drag', 'wheel'\]\);/);
+    assert.match(body, /if \(CAMERA_CONTROL_DEBUG_MUTED_LOG_KINDS\.has\(kind\)\) \{\s*return null;\s*\}/);
+    assert.match(body, /console\.log\(`\[CameraControlDebug:\$\{kind\}\]`, sample\);/);
+});
+
 test('playback opens camera preview when timeline playback starts', () => {
     const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
     const match = source.match(/function playCameraAnimation\(\) \{([\s\S]*?)\n\}/);
