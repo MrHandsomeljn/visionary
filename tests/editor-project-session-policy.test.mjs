@@ -153,6 +153,14 @@ test('opening a persisted server project rejects empty restore results for non-e
     assert.match(source, /if \(hasPersistedAssets && totalAssetCount > 0 && loadedAssetCount <= 0\) \{\s*throw new Error\(t\('projectSession\.openProjectFailedEmpty'\)\);/s);
 });
 
+test('opening a server project closes project modals and uses a full-editor blocking loader', async () => {
+    const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const css = await readFile(new URL('../public/editor.css', import.meta.url), 'utf8');
+
+    assert.match(source, /async function openServerProject\(projectId\) \{[\s\S]*closePostLoginProjectModal\(\);\s*closeProjectBrowserModal\(\);\s*showLoading\(true, t\('projectSession\.loadingProject'\), 30\);/);
+    assert.match(css, /\.loading-overlay \{\s*position: fixed;\s*inset: 0;[\s\S]*z-index: 1000;/);
+});
+
 test('save button is now presented as export project instead of local workspace save copy', async () => {
   const html = await readFile(new URL('../public/editor.html', import.meta.url), 'utf8');
   const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');

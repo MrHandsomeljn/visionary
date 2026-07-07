@@ -516,6 +516,7 @@ export class EditorApp {
     this.editorHelperOverlayScene = new THREE.Scene();
     this.meshCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000);
     this.meshCamera.matrixAutoUpdate = true;
+    this.meshCamera.layers.enable(EDITOR_VIEWPORT_HELPER_LAYER);
 
     const ambient = new THREE.AmbientLight(0xffffff, 0.55);
     this.meshScene.add(ambient);
@@ -769,12 +770,12 @@ export class EditorApp {
       const gaussianModelEntries = Array.from(this.editorModels.values())
         .map((model) => model.gaussianModel)
         .filter((model): model is GaussianModel => Boolean(model));
-      if (gaussianModelEntries.length > 0) {
-        this.cameraPreviewFusedRenderer = new GaussianThreeJSRenderer(renderer, this.meshScene, gaussianModelEntries);
-        await this.cameraPreviewFusedRenderer.init();
-        this.cameraPreviewFusedRenderer.setDepthRangeScale(this.sceneDepthRangeScale);
-        this.cameraPreviewFusedRenderer.setPreviewMode(this.renderMode);
-      }
+      // Keep the preview on the same fused path as the main viewport, even for mesh-only scenes.
+      // Depth preview is produced by GaussianThreeJSRenderer.renderThreeScene(), not by direct Three rendering.
+      this.cameraPreviewFusedRenderer = new GaussianThreeJSRenderer(renderer, this.meshScene, gaussianModelEntries);
+      await this.cameraPreviewFusedRenderer.init();
+      this.cameraPreviewFusedRenderer.setDepthRangeScale(this.sceneDepthRangeScale);
+      this.cameraPreviewFusedRenderer.setPreviewMode(this.renderMode);
       this.cameraPreviewGaussianSignature = gaussianModels;
 
       this.syncCameraPreviewCanvasSize();
@@ -3086,7 +3087,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     selectedFrame?: number | null,
     sampledTrajectory?: EditorCameraTrajectoryPoint[]
   ): boolean {
-    if (!this.editorHelperOverlayScene) return false;
+    if (!this.meshScene) return false;
     const group = this.ensureCameraSequenceGroup();
     if (!group) return false;
     group.visible = this.cameraSequenceVisible;
@@ -3167,6 +3168,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         depthWrite: true,
       })
     );
+    this.assignViewportHelperLayer(marker);
     marker.renderOrder = 0;
     marker.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
     marker.userData[EDITOR_CAMERA_SEQUENCE_CURRENT_KEY] = true;
@@ -3215,8 +3217,8 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   }
 
   private ensureCameraSequenceGroup(): THREE.Group | null {
-    if (!this.editorHelperOverlayScene) return null;
-    if (this.cameraSequenceGroup && this.cameraSequenceGroup.parent === this.editorHelperOverlayScene) {
+    if (!this.meshScene) return null;
+    if (this.cameraSequenceGroup && this.cameraSequenceGroup.parent === this.meshScene) {
       return this.cameraSequenceGroup;
     }
 
@@ -3228,9 +3230,16 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     group.name = "EditorCameraSequence";
     group.visible = this.cameraSequenceVisible;
     group.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
-    this.editorHelperOverlayScene.add(group);
+    this.assignViewportHelperLayer(group);
+    this.meshScene.add(group);
     this.cameraSequenceGroup = group;
     return group;
+  }
+
+  private assignViewportHelperLayer(root: THREE.Object3D): void {
+    root.traverse((node) => {
+      node.layers.set(EDITOR_VIEWPORT_HELPER_LAYER);
+    });
   }
 
   private clearCameraSequenceGroupContents(): void {
@@ -3389,6 +3398,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     hitProxy.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
     hitProxy.userData.cameraKeyframeFrame = frame;
     root.add(hitProxy);
+    this.assignViewportHelperLayer(root);
 
     this.cameraSequenceHelperTargets.set(frame, {
       frame,
@@ -3492,6 +3502,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     material.depthWrite = true;
 
     const line = new LineSegments2(geometry, material);
+    this.assignViewportHelperLayer(line);
     line.renderOrder = 0;
     line.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
     line.frustumCulled = false;

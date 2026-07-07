@@ -28,3 +28,11 @@ test('fused renderer accumulates multiple editor overlay scenes in one frame', (
     assert.match(source, /const prevAutoClear = \(this\.threeRenderer as any\)\.autoClear;/);
     assert.match(source, /this\.overlayRenderedThisFrame = false;\s*const RenderTargetClass/);
 });
+
+test('camera preview uses fused renderer for mesh-only depth preview', () => {
+    const source = readFileSync(new URL('../src/editor/editor-app.ts', import.meta.url), 'utf8');
+
+    assert.match(source, /this\.cameraPreviewFusedRenderer = new GaussianThreeJSRenderer\(renderer, this\.meshScene, gaussianModelEntries\);/);
+    assert.doesNotMatch(source, /if \(gaussianModelEntries\.length > 0\) \{\s*this\.cameraPreviewFusedRenderer = new GaussianThreeJSRenderer\(renderer, this\.meshScene, gaussianModelEntries\);/);
+    assert.match(source, /this\.cameraPreviewFusedRenderer\.renderThreeScene\(this\.cameraPreviewCamera\);\s*const drew = this\.cameraPreviewFusedRenderer\.drawSplats\(this\.cameraPreviewRenderer, this\.meshScene, this\.cameraPreviewCamera\);\s*if \(!drew && this\.renderMode !== "depth"\) \{/);
+});

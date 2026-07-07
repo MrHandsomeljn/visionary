@@ -14522,6 +14522,8 @@ async function openServerProject(projectId) {
     if (!state.projectSession?.authenticated || !state.projectSession.user) {
         throw new Error(t('projectSession.loginRequired'));
     }
+    closePostLoginProjectModal();
+    closeProjectBrowserModal();
     showLoading(true, t('projectSession.loadingProject'), 30);
     try {
         const [project, rawScene, agentHistory] = await Promise.all([
@@ -14567,8 +14569,6 @@ async function openServerProject(projectId) {
             lastSavedAt: Date.now(),
             syncStatus: 'clean',
         };
-        closePostLoginProjectModal();
-        closeProjectBrowserModal();
         syncProjectSessionButton();
         updateWorkspaceStatusIndicator();
         void refreshProjectBrowserCodexAuthStatus();
