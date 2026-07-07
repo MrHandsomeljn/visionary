@@ -402,9 +402,13 @@ test('editor applies insert-scene plan only after final user confirmation', asyn
     assert.match(source, /assetId: `sha256:\$\{canonicalAsset\.hash\}`/);
     assert.match(source, /path: canonicalAsset\.path/);
     assert.match(source, /const fileForLoad = new File\(\[canonicalAsset\.content\], targetName/);
+    assert.match(source, /const useEmbeddedTransformPlacement = transform\.scaleMode === 'embedded';/);
     assert.match(source, /await app\.loadModel\(fileForLoad, \{[\s\S]*sourcePath: canonicalAsset\.path,[\s\S]*suppressLoadingOverlay: true/);
+    assert.match(source, /normalizeEmbeddedTransform: useEmbeddedTransformPlacement/);
     assert.match(source, /app\.renameModel\?\.\(loadedModel\.id, targetName, \{[\s\S]*sourcePath: canonicalAsset\.path/);
-    assert.match(source, /app\.setModelPosition\(loadedModel\.id, position\[0\], position\[1\], position\[2\]\)/);
+    assert.match(source, /const embeddedPosition = useEmbeddedTransformPlacement[\s\S]*loadedModel\.position\?\.x[\s\S]*loadedModel\.position\?\.y[\s\S]*loadedModel\.position\?\.z/);
+    assert.match(source, /const finalPosition = \[[\s\S]*position\[0\] \+ embeddedPosition\[0\],[\s\S]*position\[1\] \+ embeddedPosition\[1\],[\s\S]*position\[2\] \+ embeddedPosition\[2\],[\s\S]*\];/);
+    assert.match(source, /app\.setModelPosition\(loadedModel\.id, finalPosition\[0\], finalPosition\[1\], finalPosition\[2\]\)/);
     assert.match(source, /app\.setModelRotation\(loadedModel\.id, rotation\[0\], rotation\[1\], rotation\[2\]\)/);
     assert.match(source, /app\.setModelScale\(loadedModel\.id, resolveAgentSceneInsertScale\(loadedModel, transform\)\)/);
     assert.match(source, /if \(transform\.scaleMode === 'embedded'\) return 1;/);

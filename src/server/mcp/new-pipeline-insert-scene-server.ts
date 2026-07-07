@@ -30,6 +30,14 @@ interface FrontOrientationIndex {
   byBbox: Map<number, JsonRecord>;
 }
 
+interface ComponentModelPathReference {
+  path: string;
+  sourcePath: string;
+  pathKey: string;
+  sourcePathKey: string;
+  sourceNameKey: string;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const SCENE_SCALE = 0.01;
 const MIN_SCALE = 0.05;
@@ -65,6 +73,66 @@ function projectOutputRoot(projectRoot: string, projectId: string, runLabel: str
 
 function toRelative(projectRoot: string, filePath: string): string {
   return path.relative(projectRoot, filePath).split(path.sep).join('/');
+}
+
+function normalizeProjectRelativeInput(projectRoot: string, value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(projectRoot, raw);
+  if (!isPathInside(projectRoot, resolved)) return '';
+  return toRelative(projectRoot, resolved);
+}
+
+function pathKey(value: string): string {
+  return String(value || '').trim().replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+}
+
+function normalizeComponents3DModelPathReferences(projectRoot: string, value: unknown): ComponentModelPathReference[] {
+  const entries = Array.isArray(value) ? value : [];
+  const references: ComponentModelPathReference[] = [];
+  for (const entry of entries) {
+    const record = readRecord(entry);
+    const canonicalCandidate = typeof entry === 'string'
+      ? entry
+      : record.path ?? record.canonicalPath ?? record.relativePath ?? record.modelPath;
+    const canonicalPath = normalizeProjectRelativeInput(projectRoot, canonicalCandidate);
+    if (!canonicalPath) continue;
+    const sourcePath = normalizeProjectRelativeInput(
+      projectRoot,
+      record.sourcePath ?? record.sourceGlbPath ?? record.originalPath ?? '',
+    );
+    references.push({
+      path: canonicalPath,
+      sourcePath,
+      pathKey: pathKey(canonicalPath),
+      sourcePathKey: pathKey(sourcePath),
+      sourceNameKey: sourcePath ? normalizeModelKey(path.basename(sourcePath)) : '',
+    });
+  }
+  return references;
+}
+
+function resolvePlanModelPath(input: {
+  projectRoot: string;
+  sourceGlbPath: string;
+  index: number;
+  references: ComponentModelPathReference[];
+}): { path: string; sourcePath: string; canonicalPath?: string } {
+  const sourcePath = toRelative(input.projectRoot, input.sourceGlbPath);
+  const sourcePathKey = pathKey(sourcePath);
+  const sourceNameKey = normalizeModelKey(path.basename(sourcePath));
+  const hasSourceMappings = input.references.some((reference) => reference.sourcePath);
+  const reference = input.references.find((item) => item.sourcePathKey && item.sourcePathKey === sourcePathKey)
+    ?? input.references.find((item) => item.sourceNameKey && item.sourceNameKey === sourceNameKey)
+    ?? (!hasSourceMappings ? input.references[input.index] : undefined);
+  if (!reference?.path) {
+    return { path: sourcePath, sourcePath };
+  }
+  return {
+    path: reference.path,
+    sourcePath,
+    ...(reference.pathKey !== sourcePathKey ? { canonicalPath: reference.path } : {}),
+  };
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -451,6 +519,7 @@ export async function generateInsertScene(input: {
   projectRoot: string;
   projectId: string;
   components3DFrontOrientationPath: string;
+  components3DModelPaths?: unknown[];
   runLabel: string;
 }): Promise<JsonRecord> {
   const title = '最终插入场景';
@@ -476,6 +545,7 @@ export async function generateInsertScene(input: {
   if (glbPaths.length <= 0) {
     throw new Error(`No GLB files found in ${hunyuanDir}`);
   }
+  const componentModelPathReferences = normalizeComponents3DModelPathReferences(root, input.components3DModelPaths);
 
   emitProgress(title, '读取组件 3D 资产位姿', 0.35);
   const rawFrontOrientation = readRecord(await readJsonFile(frontOrientationPath));
@@ -491,7 +561,13 @@ export async function generateInsertScene(input: {
         warnings.push(`${path.basename(glbPath)} skipped: ${verification.message}`);
         continue;
       }
-      const relativeModelPath = toRelative(input.projectRoot, glbPath);
+      const modelPath = resolvePlanModelPath({
+        projectRoot: input.projectRoot,
+        sourceGlbPath: glbPath,
+        index,
+        references: componentModelPathReferences,
+      });
+      const relativeModelPath = modelPath.path;
       const modelExtension = path.extname(glbPath) || '.glb';
       const label = path.basename(glbPath, modelExtension);
       items.push({
@@ -503,7 +579,8 @@ export async function generateInsertScene(input: {
         modelPath: relativeModelPath,
         relativePath: relativeModelPath,
         source: {
-          glbPath: relativeModelPath,
+          glbPath: modelPath.sourcePath,
+          ...(modelPath.canonicalPath ? { canonicalGlbPath: modelPath.canonicalPath } : {}),
           placementMode: 'glb_embedded_transform',
         },
         transform: {
@@ -542,7 +619,13 @@ export async function generateInsertScene(input: {
         warnings.push(`${path.basename(match.glbPath)}: ${correction.warning}`);
       }
       const finalYawDeg = normalizeAngle(match.layoutObject.targetYawDeg + correction.correctionYawDeg);
-      const relativeModelPath = toRelative(input.projectRoot, match.glbPath);
+      const modelPath = resolvePlanModelPath({
+        projectRoot: input.projectRoot,
+        sourceGlbPath: match.glbPath,
+        index,
+        references: componentModelPathReferences,
+      });
+      const relativeModelPath = modelPath.path;
       const modelExtension = path.extname(match.glbPath) || '.glb';
       const name = `${String(index + 1).padStart(2, '0')}-${safeSegment(match.layoutObject.label, path.basename(match.glbPath, modelExtension))}${modelExtension}`;
       items.push({
@@ -555,7 +638,8 @@ export async function generateInsertScene(input: {
         relativePath: relativeModelPath,
         source: {
           bboxIndex: match.layoutObject.bboxIndex,
-          glbPath: relativeModelPath,
+          glbPath: modelPath.sourcePath,
+          ...(modelPath.canonicalPath ? { canonicalGlbPath: modelPath.canonicalPath } : {}),
           frontPoint: match.layoutObject.frontPoint,
           hasFront: match.layoutObject.hasFront,
         },
@@ -669,6 +753,7 @@ async function startMcpServer(): Promise<void> {
           projectId: projectId || String(process.env.VISIONARY_PROJECT_ID || 'project'),
           projectRoot: injectedProjectRoot,
           components3DFrontOrientationPath,
+          components3DModelPaths: [],
           runLabel,
         });
         return {

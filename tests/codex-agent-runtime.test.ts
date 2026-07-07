@@ -1127,6 +1127,55 @@ test('insert-scene MCP uses embedded GLB transforms without layout placement', a
   }
 });
 
+test('insert-scene MCP prefers canonical component GLB paths when provided', async () => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'visionary-insert-canonical-'));
+  try {
+    const sourceRelativePath = 'agent_history/assets/new_pipeline/project/run/main_images/pipeline_output/hunyuan_outputs/image_001/embedded_component.glb';
+    const canonicalRelativePath = `assets/${'a'.repeat(64)}.glb`;
+    const sourcePath = path.join(projectRoot, ...sourceRelativePath.split('/'));
+    const canonicalPath = path.join(projectRoot, ...canonicalRelativePath.split('/'));
+    await mkdir(path.dirname(sourcePath), { recursive: true });
+    await mkdir(path.dirname(canonicalPath), { recursive: true });
+    await writeFile(sourcePath, Buffer.from('676c544602000000140000000000000000000000', 'hex'));
+    await writeFile(canonicalPath, Buffer.from('676c544602000000140000000000000000000000', 'hex'));
+    await writeFile(
+      path.join(path.dirname(sourcePath), 'front_orientation.json'),
+      JSON.stringify({
+        placement_mode: 'glb_embedded_transform',
+        items: [
+          {
+            model_file: 'embedded_component.glb',
+            placement_mode: 'glb_embedded_transform',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const result = await generateInsertScene({
+      projectRoot,
+      projectId: 'project',
+      components3DFrontOrientationPath: 'agent_history/assets/new_pipeline/project/run/main_images/pipeline_output/hunyuan_outputs/image_001/front_orientation.json',
+      components3DModelPaths: [{
+        sourcePath: sourceRelativePath,
+        path: canonicalRelativePath,
+      }],
+      runLabel: 'insert-scene',
+    });
+
+    const plan = result.sceneInsertPlan as Record<string, unknown>;
+    const items = Array.isArray(plan.items) ? plan.items as Array<Record<string, unknown>> : [];
+    const source = (items[0]?.source as Record<string, unknown>) || {};
+    assert.equal(items.length, 1);
+    assert.equal(items[0].path, canonicalRelativePath);
+    assert.equal(items[0].modelPath, canonicalRelativePath);
+    assert.equal(source.glbPath, sourceRelativePath);
+    assert.equal(source.canonicalGlbPath, canonicalRelativePath);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('new pipeline main image MCP contract requires organized final prompt input', () => {
   const contractText = `${MAIN_IMAGE_TOOL_DESCRIPTION}\n${MAIN_IMAGE_PROMPT_DESCRIPTION}`;
 

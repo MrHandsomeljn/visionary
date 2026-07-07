@@ -12811,6 +12811,14 @@ async function canonicalizeServerProjectAssetBlob({ sourcePath, fileName, blob }
     if (cachedByHash) {
         return rememberCanonicalizedServerProjectAsset(cachedByHash, sourcePath);
     }
+    if (isServerMaterializedAssetPath(sourcePath) && String(sourcePath).toLowerCase() === relativePath.toLowerCase()) {
+        return rememberCanonicalizedServerProjectAsset({
+            path: relativePath,
+            hash: hashHex,
+            bytes: content.byteLength,
+            content,
+        }, sourcePath);
+    }
     await projectApi.writeAsset({
         user: state.projectSession.user,
         projectId: state.projectSession.activeProjectId,
@@ -12899,9 +12907,12 @@ async function loadAgentSceneInsertPlanModels(plan) {
                     type: blob.type || 'model/gltf-binary',
                     lastModified: Date.now(),
                 });
+                const transform = item.transform && typeof item.transform === 'object' ? item.transform : {};
+                const useEmbeddedTransformPlacement = transform.scaleMode === 'embedded';
                 const loadedModel = await app.loadModel(fileForLoad, {
                     sourcePath: canonicalAsset.path,
                     suppressLoadingOverlay: true,
+                    normalizeEmbeddedTransform: useEmbeddedTransformPlacement,
                 });
                 if (!loadedModel) {
                     throw new Error(t('messages.loadModelFailed', { name: targetName }));
@@ -12912,10 +12923,21 @@ async function loadAgentSceneInsertPlanModels(plan) {
                         sourceFile: fileForLoad,
                     });
                 }
-                const transform = item.transform && typeof item.transform === 'object' ? item.transform : {};
                 const position = finiteNumberTuple(transform.position, 3, [0, 0, 0]);
+                const embeddedPosition = useEmbeddedTransformPlacement
+                    ? [
+                        Number.isFinite(Number(loadedModel.position?.x)) ? Number(loadedModel.position.x) : 0,
+                        Number.isFinite(Number(loadedModel.position?.y)) ? Number(loadedModel.position.y) : 0,
+                        Number.isFinite(Number(loadedModel.position?.z)) ? Number(loadedModel.position.z) : 0,
+                    ]
+                    : [0, 0, 0];
+                const finalPosition = [
+                    position[0] + embeddedPosition[0],
+                    position[1] + embeddedPosition[1],
+                    position[2] + embeddedPosition[2],
+                ];
                 const rotation = finiteNumberTuple(transform.rotationEulerRad, 3, [0, 0, 0]);
-                app.setModelPosition(loadedModel.id, position[0], position[1], position[2]);
+                app.setModelPosition(loadedModel.id, finalPosition[0], finalPosition[1], finalPosition[2]);
                 app.setModelRotation(loadedModel.id, rotation[0], rotation[1], rotation[2]);
                 app.setModelScale(loadedModel.id, resolveAgentSceneInsertScale(loadedModel, transform));
                 applyPreviewModeToAllModels(state.exportMode);

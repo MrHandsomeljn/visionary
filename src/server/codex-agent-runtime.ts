@@ -789,6 +789,36 @@ function frontOrientationPathFromComponents3D(image: CodexGeneratedImage): strin
   return frontOrientationPath;
 }
 
+function stringListFromUnknown(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+}
+
+function assetReferencePathListFromUnknown(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => {
+      const record = readRecord(item);
+      return String(record.path || record.relativePath || record.assetPath || '').trim();
+    }).filter(Boolean)
+    : [];
+}
+
+function components3DModelPathReferencesFromImage(image: CodexGeneratedImage): Array<{ path: string; sourcePath: string }> {
+  const metadata = image.metadata && typeof image.metadata === 'object' ? image.metadata : {};
+  const sourcePaths = stringListFromUnknown(metadata.sourceGlbPaths);
+  let canonicalPaths = stringListFromUnknown(metadata.glbPaths);
+  if (canonicalPaths.length <= 0) {
+    canonicalPaths = assetReferencePathListFromUnknown(metadata.assetReferences)
+      .concat(assetReferencePathListFromUnknown(metadata.canonicalAssetReferences));
+  }
+  if (canonicalPaths.length <= 0) return [];
+  return canonicalPaths.map((canonicalPath, index) => ({
+    path: canonicalPath,
+    sourcePath: sourcePaths[index] || '',
+  }));
+}
+
 function createCodexAgentStepState({
   sessionId,
   stepKey,
@@ -1402,6 +1432,7 @@ export class CodexAgentRuntime {
         projectRoot: env.projectDir,
         projectId: input.projectId,
         components3DFrontOrientationPath: frontOrientationPathFromComponents3D(components3DImage),
+        components3DModelPaths: components3DModelPathReferencesFromImage(components3DImage),
         runLabel: sceneRunLabel(prompt),
       });
     } else if (stepKey === 'top-view' || stepKey === 'layout' || stepKey === 'components-3d') {

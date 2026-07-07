@@ -43,6 +43,10 @@ import {
   getEditorModelAnimationController,
 } from "./model-animation-controller";
 import {
+  normalizeEmbeddedMeshTranslation,
+  type EmbeddedTransformNormalizationResult,
+} from "./embedded-transform-normalizer";
+import {
   VisionaryFrameRenderer,
   renderVisionaryFrame,
   type VisionaryRenderFrameContext,
@@ -90,6 +94,12 @@ const SCENE_SKY_PRESETS: SceneSkyPreset[] = [
 type EditorRenderMode = "color" | "normal" | "depth";
 type EditorRawDepthSource = "mesh" | "gaussian" | "combined";
 
+type EditorLoadModelOptions = {
+  sourcePath?: string;
+  suppressLoadingOverlay?: boolean;
+  normalizeEmbeddedTransform?: boolean;
+};
+
 const RENDER_MODE_INDEX: Record<EditorRenderMode, number> = {
   color: 0,
   normal: 1,
@@ -134,6 +144,7 @@ interface EditorModel {
   sourceFile?: File;
   sourcePath?: string;
   sharedMeshResourceKey?: string;
+  embeddedTransformNormalization?: EmbeddedTransformNormalizationResult;
   animDuration?: number;
   animSpeed?: number;
   animStartTime?: number;
@@ -147,6 +158,7 @@ interface CachedMeshTemplate {
   animationClips: THREE.AnimationClip[];
   pointCount: number;
   refCount: number;
+  embeddedTransformNormalization?: EmbeddedTransformNormalizationResult;
 }
 
 interface EditorCameraPose {
@@ -988,6 +1000,12 @@ export class EditorApp {
     return CANONICAL_EDITOR_MESH_ASSET_PATH_RE.test(normalized) ? normalized.toLowerCase() : "";
   }
 
+  private getMeshTemplateCacheKey(sourcePath = "", normalizeEmbeddedTransform = false): string {
+    const canonicalKey = this.getCanonicalMeshTemplateCacheKey(sourcePath);
+    if (!canonicalKey) return "";
+    return normalizeEmbeddedTransform ? `${canonicalKey}::embedded-transform-normalized` : canonicalKey;
+  }
+
   private cloneMeshTemplate(root: THREE.Object3D): THREE.Object3D {
     return cloneSkeletonAwareObject(root) as THREE.Object3D;
   }
@@ -1333,7 +1351,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   /**
    * Load a model file
    */
-  async loadModel(file: File, options: { sourcePath?: string; suppressLoadingOverlay?: boolean } = {}): Promise<EditorModel | null> {
+  async loadModel(file: File, options: EditorLoadModelOptions = {}): Promise<EditorModel | null> {
     console.log(`[EditorApp ${this.VERSION}] ===== loadModel START =====`);
     console.log(`[EditorApp ${this.VERSION}] File:`, file.name, file.size, 'bytes', file.type);
 
@@ -1362,6 +1380,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       let rotation = { x: 0, y: 0, z: 0 };
       let scale = 1;
       let sharedMeshResourceKey = "";
+      let embeddedTransformNormalization: EmbeddedTransformNormalizationResult | undefined;
 
       if (lowerName.endsWith('.onnx')) {
         // Load ONNX model
@@ -1388,13 +1407,15 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         isDynamic = Boolean(modelEntry.isDynamic);
         pointCount = Number(modelEntry.pointCount ?? 0);
       } else if (this.isMeshFilename(lowerName)) {
-        const meshTemplateCacheKey = this.getCanonicalMeshTemplateCacheKey(options.sourcePath || file.name);
+        const normalizeEmbeddedTransform = options.normalizeEmbeddedTransform === true;
+        const meshTemplateCacheKey = this.getMeshTemplateCacheKey(options.sourcePath || file.name, normalizeEmbeddedTransform);
         let animationClips: THREE.AnimationClip[] = [];
         const cachedTemplate = meshTemplateCacheKey ? this.meshModelTemplateCache.get(meshTemplateCacheKey) : undefined;
         if (cachedTemplate) {
           meshObject = this.cloneMeshTemplate(cachedTemplate.object3D);
           animationClips = cachedTemplate.animationClips;
           pointCount = cachedTemplate.pointCount;
+          embeddedTransformNormalization = cachedTemplate.embeddedTransformNormalization;
           cachedTemplate.refCount += 1;
           sharedMeshResourceKey = cachedTemplate.key;
         } else {
@@ -1411,6 +1432,12 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
           }
           const templateObject = loaded.object3D() as THREE.Object3D;
           animationClips = loaded.animationClips?.() ?? [];
+          if (normalizeEmbeddedTransform) {
+            const normalization = normalizeEmbeddedMeshTranslation(templateObject);
+            if (normalization.applied) {
+              embeddedTransformNormalization = normalization;
+            }
+          }
           const templatePointCount = this.countMeshVertices(templateObject);
           if (meshTemplateCacheKey) {
             this.meshModelTemplateCache.set(meshTemplateCacheKey, {
@@ -1419,6 +1446,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
               animationClips,
               pointCount: templatePointCount,
               refCount: 1,
+              embeddedTransformNormalization,
             });
             meshObject = this.cloneMeshTemplate(templateObject);
             pointCount = templatePointCount;
@@ -1507,6 +1535,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         sourceFile: file,
         sourcePath: options.sourcePath || file.name,
         sharedMeshResourceKey: sharedMeshResourceKey || undefined,
+        embeddedTransformNormalization,
         animDuration: Number.isFinite(Number(modelEntry?.animDuration))
           ? Number(modelEntry?.animDuration)
           : (meshAnimationController && Number.isFinite(meshAnimationController.getDuration()) && meshAnimationController.getDuration() > 0

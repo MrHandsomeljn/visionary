@@ -25,7 +25,8 @@ test('SceneFS routes persisted mesh asset types through the editor model loader'
 test('EditorApp can suppress per-model loading overlay during batch scene restore', () => {
     const source = readFileSync(new URL('../src/editor/editor-app.ts', import.meta.url), 'utf8');
 
-    assert.match(source, /async loadModel\(file: File, options: \{ sourcePath\?: string; suppressLoadingOverlay\?: boolean \} = \{\}\)/);
+    assert.match(source, /type EditorLoadModelOptions = \{[\s\S]*sourcePath\?: string;[\s\S]*suppressLoadingOverlay\?: boolean;[\s\S]*normalizeEmbeddedTransform\?: boolean;[\s\S]*\};/);
+    assert.match(source, /async loadModel\(file: File, options: EditorLoadModelOptions = \{\}\)/);
     assert.match(source, /const shouldManageLoadingOverlay = options\.suppressLoadingOverlay !== true;/);
     assert.match(source, /if \(shouldManageLoadingOverlay\) \{\s*this\.showLoading\(true, `Loading \$\{file\.name\}\.\.\.`, 0\);\s*\}/s);
     assert.match(source, /if \(shouldManageLoadingOverlay\) \{\s*this\.showLoading\(true, progress\.stage, Math\.round\(progress\.progress \* 100\)\);\s*\}/s);
@@ -38,6 +39,8 @@ test('EditorApp reuses canonical GLB mesh templates for repeated scene models', 
     assert.match(source, /const CANONICAL_EDITOR_MESH_ASSET_PATH_RE = \/\^assets\\\/\[a-f0-9\]\{64\}\\\.\(\?:glb\|gltf\)\$\/i;/);
     assert.match(source, /private meshModelTemplateCache: Map<string, CachedMeshTemplate> = new Map\(\);/);
     assert.match(source, /private getCanonicalMeshTemplateCacheKey\(sourcePath = ""\): string/);
+    assert.match(source, /private getMeshTemplateCacheKey\(sourcePath = "", normalizeEmbeddedTransform = false\): string/);
+    assert.match(source, /return normalizeEmbeddedTransform \? `\$\{canonicalKey\}::embedded-transform-normalized` : canonicalKey;/);
     assert.match(source, /this\.meshModelTemplateCache\.get\(meshTemplateCacheKey\)/);
     assert.match(source, /meshObject = this\.cloneMeshTemplate\(cachedTemplate\.object3D\);/);
     assert.match(source, /cachedTemplate\.refCount \+= 1;/);
