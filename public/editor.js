@@ -9,6 +9,7 @@ import {
 } from './editor-agent-scroll.js';
 import {
     appendAgentSessionRetryAttempt,
+    appendAgentSessionWholeTaskRetryAttempt,
     createAgentGenerationAttempt,
     createAgentSession,
     createAgentThreadMessage,
@@ -22,7 +23,29 @@ import {
     toggleAgentSessionCollapsed,
     updateAgentSessionAttempt,
 } from '../src/editor/agent-session-model.js';
+import {
+    activateSceneSkillCandidate,
+    appendSceneSkillCandidate,
+    createEmptySceneSkillBranch,
+    createSceneSkillCandidate,
+    createSceneSkillExecutionRef,
+    getSceneSkillActiveCandidate,
+    getSceneSkillActiveParentCandidateIds,
+    getSceneSkillCandidateGallery,
+    getSceneSkillSiblingCandidates,
+    isSceneSkillExecutionCurrent,
+    interruptSceneSkillBranchExecutions,
+    migrateLegacySceneSkillAttempt,
+    normalizeSceneSkillBranch,
+    resolveActiveSceneSkillContext,
+    setSceneSkillStageExecution,
+    updateSceneSkillActiveCandidate,
+} from '../src/editor/scene-skill-branch-model.js';
 import { AgentSessionStore } from '../src/editor/agent-session-store.js';
+import {
+    mergeAgentIncrementalImages,
+    resolveAgentImageSelectionIndex,
+} from '../src/editor/agent-incremental-images.js';
 import {
     beginDemoCameraPreview,
     buildDemoKeyframeRevealQueue,
@@ -50,6 +73,7 @@ import {
     resolveFloatingPanelLayerZIndices,
 } from './editor-floating-panels.js';
 import { SceneFS } from '../src/app/scene-fs.ts';
+import { reportDevBootProgress } from '../src/editor/dev-boot-progress.ts';
 import { ProjectApiClient } from '../src/editor/project-api-client.js';
 
 // DOM 元素引用
@@ -73,7 +97,6 @@ const dom = {
     btnUserSession: document.getElementById('btnUserSession'),
     btnCollapsedUserSession: document.getElementById('btnCollapsedUserSession'),
     agentContextSummary: document.getElementById('agentContextSummary'),
-import { reportDevBootProgress } from '../src/editor/dev-boot-progress.ts';
     btnAgentClearConversation: document.getElementById('btnAgentClearConversation'),
     agentMessageScroll: document.querySelector('.agent-message-scroll'),
     agentMessageList: document.getElementById('agentMessageList'),
@@ -260,12 +283,56 @@ import { reportDevBootProgress } from '../src/editor/dev-boot-progress.ts';
     postLoginProjectModal: document.getElementById('postLoginProjectModal'),
     projectBrowserModal: document.getElementById('projectBrowserModal'),
     projectBrowserTitle: document.getElementById('projectBrowserTitle'),
+    projectBrowserProjectsTab: document.getElementById('projectBrowserProjectsTab'),
+    projectBrowserApiTab: document.getElementById('projectBrowserApiTab'),
+    projectBrowserProjectsPanel: document.getElementById('projectBrowserProjectsPanel'),
+    projectBrowserApiPanel: document.getElementById('projectBrowserApiPanel'),
     projectBrowserUserSummary: document.getElementById('projectBrowserUserSummary'),
     projectBrowserProjectGrid: document.getElementById('projectBrowserProjectGrid'),
     projectBrowserCodexAuthInline: document.getElementById('projectBrowserCodexAuthInline'),
     projectBrowserCodexAuthStatus: document.getElementById('projectBrowserCodexAuthStatus'),
     projectBrowserAgentRuntimeStatus: document.getElementById('projectBrowserAgentRuntimeStatus'),
     projectBrowserCodexAuthKey: document.getElementById('projectBrowserCodexAuthKey'),
+    projectBrowserPipelineApiStatus: document.getElementById('projectBrowserPipelineApiStatus'),
+    pipelineApiKey: document.getElementById('pipelineApiKey'),
+    pipelineApiBase: document.getElementById('pipelineApiBase'),
+    pipelineApiProvider: document.getElementById('pipelineApiProvider'),
+    pipelineApiModelName: document.getElementById('pipelineApiModelName'),
+    pipelineApiImageUrl: document.getElementById('pipelineApiImageUrl'),
+    pipelineApiImageModel: document.getElementById('pipelineApiImageModel'),
+    pipelineApiImageTimeoutSeconds: document.getElementById('pipelineApiImageTimeoutSeconds'),
+    btnProjectBrowserSavePipelineApiConfig: document.getElementById('btnProjectBrowserSavePipelineApiConfig'),
+    projectBrowserComponents3DStatus: document.getElementById('projectBrowserComponents3DStatus'),
+    projectBrowserComponents3DProvider: document.getElementById('projectBrowserComponents3DProvider'),
+    components3DMockedPanel: document.getElementById('components3DMockedPanel'),
+    components3DTrellisPanel: document.getElementById('components3DTrellisPanel'),
+    components3DHunyuanPanel: document.getElementById('components3DHunyuanPanel'),
+    components3DTrellisBaseUrl: document.getElementById('components3DTrellisBaseUrl'),
+    components3DTrellisHost: document.getElementById('components3DTrellisHost'),
+    components3DTrellisPort: document.getElementById('components3DTrellisPort'),
+    components3DTrellisModel: document.getElementById('components3DTrellisModel'),
+    components3DTrellisModelOptions: document.getElementById('components3DTrellisModelOptions'),
+    components3DTrellisPollInterval: document.getElementById('components3DTrellisPollInterval'),
+    components3DTrellisMaxWait: document.getElementById('components3DTrellisMaxWait'),
+    components3DTrellisCallbackUrl: document.getElementById('components3DTrellisCallbackUrl'),
+    components3DTrellisDownloadBaseUrl: document.getElementById('components3DTrellisDownloadBaseUrl'),
+    components3DTrellisStatusPanel: document.getElementById('components3DTrellisStatusPanel'),
+    btnComponents3DTrellisStatusRefresh: document.getElementById('btnComponents3DTrellisStatusRefresh'),
+    components3DTrellisStatusBadge: document.getElementById('components3DTrellisStatusBadge'),
+    components3DTrellisStatusBody: document.getElementById('components3DTrellisStatusBody'),
+    components3DHunyuanBaseUrl: document.getElementById('components3DHunyuanBaseUrl'),
+    components3DHunyuanHost: document.getElementById('components3DHunyuanHost'),
+    components3DHunyuanPort: document.getElementById('components3DHunyuanPort'),
+    components3DHunyuanSecretId: document.getElementById('components3DHunyuanSecretId'),
+    components3DHunyuanSecretKey: document.getElementById('components3DHunyuanSecretKey'),
+    components3DHunyuanRegion: document.getElementById('components3DHunyuanRegion'),
+    components3DHunyuanVersion: document.getElementById('components3DHunyuanVersion'),
+    components3DHunyuanModel: document.getElementById('components3DHunyuanModel'),
+    components3DHunyuanPollInterval: document.getElementById('components3DHunyuanPollInterval'),
+    components3DHunyuanMaxWait: document.getElementById('components3DHunyuanMaxWait'),
+    components3DHunyuanCallbackUrl: document.getElementById('components3DHunyuanCallbackUrl'),
+    components3DHunyuanDownloadBaseUrl: document.getElementById('components3DHunyuanDownloadBaseUrl'),
+    btnProjectBrowserSaveComponents3DConfig: document.getElementById('btnProjectBrowserSaveComponents3DConfig'),
     projectBrowserSaveAsPanel: document.getElementById('projectBrowserSaveAsPanel'),
     projectBrowserSaveAsName: document.getElementById('projectBrowserSaveAsName'),
     projectBrowserSaveAsNameError: document.getElementById('projectBrowserSaveAsNameError'),
@@ -320,6 +387,62 @@ function createWorkspaceState() {
     };
 }
 
+function createDefaultComponents3DEndpointConfig(kind = 'hunyuan') {
+    if (kind === 'trellis2') {
+        return {
+            host: '127.0.0.1',
+            port: '25367',
+            baseUrl: '',
+            secretId: '',
+            secretKey: '',
+            hasSecretKey: false,
+            region: '',
+            version: '',
+            model: 'TRELLIS.2-1024',
+            pollIntervalSeconds: 5,
+            maxWaitSeconds: 1800,
+            callbackUrl: '',
+            downloadBaseUrl: '',
+        };
+    }
+    return {
+        host: 'ai3d.tencentcloudapi.com',
+        port: '',
+        baseUrl: 'https://ai3d.tencentcloudapi.com',
+        secretId: '',
+        secretKey: '',
+        hasSecretKey: false,
+        region: 'ap-guangzhou',
+        version: '2025-05-13',
+        model: '3.1',
+        pollIntervalSeconds: 15,
+        maxWaitSeconds: 600,
+        callbackUrl: '',
+        downloadBaseUrl: '',
+    };
+}
+
+function createDefaultComponents3DConfig() {
+    return {
+        provider: 'mocked',
+        hunyuan: createDefaultComponents3DEndpointConfig('hunyuan'),
+        trellis2: createDefaultComponents3DEndpointConfig('trellis2'),
+    };
+}
+
+function createDefaultPipelineApiConfig() {
+    return {
+        apiKey: '',
+        hasApiKey: false,
+        apiBase: 'https://api.apiyi.com',
+        apiProvider: 'gemini',
+        modelName: 'gemini-3.1-pro-preview',
+        imageUrl: 'https://api.apiyi.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent',
+        imageModel: 'gemini-3.1-flash-image-preview',
+        imageTimeoutMs: 300000,
+    };
+}
+
 function createProjectSessionState() {
     return {
         user: '',
@@ -331,6 +454,7 @@ function createProjectSessionState() {
         activeProjectAgentAssetPaths: new Set(),
         canonicalAssetReferences: createEmptyCanonicalAssetReferenceSnapshot(),
         canonicalAssetGcPlan: createEmptyCanonicalAssetGcPlan(),
+        projectBrowserActiveTab: 'projects',
         projects: [],
         loadingProjects: false,
         lastError: null,
@@ -339,6 +463,21 @@ function createProjectSessionState() {
         codexAuthEditing: false,
         codexAuthHasAuth: false,
         codexAuthProjectCount: 0,
+        components3DConfigLoading: false,
+        components3DConfigSaving: false,
+        components3DConfigSaved: false,
+        components3DConfigLastError: '',
+        components3DConfig: createDefaultComponents3DConfig(),
+        components3DConfigValidatedSignature: '',
+        components3DTrellisStatus: null,
+        components3DTrellisStatusRefreshing: false,
+        components3DTrellisGpuDetailsCollapsed: true,
+        pipelineApiConfigLoading: false,
+        pipelineApiConfigSaving: false,
+        pipelineApiConfigSaved: false,
+        pipelineApiConfigLastError: '',
+        pipelineApiConfig: createDefaultPipelineApiConfig(),
+        pipelineApiConfigValidatedSignature: '',
         renamingProjectId: '',
         renamingProjectName: '',
         renamingProjectError: '',
@@ -448,6 +587,7 @@ const SCENE_PIPELINE_STEP_DEFS = [
     { key: 'main-image', titleKey: 'agent.pipelineSteps.mainImage' },
     { key: 'top-view', titleKey: 'agent.pipelineSteps.topView' },
     { key: 'layout', titleKey: 'agent.pipelineSteps.layout' },
+    { key: 'object-images', titleKey: 'agent.pipelineSteps.objectImages' },
     { key: 'components-3d', titleKey: 'agent.pipelineSteps.components3d' },
     { key: 'insert-scene', titleKey: 'agent.pipelineSteps.insertScene' },
 ];
@@ -473,6 +613,10 @@ const AGENT_PIPELINE_STATUS_DEFS = {
         labelKey: 'agent.pipelineSteps.pipelineStatuses.running',
         className: 'is-running',
     },
+    queuing: {
+        labelKey: 'agent.pipelineSteps.pipelineStatuses.queuing',
+        className: 'is-queuing',
+    },
     rendering: {
         labelKey: 'agent.pipelineSteps.pipelineStatuses.rendering',
         className: 'is-rendering',
@@ -493,6 +637,10 @@ const AGENT_PIPELINE_STATUS_DEFS = {
         labelKey: 'agent.pipelineSteps.pipelineStatuses.failed',
         className: 'is-failed',
     },
+    TLE: {
+        labelKey: 'agent.pipelineSteps.pipelineStatuses.TLE',
+        className: 'is-failed',
+    },
     pending: {
         labelKey: 'agent.pipelineSteps.pipelineStatuses.pending',
         className: 'is-pending',
@@ -503,6 +651,18 @@ const AGENT_PIPELINE_STATUS_DEFS = {
 let app = null;
 const sceneFs = new SceneFS();
 let animationUiSyncTimer = null;
+let agentProgressElapsedTimer = null;
+let agentAssetProgressPopover = null;
+let agentAssetProgressAnchorBlockId = '';
+let agentAssetProgressHideTimer = null;
+let agentAssetProgressTrellisStatusRefreshPromise = null;
+let agentAssetProgressTrellisStatusLastRequestedAt = 0;
+let agentAssetProgressPendingSnapshot = null;
+const agentPendingStepRenders = new Map();
+const agentPendingSessionRenders = new Map();
+let agentPendingMessageListRender = null;
+const selectionSafeTextPendingElements = new Set();
+const selectionSafeTextPendingValues = new WeakMap();
 let labelDragState = null;
 let isInputLabelDragging = false;
 let timelinePlaybackRaf = 0;
@@ -525,6 +685,7 @@ let agentPreviewManagerPromise = null;
 let projectRenameCommitInFlight = false;
 let agentMessageBottomPinRaf = 0;
 let agentMessageBottomPinFramesRemaining = 0;
+let agentMessageBottomPinUntil = 0;
 let agentMessageScrollbarSyncRaf = 0;
 let agentMessageScrollbarScheduledMeasure = false;
 let agentMessageScrollbarMeasureDirty = true;
@@ -532,10 +693,13 @@ let agentMessageScrollbarMetricsCache = null;
 let agentMessageScrollbarResizeObserver = null;
 let agentMessageLayoutAnimationRaf = 0;
 const agentThumbnailImageCache = new Map();
+const agentStepGalleryUpdateTokens = new Map();
+const agentAssetRetryInFlight = new Set();
 const agentCanonicalAssetBlobCache = new Map();
 let agentWorkbenchResizeRaf = 0;
 let agentWorkbenchCollapseSyncRaf = 0;
 let agentWorkbenchTogglingTimer = 0;
+let agentWorkbenchCollapseAnimationToken = 0;
 let agentSessionStore = null;
 let agentSessionPersistTimer = 0;
 let preferredLeftSidebarWidth = null;
@@ -555,6 +719,8 @@ let lastCanvasViewportSync = null;
 let agentCameraTrajectoryPreview = null;
 let agentCameraRenderJob = null;
 let agentSceneInsertPreview = null;
+const sceneSkillExecutionControllers = new Map();
+const sceneSkillCandidateActivationKeys = new Set();
 const projectApi = new ProjectApiClient();
 const agentSessionActionHandlers = {
     onCancel: null,
@@ -571,6 +737,7 @@ const AGENT_WORKBENCH_DEFAULT_WIDTH = 360;
 const AGENT_WORKBENCH_MIN_WIDTH = 314;
 const AGENT_WORKBENCH_MAX_WIDTH = 520;
 const AGENT_WORKBENCH_COLLAPSED_WIDTH = 64;
+const AGENT_WORKBENCH_COLLAPSE_ANIMATION_MS = 220;
 const AGENT_STEP_ANIMATION_MS = 220;
 const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_left_sidebar_width_v4';
 const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = 'visionary_editor_right_sidebar_width';
@@ -694,6 +861,7 @@ const UI_TEXT = {
             bootInitializingWebGpu: '正在初始化 WebGPU 渲染器...',
             bootConnectingEditor: '正在连接模型、相机和时间轴事件...',
             bootFinalizingUi: '正在同步侧栏、工具栏和时间轴状态...',
+            bootReady: '编辑器已就绪。',
             loadingModel: '加载模型中... ({current}/{total})',
             renderingVideo: '渲染视频中...',
             renderingImage: '渲染图片中...',
@@ -755,6 +923,8 @@ const UI_TEXT = {
             noActiveProjectSelected: '尚未选择项目',
             noActiveProject: '未打开项目',
             chooseProjectBeforeSync: '同步前需要先选择服务器项目',
+            unsavedDraft: '未保存草稿',
+            deletedProjectDraft: '项目已删除，当前画布和 Agent 对话保留为未保存草稿，可另存为新项目或选择本地工作区',
             synced: '已同步',
             lastStaged: '上次暂存',
             ariaLabel: '工作区状态',
@@ -780,6 +950,10 @@ const UI_TEXT = {
             discardAction: '丢弃',
             saveAsNewAction: '保存为新项目',
             browserTitle: '我的项目',
+            browserProjectsTab: '我的项目',
+            apiManagementTab: 'API 管理',
+            apiManagementTitle: 'API 管理',
+            apiManagementDescription: '集中配置 Codex、3D 生成和 Pipeline 对话所需的密钥。',
             saveAsLabel: '另存为项目名',
             saveAction: '保存',
             createNewProjectAction: '创建新项目',
@@ -801,7 +975,9 @@ const UI_TEXT = {
             projectRenamed: '项目已重命名为“{name}”',
             confirmDeleteProject: '确认删除项目“{name}”？',
             projectDeleted: '项目已删除：{name}',
+            currentProjectDeletedDraft: '项目已删除，当前画布和 Agent 对话保留为未保存草稿，可另存为新项目或选择本地工作区',
             codexAuthTitle: 'Codex Auth',
+            codexAuthDescription: '用于后台 Codex Agent 的项目内对话与任务执行。',
             codexAuthPlaceholder: '输入 CODEX_API_KEY',
             codexAuthSaveAction: '保存 Auth',
             codexAuthEditAction: '编辑 Codex Auth',
@@ -821,6 +997,72 @@ const UI_TEXT = {
             agentRuntimeNoServerWorkspace: '当前项目未绑定服务器工作区，当前使用 Demo Agent',
             agentRuntimeNoAuth: 'Codex Auth 未配置，当前使用 Demo Agent',
             agentRuntimeReady: '已启用实际 Codex Agent',
+            apiProvider3DTitle: '3D 生成 API',
+            apiProvider3DDescription: '用于从对话生成 Mesh、3DGS 或 4DGS 资产。',
+            components3DProviderMocked: 'Mocked',
+            components3DProviderHunyuan: 'Hunyuan',
+            components3DProviderTrellis2: '私有部署',
+            components3DMockedHint: '使用本地 demo GLB，不会调用外部 3D 生成服务。',
+            components3DTrellisStatusTitle: 'TRELLIS 状态',
+            components3DTrellisStatusReady: '可用',
+            components3DTrellisStatusUnavailable: '不可用',
+            components3DTrellisStatusUnknown: '未检查',
+            components3DTrellisStatusChecking: '检查中...',
+            components3DTrellisStatusRefresh: '刷新 TRELLIS 状态',
+            components3DTrellisStatusRefreshFailed: 'TRELLIS 状态刷新失败',
+            components3DTrellisStatusNoData: '暂无状态数据',
+            components3DTrellisStatusEndpoint: '状态 URL',
+            components3DTrellisStatusServerTime: '服务器时间',
+            components3DTrellisStatusWorkers: 'Worker',
+            components3DTrellisStatusQueue: '队列',
+            components3DTrellisStatusGpu: 'GPU',
+            components3DTrellisStatusModels: '模型列表',
+            components3DTrellisStatusGpuDetails: 'GPU 详情',
+            components3DTrellisStatusExpandGpuDetails: '展开 GPU 详情',
+            components3DTrellisStatusCollapseGpuDetails: '收起 GPU 详情',
+            components3DTrellisStatusEnabled: '已启用',
+            components3DTrellisStatusDisabled: '未启用',
+            components3DTrellisStatusIdle: '空闲',
+            components3DTrellisStatusBusy: '忙碌',
+            components3DTrellisStatusTotal: '总数',
+            components3DTrellisStatusQueued: '排队',
+            components3DTrellisStatusRunning: '运行中',
+            components3DTrellisStatusActive: '活跃',
+            components3DTrellisStatusPhysical: '物理',
+            components3DTrellisStatusWorkerGpuIds: 'Worker GPU ID',
+            apiConfigNotSaved: '未保存',
+            apiConfigLoaded: '已加载',
+            apiConfigLoading: '加载中...',
+            apiConfigSaving: '保存中...',
+            apiConfigSaved: '已保存',
+            apiConfigModified: '有未保存修改',
+            apiConfigSaveFailed: '保存 API 配置失败',
+            apiConfigLoadFailed: '加载 API 配置失败',
+            apiConfigSaveAction: '保存 API 配置',
+            apiFieldBaseUrl: 'Base URL',
+            apiFieldEndpoint: 'Endpoint',
+            apiFieldHost: 'Host/IP',
+            apiFieldPort: '端口',
+            apiFieldModel: '模型',
+            apiFieldApiKey: 'API Key',
+            apiFieldApiBase: 'API Base',
+            apiFieldSecretId: 'Secret ID',
+            apiFieldSecretKey: 'Secret Key',
+            apiFieldRegion: '地域',
+            apiFieldVersion: '版本',
+            apiFieldProvider: 'Provider',
+            apiFieldDialogueModel: '对话模型',
+            apiFieldImageUrl: '主图 URL',
+            apiFieldImageModel: '主图模型',
+            apiFieldImageTimeout: '主图超时（秒）',
+            apiFieldPollInterval: '轮询间隔（秒）',
+            apiFieldMaxWait: '最长等待（秒）',
+            apiProviderPipelineTitle: 'Pipeline API',
+            apiProviderPipelineDescription: '用于 Pipeline 内部主图、VLM 和相机轨迹调用的模型服务配置。',
+            apiProviderPlanned: '待接入',
+            apiProviderPlannedHint: '后端保存与调用入口尚未接入',
+            apiProviderKeyPlaceholder: '留空保持已保存密钥',
+            apiProviderSecretKeyPlaceholder: '留空保持已保存密钥',
             loadingUsers: '正在加载用户...',
             noUsersFound: '暂无用户',
             projectCount: '{count} 个项目',
@@ -840,6 +1082,7 @@ const UI_TEXT = {
             openProjectFailedEmpty: '打开项目失败：未能恢复历史场景内容，已阻止空场景覆盖服务器项目',
             savingProject: '正在保存项目...',
             duplicateProjectName: '项目名称与现有名称重复',
+            trashedProjectNameNotice: '同名删除备份仍在清理中，将创建新的独立项目',
             exportingProject: '正在导出项目...',
             exportProject: '导出项目',
             projectExported: '项目已导出到“{name}”',
@@ -861,7 +1104,6 @@ const UI_TEXT = {
             switchToChinese: '切换到中文',
             toggle: '切换语言',
         },
-            bootReady: '编辑器已就绪。',
         canvas: {
             loading: '加载中...',
             noWebgpuTitle: '不支持 WebGPU',
@@ -977,6 +1219,7 @@ const UI_TEXT = {
                 frontView: '正视图生成',
                 topView: '俯视图生成',
                 layout: '获取 layout',
+                objectImages: '获取物体图片',
                 components3d: '生成组件 3D 资产',
                 insertScene: '最终插入到场景',
                 cameraSceneInfo: '场景信息导出',
@@ -986,12 +1229,17 @@ const UI_TEXT = {
                 cameraEval: '相机序列优化',
                 pipelineStatuses: {
                     running: '运行中',
+                    queuing: '排队中',
                     rendering: '渲染中',
                     done: '已完成',
                     skipped: '已跳过',
                     canceled: '已取消',
                     failed: '失败',
                     pending: '等待中',
+                    submitting: '提交中',
+                    queued: '排队中',
+                    downloading: '下载中',
+                    TLE: '超时',
                 },
                 pending: '等待上一步完成',
                 current: '当前步骤',
@@ -999,10 +1247,13 @@ const UI_TEXT = {
                 more: '后续步骤',
                 continueAction: '继续',
                 layoutDetections: '检测到 {count} 个对象',
+                objectImagesCount: '物体图片 {count} 张',
                 components3dAssets: '3D 资产 {count} 个',
                 insertSceneAsset: '场景对象 {count} 个',
                 insertScenePreviewReady: '已在画布生成 {count} 个场景对象预览，请检查后应用、重试或取消',
                 insertSceneInserted: '已插入 {count} 个场景对象',
+                assetProgressTitle: '资产生成进度',
+                assetProgressOpen: '查看各资产生成进度',
             },
         },
         sidebar: {
@@ -1303,6 +1554,7 @@ const UI_TEXT = {
             bootInitializingWebGpu: 'Initializing WebGPU renderer...',
             bootConnectingEditor: 'Connecting model, camera, and timeline events...',
             bootFinalizingUi: 'Syncing sidebars, toolbar, and timeline state...',
+            bootReady: 'Editor ready.',
             loadingModel: 'Loading models... ({current}/{total})',
             renderingVideo: 'Rendering video...',
             renderingImage: 'Rendering image...',
@@ -1364,6 +1616,8 @@ const UI_TEXT = {
             noActiveProjectSelected: 'No active project selected',
             noActiveProject: 'No active project',
             chooseProjectBeforeSync: 'Choose a server project before syncing',
+            unsavedDraft: 'Unsaved draft',
+            deletedProjectDraft: 'Project deleted. The current canvas and Agent conversation are kept as an unsaved draft; save them as a new project or choose a local workspace.',
             synced: 'Synced',
             lastStaged: 'Last staged',
             ariaLabel: 'Workspace status',
@@ -1389,6 +1643,10 @@ const UI_TEXT = {
             discardAction: 'Discard',
             saveAsNewAction: 'Save as New Project',
             browserTitle: 'My Projects',
+            browserProjectsTab: 'My Projects',
+            apiManagementTab: 'API Management',
+            apiManagementTitle: 'API Management',
+            apiManagementDescription: 'Configure keys for Codex, 3D generation, and pipeline dialogue.',
             saveAsLabel: 'Save as project name',
             saveAction: 'Save',
             createNewProjectAction: 'Create New Project',
@@ -1410,7 +1668,9 @@ const UI_TEXT = {
             projectRenamed: 'Project renamed to "{name}"',
             confirmDeleteProject: 'Delete project "{name}"?',
             projectDeleted: 'Project deleted: {name}',
+            currentProjectDeletedDraft: 'Project deleted. The current canvas and Agent conversation are kept as an unsaved draft; save them as a new project or choose a local workspace.',
             codexAuthTitle: 'Codex Auth',
+            codexAuthDescription: 'Used by the backend Codex Agent for project dialogue and task execution.',
             codexAuthPlaceholder: 'Enter CODEX_API_KEY',
             codexAuthSaveAction: 'Save Auth',
             codexAuthEditAction: 'Edit Codex Auth',
@@ -1430,6 +1690,72 @@ const UI_TEXT = {
             agentRuntimeNoServerWorkspace: 'Current project is not bound to the server workspace, using Demo Agent',
             agentRuntimeNoAuth: 'Codex Auth is not configured, using Demo Agent',
             agentRuntimeReady: 'Real Codex Agent is enabled',
+            apiProvider3DTitle: '3D Generation API',
+            apiProvider3DDescription: 'Used to generate Mesh, 3DGS, or 4DGS assets from dialogue.',
+            components3DProviderMocked: 'Mocked',
+            components3DProviderHunyuan: 'Hunyuan',
+            components3DProviderTrellis2: 'Private Deployment',
+            components3DMockedHint: 'Use local demo GLB assets without calling an external 3D generation service.',
+            components3DTrellisStatusTitle: 'TRELLIS Status',
+            components3DTrellisStatusReady: 'Available',
+            components3DTrellisStatusUnavailable: 'Unavailable',
+            components3DTrellisStatusUnknown: 'Not checked',
+            components3DTrellisStatusChecking: 'Checking...',
+            components3DTrellisStatusRefresh: 'Refresh TRELLIS status',
+            components3DTrellisStatusRefreshFailed: 'Failed to refresh TRELLIS status',
+            components3DTrellisStatusNoData: 'No status data',
+            components3DTrellisStatusEndpoint: 'Status URL',
+            components3DTrellisStatusServerTime: 'Server time',
+            components3DTrellisStatusWorkers: 'Workers',
+            components3DTrellisStatusQueue: 'Queue',
+            components3DTrellisStatusGpu: 'GPU',
+            components3DTrellisStatusModels: 'Model List',
+            components3DTrellisStatusGpuDetails: 'GPU Details',
+            components3DTrellisStatusExpandGpuDetails: 'Expand GPU details',
+            components3DTrellisStatusCollapseGpuDetails: 'Collapse GPU details',
+            components3DTrellisStatusEnabled: 'Enabled',
+            components3DTrellisStatusDisabled: 'Disabled',
+            components3DTrellisStatusIdle: 'Idle',
+            components3DTrellisStatusBusy: 'Busy',
+            components3DTrellisStatusTotal: 'total',
+            components3DTrellisStatusQueued: 'queued',
+            components3DTrellisStatusRunning: 'running',
+            components3DTrellisStatusActive: 'active',
+            components3DTrellisStatusPhysical: 'physical',
+            components3DTrellisStatusWorkerGpuIds: 'Worker GPU ID',
+            apiConfigNotSaved: 'Not saved',
+            apiConfigLoaded: 'Loaded',
+            apiConfigLoading: 'Loading...',
+            apiConfigSaving: 'Saving...',
+            apiConfigSaved: 'Saved',
+            apiConfigModified: 'Unsaved changes',
+            apiConfigSaveFailed: 'Failed to save API config',
+            apiConfigLoadFailed: 'Failed to load API config',
+            apiConfigSaveAction: 'Save API Config',
+            apiFieldBaseUrl: 'Base URL',
+            apiFieldEndpoint: 'Endpoint',
+            apiFieldHost: 'Host/IP',
+            apiFieldPort: 'Port',
+            apiFieldModel: 'Model',
+            apiFieldApiKey: 'API Key',
+            apiFieldApiBase: 'API Base',
+            apiFieldSecretId: 'Secret ID',
+            apiFieldSecretKey: 'Secret Key',
+            apiFieldRegion: 'Region',
+            apiFieldVersion: 'Version',
+            apiFieldProvider: 'Provider',
+            apiFieldDialogueModel: 'Dialogue model',
+            apiFieldImageUrl: 'Main image URL',
+            apiFieldImageModel: 'Main image model',
+            apiFieldImageTimeout: 'Main image timeout (sec)',
+            apiFieldPollInterval: 'Poll interval (sec)',
+            apiFieldMaxWait: 'Max wait (sec)',
+            apiProviderPipelineTitle: 'Pipeline API',
+            apiProviderPipelineDescription: 'Model service settings for pipeline main image, VLM, and camera trajectory calls.',
+            apiProviderPlanned: 'Planned',
+            apiProviderPlannedHint: 'Backend storage and runtime entry points are not wired yet',
+            apiProviderKeyPlaceholder: 'Leave blank to keep saved key',
+            apiProviderSecretKeyPlaceholder: 'Leave blank to keep saved secret key',
             loadingUsers: 'Loading users...',
             noUsersFound: 'No users found',
             projectCount: '{count} projects',
@@ -1449,6 +1775,7 @@ const UI_TEXT = {
             openProjectFailedEmpty: 'Failed to open project: no persisted scene content was restored, so server overwrite was blocked',
             savingProject: 'Saving project...',
             duplicateProjectName: 'Project name already exists',
+            trashedProjectNameNotice: 'A deleted backup with this name is still being cleaned up. A new independent project will be created.',
             exportingProject: 'Exporting project...',
             exportProject: 'Export Project',
             projectExported: 'Project exported to "{name}"',
@@ -1554,7 +1881,6 @@ const UI_TEXT = {
                     characterConceptAlt: 'Character concept preview',
                     characterPreview: 'Character model preview',
                 },
-            bootReady: 'Editor ready.',
                 'camera-direct': {
                     title: 'Camera Direct',
                     short: 'Camera',
@@ -1586,6 +1912,7 @@ const UI_TEXT = {
                 frontView: 'Front view generation',
                 topView: 'Top view generation',
                 layout: 'Layout extraction',
+                objectImages: 'Object image extraction',
                 components3d: 'Generate component 3D assets',
                 insertScene: 'Insert into scene',
                 cameraSceneInfo: 'Scene info export',
@@ -1595,12 +1922,17 @@ const UI_TEXT = {
                 cameraEval: 'Optimize camera sequence',
                 pipelineStatuses: {
                     running: 'Running',
+                    queuing: 'Queuing',
                     rendering: 'Rendering',
                     done: 'Completed',
                     skipped: 'Skipped',
                     canceled: 'Canceled',
                     failed: 'Failed',
                     pending: 'Pending',
+                    submitting: 'Submitting',
+                    queued: 'Queued',
+                    downloading: 'Downloading',
+                    TLE: 'TLE',
                 },
                 pending: 'Waiting for previous step',
                 current: 'Current step',
@@ -1608,10 +1940,13 @@ const UI_TEXT = {
                 more: 'Later steps',
                 continueAction: 'Continue',
                 layoutDetections: '{count} detected objects',
+                objectImagesCount: '{count} object images',
                 components3dAssets: '{count} 3D assets',
                 insertSceneAsset: '{count} scene objects',
                 insertScenePreviewReady: 'Previewed {count} scene objects on the canvas. Review, then apply, retry, or cancel.',
                 insertSceneInserted: 'Inserted {count} scene objects',
+                assetProgressTitle: 'Asset generation progress',
+                assetProgressOpen: 'View per-asset generation progress',
             },
         },
         sidebar: {
@@ -1971,6 +2306,14 @@ function setProjectNameConflictState(input, errorElement) {
     setProjectNameErrorState(input, errorElement, t('projectSession.duplicateProjectName'));
 }
 
+function setProjectNameNoticeState(input, errorElement, message) {
+    input?.classList.remove('has-error');
+    if (errorElement) {
+        errorElement.textContent = message;
+        errorElement.classList.remove('hidden');
+    }
+}
+
 function isDuplicateProjectNameError(error) {
     const code = String(error?.code || '').trim().toUpperCase();
     const message = String(error?.message || '').trim().toLowerCase();
@@ -1985,6 +2328,30 @@ function isInvalidProjectNameError(error) {
         || message.includes('unsupported characters')
         || message.includes('is required')
     );
+}
+
+async function validateProjectNameBeforeCreate({ projectName, input, errorElement } = {}) {
+    try {
+        const validation = await projectApi.validateProjectName({
+            user: state.projectSession.user,
+            name: projectName,
+        });
+        if (validation?.hasTrashedBackup) {
+            setProjectNameNoticeState(input, errorElement, t('projectSession.trashedProjectNameNotice'));
+        }
+        return true;
+    } catch (error) {
+        if (isDuplicateProjectNameError(error)) {
+            setProjectNameConflictState(input, errorElement);
+            return false;
+        }
+        if (isInvalidProjectNameError(error)) {
+            setProjectNameErrorState(input, errorElement, t('projectSession.invalidProjectName'));
+            return false;
+        }
+        showError(error?.message || String(error));
+        return false;
+    }
 }
 
 function logCameraControlDebug(kind = 'unknown') {
@@ -2115,8 +2482,12 @@ function isServerProjectSessionActive() {
     );
 }
 
+function isDraftWorkspaceMode() {
+    return state.workspace?.mode === 'draft';
+}
+
 function isLocalWorkspaceSyncMode() {
-    return !isServerProjectSessionActive();
+    return !isServerProjectSessionActive() && !isDraftWorkspaceMode();
 }
 
 function resolveWorkspaceIndicatorStatus() {
@@ -2126,6 +2497,14 @@ function resolveWorkspaceIndicatorStatus() {
     const combinedSaving = Boolean(workspace.saving || workspace.agentSaving);
     const combinedDirty = Boolean(workspace.dirty || workspace.agentDirty);
     const isEnglish = state.uiLanguage === 'en';
+
+    if (isDraftWorkspaceMode()) {
+        return {
+            code: combinedDirty ? 'dirty' : 'no-workspace',
+            label: combinedDirty ? t('workspaceStatus.unsavedDraft') : t('workspaceStatus.noLocalWorkspace'),
+            detail: t('workspaceStatus.deletedProjectDraft'),
+        };
+    }
 
     if (isLocalWorkspaceSyncMode()) {
         if (combinedError) {
@@ -2311,6 +2690,50 @@ function closePostLoginProjectModal() {
     dom.postLoginProjectModal?.classList.add('hidden');
 }
 
+function setProjectBrowserTab(tab = 'projects') {
+    const activeTab = tab === 'api' ? 'api' : 'projects';
+    state.projectSession.projectBrowserActiveTab = activeTab;
+    const entries = [
+        {
+            tab: 'projects',
+            button: dom.projectBrowserProjectsTab,
+            panel: dom.projectBrowserProjectsPanel,
+            titleKey: 'projectSession.browserTitle',
+        },
+        {
+            tab: 'api',
+            button: dom.projectBrowserApiTab,
+            panel: dom.projectBrowserApiPanel,
+            titleKey: 'projectSession.apiManagementTitle',
+        },
+    ];
+    entries.forEach((entry) => {
+        const isActive = entry.tab === activeTab;
+        entry.button?.classList.toggle('is-active', isActive);
+        entry.button?.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        if (entry.panel) {
+            entry.panel.hidden = !isActive;
+        }
+        if (isActive && dom.projectBrowserTitle) {
+            dom.projectBrowserTitle.textContent = t(entry.titleKey);
+        }
+    });
+    if (activeTab !== 'api') {
+        closeProjectBrowserCodexAuthEditor();
+    } else {
+        renderProjectBrowserCodexAuthStatus();
+        renderProjectBrowserPipelineApiConfig();
+        renderProjectBrowserComponents3DConfig();
+    }
+    const showProjectActions = activeTab === 'projects';
+    if (dom.btnProjectBrowserCreateNew) {
+        dom.btnProjectBrowserCreateNew.hidden = !showProjectActions;
+    }
+    if (dom.btnProjectBrowserSaveAs) {
+        dom.btnProjectBrowserSaveAs.hidden = !showProjectActions;
+    }
+}
+
 function openProjectBrowserModal() {
     if (dom.projectBrowserTitle) {
         dom.projectBrowserTitle.textContent = t('projectSession.browserTitle');
@@ -2324,9 +2747,13 @@ function openProjectBrowserModal() {
         dom.projectBrowserSaveAsName.value = state.projectSession.activeProjectName || getProjectSessionDefaultProjectName();
     }
     closeProjectBrowserSaveAsPanel();
+    setProjectBrowserTab('projects');
     dom.projectBrowserModal?.classList.remove('hidden');
     renderProjectBrowserCodexAuthStatus();
+    renderProjectBrowserPipelineApiConfig();
+    renderProjectBrowserComponents3DConfig();
     void refreshProjectBrowserCodexAuthStatus();
+    void refreshProjectBrowserUserApiConfig();
     void refreshProjectSessionProjects();
 }
 
@@ -2402,6 +2829,33 @@ function clearActiveServerProjectSelection() {
     state.projectSession.activeProjectName = '';
     clearActiveServerProjectAssetCaches();
     resetAgentCodexSessionBinding();
+}
+
+function detachDeletedServerProjectAsDraft() {
+    clearWorkspaceAutosaveTimer();
+    sceneFs.clearWorkspace?.();
+    clearActiveServerProjectSelection();
+    resetAgentCodexSessionBinding();
+    setPendingWorkspaceTargetAction(null);
+    state.forceFullWorkspaceAssetMigration = false;
+    state.forceFullServerAssetMigration = false;
+    state.workspace = {
+        ...state.workspace,
+        name: null,
+        writable: false,
+        mode: 'draft',
+        dirty: true,
+        saving: false,
+        lastSavedAt: null,
+        error: null,
+        agentDirty: false,
+        agentSaving: false,
+        agentLastSavedAt: null,
+        agentError: null,
+        syncStatus: 'no-workspace',
+    };
+    syncAgentSessionStoreWorkspaceBinding();
+    updateWorkspaceStatusIndicator();
 }
 
 async function selectLocalWorkspace(options = {}) {
@@ -2680,6 +3134,720 @@ async function saveProjectBrowserCodexAuth() {
     }
 }
 
+function normalizeComponents3DProvider(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'hunyuan') return 'hunyuan';
+    if (normalized === 'trellis.2' || normalized === 'trellis2' || normalized === 'trellis-2') return 'trellis.2';
+    return 'mocked';
+}
+
+function normalizeComponents3DEndpointConfig(value, kind) {
+    const defaults = createDefaultComponents3DEndpointConfig(kind);
+    const record = value && typeof value === 'object' ? value : {};
+    const secretKey = String(record.secretKey || '').trim();
+    return {
+        host: String(record.host ?? defaults.host).trim(),
+        port: String(record.port ?? defaults.port).trim(),
+        baseUrl: String(record.baseUrl ?? defaults.baseUrl).trim(),
+        secretId: String(record.secretId ?? defaults.secretId).trim(),
+        secretKey,
+        hasSecretKey: Boolean(record.hasSecretKey || secretKey),
+        region: String(record.region ?? defaults.region).trim(),
+        version: String(record.version ?? defaults.version).trim(),
+        model: String(record.model ?? defaults.model).trim() || defaults.model,
+        pollIntervalSeconds: Number(record.pollIntervalSeconds ?? defaults.pollIntervalSeconds) || defaults.pollIntervalSeconds,
+        maxWaitSeconds: Number(record.maxWaitSeconds ?? defaults.maxWaitSeconds) || defaults.maxWaitSeconds,
+        callbackUrl: String(record.callbackUrl ?? defaults.callbackUrl).trim(),
+        downloadBaseUrl: String(record.downloadBaseUrl ?? defaults.downloadBaseUrl).trim(),
+    };
+}
+
+function normalizeComponents3DConfig(value) {
+    const defaults = createDefaultComponents3DConfig();
+    const record = value && typeof value === 'object' ? value : {};
+    return {
+        provider: normalizeComponents3DProvider(record.provider ?? defaults.provider),
+        hunyuan: normalizeComponents3DEndpointConfig(record.hunyuan, 'hunyuan'),
+        trellis2: normalizeComponents3DEndpointConfig(record.trellis2 ?? record.trellis, 'trellis2'),
+    };
+}
+
+function normalizeTrellisStatusNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeTrellisStatusBoolean(value) {
+    return typeof value === 'boolean' ? value : null;
+}
+
+function normalizeTrellisStatusStringList(value) {
+    return Array.isArray(value)
+        ? value.map((item) => String(item ?? '').trim()).filter(Boolean)
+        : [];
+}
+
+function normalizeTrellisStatusNumberList(value) {
+    return Array.isArray(value)
+        ? value
+            .map((item) => normalizeTrellisStatusNumber(item))
+            .filter((item) => item !== null)
+        : [];
+}
+
+function normalizeComponents3DTrellisStatus(value) {
+    const record = value && typeof value === 'object' ? value : null;
+    if (!record) return null;
+    const queue = record.queue && typeof record.queue === 'object' ? record.queue : {};
+    const statusCounts = queue.statusCounts && typeof queue.statusCounts === 'object'
+        ? Object.fromEntries(Object.entries(queue.statusCounts)
+            .map(([key, count]) => [key, normalizeTrellisStatusNumber(count)])
+            .filter((entry) => entry[1] !== null))
+        : {};
+    return {
+        ok: Boolean(record.ok),
+        checkedAt: String(record.checkedAt || '').trim(),
+        statusUrl: String(record.statusUrl || '').trim(),
+        httpStatus: normalizeTrellisStatusNumber(record.httpStatus),
+        error: String(record.error || '').trim(),
+        serverTimeIso: String(record.serverTimeIso || '').trim(),
+        publicBaseUrl: String(record.publicBaseUrl || '').trim(),
+        workersEnabled: normalizeTrellisStatusBoolean(record.workersEnabled),
+        physicalGpuCount: normalizeTrellisStatusNumber(record.physicalGpuCount),
+        configuredWorkerGpuIds: normalizeTrellisStatusNumberList(record.configuredWorkerGpuIds),
+        workerCount: normalizeTrellisStatusNumber(record.workerCount),
+        busyWorkerCount: normalizeTrellisStatusNumber(record.busyWorkerCount),
+        idleWorkerCount: normalizeTrellisStatusNumber(record.idleWorkerCount),
+        queue: {
+            maxQueuedJobs: normalizeTrellisStatusNumber(queue.maxQueuedJobs),
+            queued: normalizeTrellisStatusNumber(queue.queued),
+            running: normalizeTrellisStatusNumber(queue.running),
+            totalActive: normalizeTrellisStatusNumber(queue.totalActive),
+            idle: normalizeTrellisStatusBoolean(queue.idle),
+            statusCounts,
+        },
+        gpuStatus: Array.isArray(record.gpuStatus)
+            ? record.gpuStatus.map((entry) => {
+                const gpu = entry && typeof entry === 'object' ? entry : {};
+                return {
+                    gpuId: normalizeTrellisStatusNumber(gpu.gpuId),
+                    memoryUsedMiB: normalizeTrellisStatusNumber(gpu.memoryUsedMiB),
+                    memoryTotalMiB: normalizeTrellisStatusNumber(gpu.memoryTotalMiB),
+                    utilizationGpuPct: normalizeTrellisStatusNumber(gpu.utilizationGpuPct),
+                    roles: normalizeTrellisStatusStringList(gpu.roles),
+                };
+            })
+            : [],
+        generationModels: Array.isArray(record.generationModels)
+            ? record.generationModels.map((entry) => {
+                const model = entry && typeof entry === 'object' ? entry : {};
+                return {
+                    name: String(model.name || '').trim(),
+                    pipelineType: String(model.pipelineType || '').trim(),
+                    lowVram: normalizeTrellisStatusBoolean(model.lowVram),
+                    remesh: normalizeTrellisStatusBoolean(model.remesh),
+                    textureSize: normalizeTrellisStatusNumber(model.textureSize),
+                    decimationTarget: normalizeTrellisStatusNumber(model.decimationTarget),
+                    exportGpu: normalizeTrellisStatusNumber(model.exportGpu),
+                    cumeshGpu: normalizeTrellisStatusNumber(model.cumeshGpu),
+                    snapshotMode: String(model.snapshotMode || '').trim(),
+                };
+            }).filter((model) => model.name)
+            : [],
+        actions: normalizeTrellisStatusStringList(record.actions),
+    };
+}
+
+function syncComponents3DTrellisModelOptions(status) {
+    if (!dom.components3DTrellisModelOptions || !status) return;
+    const modelNames = [...new Set(status.generationModels.map((model) => model.name).filter(Boolean))];
+    dom.components3DTrellisModelOptions.innerHTML = modelNames
+        .map((modelName) => `<option value="${escapeHtml(modelName)}"></option>`)
+        .join('');
+}
+
+function formatTrellisStatusNumber(value, suffix = '') {
+    const numeric = normalizeTrellisStatusNumber(value);
+    if (numeric === null) return '-';
+    const formatted = Number.isInteger(numeric) ? numeric.toLocaleString() : numeric.toFixed(1);
+    return suffix ? `${formatted}${suffix}` : formatted;
+}
+
+function formatTrellisStatusTime(value) {
+    const text = String(value || '').trim();
+    if (!text) return '-';
+    const timestamp = Date.parse(text);
+    if (!Number.isFinite(timestamp)) return text;
+    return new Date(timestamp).toLocaleString();
+}
+
+function formatTrellisStatusFlag(value, trueKey, falseKey) {
+    if (typeof value !== 'boolean') return '-';
+    return t(value ? trueKey : falseKey);
+}
+
+function formatTrellisStatusParts(parts) {
+    return parts.filter((part) => String(part || '').trim()).join(' · ');
+}
+
+function renderTrellisStatusRow(labelKey, value) {
+    return `
+        <div class="project-browser-api-status-row">
+            <span>${escapeHtml(t(labelKey))}</span>
+            <span>${escapeHtml(value || '-')}</span>
+        </div>
+    `;
+}
+
+function createTrellisGpuDetailsToggleIcon() {
+    return `
+        <svg class="project-browser-api-details-toggle-icon" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+            <g class="project-browser-api-details-toggle-shape is-menu">
+                <line class="project-browser-api-details-toggle-line" x1="20" y1="35" x2="80" y2="35"></line>
+                <line class="project-browser-api-details-toggle-line" x1="20" y1="50" x2="80" y2="50"></line>
+                <line class="project-browser-api-details-toggle-line" x1="20" y1="65" x2="80" y2="65"></line>
+            </g>
+            <g class="project-browser-api-details-toggle-shape is-arrow">
+                <line class="project-browser-api-details-toggle-line" x1="25" y1="40" x2="50" y2="65"></line>
+                <line class="project-browser-api-details-toggle-line" x1="75" y1="40" x2="50" y2="65"></line>
+            </g>
+        </svg>
+    `;
+}
+
+function setProjectBrowserComponents3DGpuDetailsCollapsed(collapsed) {
+    const nextCollapsed = Boolean(collapsed);
+    state.projectSession.components3DTrellisGpuDetailsCollapsed = nextCollapsed;
+    const details = dom.components3DTrellisStatusBody?.querySelector('[data-trellis-gpu-details]');
+    const toggle = details?.querySelector('[data-trellis-gpu-details-toggle]');
+    const body = details?.querySelector('[data-trellis-gpu-details-body]');
+    details?.classList.toggle('is-collapsed', nextCollapsed);
+    toggle?.classList.toggle('is-collapsed', nextCollapsed);
+    toggle?.setAttribute('aria-expanded', String(!nextCollapsed));
+    const label = t(nextCollapsed
+        ? 'projectSession.components3DTrellisStatusExpandGpuDetails'
+        : 'projectSession.components3DTrellisStatusCollapseGpuDetails');
+    setButtonTooltip(toggle, label, label);
+    if (body) body.hidden = nextCollapsed;
+}
+
+function formatTrellisGpuStatus(gpu) {
+    const gpuName = gpu.gpuId === null ? 'GPU' : `GPU ${formatTrellisStatusNumber(gpu.gpuId)}`;
+    const memory = gpu.memoryUsedMiB === null && gpu.memoryTotalMiB === null
+        ? '-'
+        : `${formatTrellisStatusNumber(gpu.memoryUsedMiB)} / ${formatTrellisStatusNumber(gpu.memoryTotalMiB)} MiB`;
+    return formatTrellisStatusParts([
+        gpuName,
+        memory,
+        formatTrellisStatusNumber(gpu.utilizationGpuPct, '%'),
+        gpu.roles.length ? gpu.roles.join('/') : '',
+    ]);
+}
+
+function formatTrellisModelStatus(model) {
+    return formatTrellisStatusParts([
+        model.name,
+        model.pipelineType,
+        model.textureSize === null ? '' : `${formatTrellisStatusNumber(model.textureSize)}px`,
+        model.lowVram === true ? 'low-vram' : '',
+        model.remesh === true ? 'remesh' : '',
+        model.snapshotMode,
+    ]);
+}
+
+function renderProjectBrowserComponents3DTrellisStatus(config) {
+    const isTrellis = normalizeComponents3DProvider(config?.provider) === 'trellis.2';
+    if (dom.components3DTrellisStatusPanel) {
+        dom.components3DTrellisStatusPanel.hidden = !isTrellis;
+    }
+    if (!isTrellis) return;
+
+    const status = normalizeComponents3DTrellisStatus(state.projectSession.components3DTrellisStatus);
+    state.projectSession.components3DTrellisStatus = status;
+    syncComponents3DTrellisModelOptions(status);
+    const isRefreshing = Boolean(state.projectSession.components3DTrellisStatusRefreshing);
+    if (dom.btnComponents3DTrellisStatusRefresh) {
+        dom.btnComponents3DTrellisStatusRefresh.disabled = Boolean(
+            !state.projectSession.authenticated
+            || state.projectSession.components3DConfigLoading
+            || state.projectSession.components3DConfigSaving
+            || isRefreshing
+        );
+        dom.btnComponents3DTrellisStatusRefresh.classList.toggle('is-refreshing', isRefreshing);
+    }
+    const isChecking = Boolean((state.projectSession.components3DConfigLoading || state.projectSession.components3DConfigSaving) && !status);
+    const badgeText = isChecking
+        ? t('projectSession.components3DTrellisStatusChecking')
+        : !status
+            ? t('projectSession.components3DTrellisStatusUnknown')
+            : status.ok
+                ? t('projectSession.components3DTrellisStatusReady')
+                : t('projectSession.components3DTrellisStatusUnavailable');
+    if (dom.components3DTrellisStatusBadge) {
+        dom.components3DTrellisStatusBadge.textContent = badgeText;
+        dom.components3DTrellisStatusBadge.classList.toggle('is-ready', Boolean(status?.ok));
+        dom.components3DTrellisStatusBadge.classList.toggle('is-error', Boolean(status && !status.ok));
+    }
+    if (!dom.components3DTrellisStatusBody) return;
+    if (isChecking || !status) {
+        dom.components3DTrellisStatusBody.innerHTML = `<div>${escapeHtml(isChecking
+            ? t('projectSession.components3DTrellisStatusChecking')
+            : t('projectSession.components3DTrellisStatusNoData'))}</div>`;
+        return;
+    }
+
+    const queue = status.queue || {};
+    const statusRows = [
+        renderTrellisStatusRow('projectSession.components3DTrellisStatusEndpoint', status.statusUrl || status.publicBaseUrl),
+        renderTrellisStatusRow('projectSession.components3DTrellisStatusServerTime', formatTrellisStatusTime(status.serverTimeIso || status.checkedAt)),
+        renderTrellisStatusRow('projectSession.components3DTrellisStatusWorkers', formatTrellisStatusParts([
+            formatTrellisStatusFlag(status.workersEnabled, 'projectSession.components3DTrellisStatusEnabled', 'projectSession.components3DTrellisStatusDisabled'),
+            `${formatTrellisStatusNumber(status.workerCount)} ${t('projectSession.components3DTrellisStatusTotal')}`,
+            `${formatTrellisStatusNumber(status.busyWorkerCount)} ${t('projectSession.components3DTrellisStatusBusy')}`,
+            `${formatTrellisStatusNumber(status.idleWorkerCount)} ${t('projectSession.components3DTrellisStatusIdle')}`,
+        ])),
+        renderTrellisStatusRow('projectSession.components3DTrellisStatusQueue', formatTrellisStatusParts([
+            `${formatTrellisStatusNumber(queue.queued)} ${t('projectSession.components3DTrellisStatusQueued')}`,
+            `${formatTrellisStatusNumber(queue.running)} ${t('projectSession.components3DTrellisStatusRunning')}`,
+            `${formatTrellisStatusNumber(queue.totalActive)} ${t('projectSession.components3DTrellisStatusActive')}`,
+            `${formatTrellisStatusNumber(queue.maxQueuedJobs)} max`,
+            formatTrellisStatusFlag(queue.idle, 'projectSession.components3DTrellisStatusIdle', 'projectSession.components3DTrellisStatusBusy'),
+        ])),
+        renderTrellisStatusRow('projectSession.components3DTrellisStatusGpu', formatTrellisStatusParts([
+            `${formatTrellisStatusNumber(status.physicalGpuCount)} ${t('projectSession.components3DTrellisStatusPhysical')}`,
+            status.configuredWorkerGpuIds.length
+                ? `${t('projectSession.components3DTrellisStatusWorkerGpuIds')}: ${status.configuredWorkerGpuIds.map((id) => formatTrellisStatusNumber(id)).join(', ')}`
+                : '',
+        ])),
+        renderTrellisStatusRow('projectSession.components3DTrellisStatusModels', status.generationModels.map((model) => model.name).join(', ')),
+    ];
+    const gpuRows = status.gpuStatus.length
+        ? `<div class="project-browser-api-status-list">${status.gpuStatus.map((gpu) => `<div>${escapeHtml(formatTrellisGpuStatus(gpu))}</div>`).join('')}</div>`
+        : '';
+    const modelRows = status.generationModels.length
+        ? `<div class="project-browser-api-status-list">${status.generationModels.map((model) => `<div>${escapeHtml(formatTrellisModelStatus(model))}</div>`).join('')}</div>`
+        : '';
+    const gpuDetailsCollapsed = Boolean(state.projectSession.components3DTrellisGpuDetailsCollapsed);
+    const gpuDetailsToggleLabel = t(gpuDetailsCollapsed
+        ? 'projectSession.components3DTrellisStatusExpandGpuDetails'
+        : 'projectSession.components3DTrellisStatusCollapseGpuDetails');
+    const gpuDetails = gpuRows || modelRows
+        ? `
+            <section class="project-browser-api-status-details ${gpuDetailsCollapsed ? 'is-collapsed' : ''}" data-trellis-gpu-details>
+                <button
+                    type="button"
+                    class="project-browser-api-details-toggle ${gpuDetailsCollapsed ? 'is-collapsed' : ''}"
+                    data-trellis-gpu-details-toggle
+                    aria-expanded="${String(!gpuDetailsCollapsed)}"
+                    title="${escapeHtml(gpuDetailsToggleLabel)}"
+                    aria-label="${escapeHtml(gpuDetailsToggleLabel)}"
+                >
+                    <span>${escapeHtml(t('projectSession.components3DTrellisStatusGpuDetails'))}</span>
+                    ${createTrellisGpuDetailsToggleIcon()}
+                </button>
+                <div class="project-browser-api-status-details-body" data-trellis-gpu-details-body ${gpuDetailsCollapsed ? 'hidden' : ''}>
+                    ${gpuRows}
+                    ${modelRows}
+                </div>
+            </section>
+        `
+        : '';
+    const errorRow = status.ok ? '' : `<div class="project-browser-api-status-row"><span>${escapeHtml(t('common.errorPrefix'))}</span><span>${escapeHtml(status.error || t('projectSession.components3DTrellisStatusUnavailable'))}</span></div>`;
+    dom.components3DTrellisStatusBody.innerHTML = `
+        <div class="project-browser-api-status-grid">
+            ${errorRow}
+            ${statusRows.join('')}
+        </div>
+        ${gpuDetails}
+    `;
+}
+
+function normalizePipelineApiConfig(value) {
+    const defaults = createDefaultPipelineApiConfig();
+    const record = value && typeof value === 'object' ? value : {};
+    const imageTimeoutMs = Number(record.imageTimeoutMs ?? record.timeoutMs ?? defaults.imageTimeoutMs) || defaults.imageTimeoutMs;
+    return {
+        apiKey: String(record.apiKey || '').trim(),
+        hasApiKey: Boolean(record.hasApiKey || record.apiKey),
+        apiBase: String(record.apiBase ?? record.baseUrl ?? defaults.apiBase).trim() || defaults.apiBase,
+        apiProvider: String(record.apiProvider ?? record.provider ?? defaults.apiProvider).trim() || defaults.apiProvider,
+        modelName: String(record.modelName ?? record.model ?? defaults.modelName).trim() || defaults.modelName,
+        imageUrl: String(record.imageUrl ?? defaults.imageUrl).trim() || defaults.imageUrl,
+        imageModel: String(record.imageModel ?? defaults.imageModel).trim() || defaults.imageModel,
+        imageTimeoutMs,
+    };
+}
+
+function setInputValue(input, value) {
+    if (input) {
+        input.value = value == null ? '' : String(value);
+    }
+}
+
+function readPipelineApiConfigFromForm() {
+    const current = normalizePipelineApiConfig(state.projectSession.pipelineApiConfig);
+    const timeoutSeconds = Number(dom.pipelineApiImageTimeoutSeconds?.value || 0);
+    return normalizePipelineApiConfig({
+        ...current,
+        apiKey: String(dom.pipelineApiKey?.value || '').trim(),
+        apiBase: String(dom.pipelineApiBase?.value || '').trim(),
+        apiProvider: String(dom.pipelineApiProvider?.value || '').trim(),
+        modelName: String(dom.pipelineApiModelName?.value || '').trim(),
+        imageUrl: String(dom.pipelineApiImageUrl?.value || '').trim(),
+        imageModel: String(dom.pipelineApiImageModel?.value || '').trim(),
+        imageTimeoutMs: timeoutSeconds > 0 ? timeoutSeconds * 1000 : current.imageTimeoutMs,
+    });
+}
+
+function writePipelineApiConfigToForm(config) {
+    setInputValue(dom.pipelineApiKey, config.apiKey);
+    setInputValue(dom.pipelineApiBase, config.apiBase);
+    setInputValue(dom.pipelineApiProvider, config.apiProvider);
+    setInputValue(dom.pipelineApiModelName, config.modelName);
+    setInputValue(dom.pipelineApiImageUrl, config.imageUrl);
+    setInputValue(dom.pipelineApiImageModel, config.imageModel);
+    setInputValue(dom.pipelineApiImageTimeoutSeconds, Math.max(1, Math.round(Number(config.imageTimeoutMs || 300000) / 1000)));
+}
+
+function readEndpointConfigFromForm(kind) {
+    const isTrellis = kind === 'trellis2';
+    const current = normalizeComponents3DEndpointConfig(
+        isTrellis ? state.projectSession.components3DConfig?.trellis2 : state.projectSession.components3DConfig?.hunyuan,
+        kind,
+    );
+    return {
+        baseUrl: String((isTrellis ? dom.components3DTrellisBaseUrl : dom.components3DHunyuanBaseUrl)?.value || '').trim(),
+        host: String((isTrellis ? dom.components3DTrellisHost : dom.components3DHunyuanHost)?.value || '').trim(),
+        port: String((isTrellis ? dom.components3DTrellisPort : dom.components3DHunyuanPort)?.value || '').trim(),
+        secretId: isTrellis ? current.secretId : String(dom.components3DHunyuanSecretId?.value || '').trim(),
+        secretKey: isTrellis ? current.secretKey : String(dom.components3DHunyuanSecretKey?.value || '').trim(),
+        hasSecretKey: isTrellis ? current.hasSecretKey : Boolean(current.hasSecretKey || dom.components3DHunyuanSecretKey?.value),
+        region: isTrellis ? current.region : String(dom.components3DHunyuanRegion?.value || '').trim(),
+        version: isTrellis ? current.version : String(dom.components3DHunyuanVersion?.value || '').trim(),
+        model: String((isTrellis ? dom.components3DTrellisModel : dom.components3DHunyuanModel)?.value || '').trim(),
+        pollIntervalSeconds: Number((isTrellis ? dom.components3DTrellisPollInterval : dom.components3DHunyuanPollInterval)?.value || 0),
+        maxWaitSeconds: Number((isTrellis ? dom.components3DTrellisMaxWait : dom.components3DHunyuanMaxWait)?.value || 0),
+        callbackUrl: String((isTrellis ? dom.components3DTrellisCallbackUrl : dom.components3DHunyuanCallbackUrl)?.value || '').trim(),
+        downloadBaseUrl: String((isTrellis ? dom.components3DTrellisDownloadBaseUrl : dom.components3DHunyuanDownloadBaseUrl)?.value || '').trim(),
+    };
+}
+
+function writeEndpointConfigToForm(kind, config) {
+    const isTrellis = kind === 'trellis2';
+    setInputValue(isTrellis ? dom.components3DTrellisBaseUrl : dom.components3DHunyuanBaseUrl, config.baseUrl);
+    setInputValue(isTrellis ? dom.components3DTrellisHost : dom.components3DHunyuanHost, config.host);
+    setInputValue(isTrellis ? dom.components3DTrellisPort : dom.components3DHunyuanPort, config.port);
+    if (!isTrellis) {
+        setInputValue(dom.components3DHunyuanSecretId, config.secretId);
+        setInputValue(dom.components3DHunyuanSecretKey, config.secretKey);
+        setInputValue(dom.components3DHunyuanRegion, config.region);
+        setInputValue(dom.components3DHunyuanVersion, config.version);
+    }
+    setInputValue(isTrellis ? dom.components3DTrellisModel : dom.components3DHunyuanModel, config.model);
+    setInputValue(isTrellis ? dom.components3DTrellisPollInterval : dom.components3DHunyuanPollInterval, config.pollIntervalSeconds);
+    setInputValue(isTrellis ? dom.components3DTrellisMaxWait : dom.components3DHunyuanMaxWait, config.maxWaitSeconds);
+    setInputValue(isTrellis ? dom.components3DTrellisCallbackUrl : dom.components3DHunyuanCallbackUrl, config.callbackUrl);
+    setInputValue(isTrellis ? dom.components3DTrellisDownloadBaseUrl : dom.components3DHunyuanDownloadBaseUrl, config.downloadBaseUrl);
+}
+
+function readComponents3DConfigFromForm() {
+    const current = normalizeComponents3DConfig(state.projectSession.components3DConfig);
+    return normalizeComponents3DConfig({
+        ...current,
+        hunyuan: readEndpointConfigFromForm('hunyuan'),
+        trellis2: readEndpointConfigFromForm('trellis2'),
+    });
+}
+
+function getProjectBrowserApiConfigSignature(section, config) {
+    return JSON.stringify(section === 'pipeline'
+        ? normalizePipelineApiConfig(config)
+        : normalizeComponents3DConfig(config));
+}
+
+function setProjectBrowserApiConfigValidatedBaseline(section, config) {
+    const signature = getProjectBrowserApiConfigSignature(section, config);
+    if (section === 'pipeline') {
+        state.projectSession.pipelineApiConfigValidatedSignature = signature;
+        return;
+    }
+    state.projectSession.components3DConfigValidatedSignature = signature;
+}
+
+function isProjectBrowserApiConfigDirty(section) {
+    const baseline = section === 'pipeline'
+        ? state.projectSession.pipelineApiConfigValidatedSignature
+        : state.projectSession.components3DConfigValidatedSignature;
+    if (!baseline) return false;
+    const draft = section === 'pipeline'
+        ? readPipelineApiConfigFromForm()
+        : readComponents3DConfigFromForm();
+    return getProjectBrowserApiConfigSignature(section, draft) !== baseline;
+}
+
+function syncProjectBrowserApiConfigSaveState(section) {
+    const isPipeline = section === 'pipeline';
+    const dirty = isProjectBrowserApiConfigDirty(section);
+    const loading = Boolean(isPipeline
+        ? state.projectSession.pipelineApiConfigLoading
+        : state.projectSession.components3DConfigLoading);
+    const saving = Boolean(isPipeline
+        ? state.projectSession.pipelineApiConfigSaving
+        : state.projectSession.components3DConfigSaving);
+    const error = String(isPipeline
+        ? state.projectSession.pipelineApiConfigLastError || ''
+        : state.projectSession.components3DConfigLastError || '');
+    const baseline = isPipeline
+        ? state.projectSession.pipelineApiConfigValidatedSignature
+        : state.projectSession.components3DConfigValidatedSignature;
+    const validated = Boolean(state.projectSession.authenticated && baseline && !dirty && !loading && !saving && !error);
+    const button = isPipeline
+        ? dom.btnProjectBrowserSavePipelineApiConfig
+        : dom.btnProjectBrowserSaveComponents3DConfig;
+    if (isPipeline) {
+        state.projectSession.pipelineApiConfigSaved = validated;
+    } else {
+        state.projectSession.components3DConfigSaved = validated;
+    }
+    if (button) {
+        button.disabled = Boolean(!state.projectSession.authenticated || loading || saving || !dirty);
+    }
+    return dirty;
+}
+
+function handleProjectBrowserApiConfigFormInput(section) {
+    if (section === 'pipeline') {
+        state.projectSession.pipelineApiConfig = readPipelineApiConfigFromForm();
+        state.projectSession.pipelineApiConfigLastError = '';
+    } else {
+        state.projectSession.components3DConfig = readComponents3DConfigFromForm();
+        state.projectSession.components3DConfigLastError = '';
+    }
+    syncProjectBrowserApiConfigSaveState(section);
+    applyProjectBrowserApiConfigStatus(
+        section === 'pipeline' ? dom.projectBrowserPipelineApiStatus : dom.projectBrowserComponents3DStatus,
+        section,
+    );
+}
+
+function setComponents3DProvider(provider) {
+    state.projectSession.components3DConfig = {
+        ...readComponents3DConfigFromForm(),
+        provider: normalizeComponents3DProvider(provider),
+    };
+    state.projectSession.components3DConfigLastError = '';
+    renderProjectBrowserComponents3DConfig();
+}
+
+function getProjectBrowserApiConfigState(section) {
+    if (section === 'pipeline') {
+        return {
+            loading: Boolean(state.projectSession.pipelineApiConfigLoading),
+            saving: Boolean(state.projectSession.pipelineApiConfigSaving),
+            saved: Boolean(state.projectSession.pipelineApiConfigSaved),
+            dirty: isProjectBrowserApiConfigDirty('pipeline'),
+            error: String(state.projectSession.pipelineApiConfigLastError || ''),
+        };
+    }
+    return {
+        loading: Boolean(state.projectSession.components3DConfigLoading),
+        saving: Boolean(state.projectSession.components3DConfigSaving),
+        saved: Boolean(state.projectSession.components3DConfigSaved),
+        dirty: isProjectBrowserApiConfigDirty('components3D'),
+        error: String(state.projectSession.components3DConfigLastError || ''),
+    };
+}
+
+function getProjectBrowserApiConfigStatusText(section) {
+    const sectionState = getProjectBrowserApiConfigState(section);
+    const saving = sectionState.saving;
+    const loading = sectionState.loading;
+    const hasError = Boolean(sectionState.error);
+    return saving
+        ? t('projectSession.apiConfigSaving')
+        : hasError
+            ? sectionState.error
+            : sectionState.dirty
+                ? t('projectSession.apiConfigModified')
+                : sectionState.saved
+                    ? t('projectSession.apiConfigSaved')
+                    : loading
+                        ? t('projectSession.apiConfigLoading')
+                        : t('projectSession.apiConfigLoaded');
+}
+
+function applyProjectBrowserApiConfigStatus(element, section) {
+    if (!element) return;
+    const sectionState = getProjectBrowserApiConfigState(section);
+    const hasError = Boolean(sectionState.error);
+    element.textContent = getProjectBrowserApiConfigStatusText(section);
+    element.classList.toggle('is-ready', sectionState.saved && !sectionState.dirty && !sectionState.saving && !hasError);
+    element.classList.toggle('is-error', hasError);
+}
+
+function renderProjectBrowserPipelineApiConfig() {
+    const config = normalizePipelineApiConfig(state.projectSession.pipelineApiConfig);
+    state.projectSession.pipelineApiConfig = config;
+    writePipelineApiConfigToForm(config);
+    syncProjectBrowserApiConfigSaveState('pipeline');
+    applyProjectBrowserApiConfigStatus(dom.projectBrowserPipelineApiStatus, 'pipeline');
+}
+
+function renderProjectBrowserComponents3DConfig() {
+    const config = normalizeComponents3DConfig(state.projectSession.components3DConfig);
+    state.projectSession.components3DConfig = config;
+    const providerButtons = dom.projectBrowserComponents3DProvider?.querySelectorAll?.('[data-components3d-provider]') || [];
+    providerButtons.forEach((button) => {
+        const isActive = button.dataset.components3dProvider === config.provider;
+        button.classList.toggle('is-active', isActive);
+        button.setAttribute('aria-checked', isActive ? 'true' : 'false');
+    });
+    if (dom.components3DMockedPanel) dom.components3DMockedPanel.hidden = config.provider !== 'mocked';
+    if (dom.components3DTrellisPanel) dom.components3DTrellisPanel.hidden = config.provider !== 'trellis.2';
+    if (dom.components3DHunyuanPanel) dom.components3DHunyuanPanel.hidden = config.provider !== 'hunyuan';
+    writeEndpointConfigToForm('hunyuan', config.hunyuan);
+    writeEndpointConfigToForm('trellis2', config.trellis2);
+
+    syncProjectBrowserApiConfigSaveState('components3D');
+    applyProjectBrowserApiConfigStatus(dom.projectBrowserComponents3DStatus, 'components3D');
+    renderProjectBrowserComponents3DTrellisStatus(config);
+}
+
+async function refreshProjectBrowserUserApiConfig() {
+    if (!state.projectSession?.authenticated || !state.projectSession.user || state.projectSession.isAdmin) {
+        state.projectSession.components3DConfig = createDefaultComponents3DConfig();
+        state.projectSession.pipelineApiConfig = createDefaultPipelineApiConfig();
+        setProjectBrowserApiConfigValidatedBaseline('components3D', state.projectSession.components3DConfig);
+        setProjectBrowserApiConfigValidatedBaseline('pipeline', state.projectSession.pipelineApiConfig);
+        state.projectSession.components3DConfigLoading = false;
+        state.projectSession.components3DConfigSaving = false;
+        state.projectSession.components3DConfigSaved = false;
+        state.projectSession.components3DConfigLastError = '';
+        state.projectSession.pipelineApiConfigLoading = false;
+        state.projectSession.pipelineApiConfigSaving = false;
+        state.projectSession.pipelineApiConfigSaved = false;
+        state.projectSession.pipelineApiConfigLastError = '';
+        renderProjectBrowserPipelineApiConfig();
+        renderProjectBrowserComponents3DConfig();
+        return;
+    }
+    state.projectSession.components3DConfigLoading = true;
+    state.projectSession.components3DConfigLastError = '';
+    state.projectSession.pipelineApiConfigLoading = true;
+    state.projectSession.pipelineApiConfigLastError = '';
+    state.projectSession.components3DTrellisStatus = null;
+    renderProjectBrowserPipelineApiConfig();
+    renderProjectBrowserComponents3DConfig();
+    try {
+        const config = await projectApi.getUserApiConfig(state.projectSession.user);
+        state.projectSession.components3DConfig = normalizeComponents3DConfig(config?.components3D);
+        state.projectSession.pipelineApiConfig = normalizePipelineApiConfig(config?.pipelineApi);
+        setProjectBrowserApiConfigValidatedBaseline('components3D', state.projectSession.components3DConfig);
+        setProjectBrowserApiConfigValidatedBaseline('pipeline', state.projectSession.pipelineApiConfig);
+        state.projectSession.components3DTrellisStatus = normalizeComponents3DTrellisStatus(config?.components3DTrellisStatus);
+        state.projectSession.components3DConfigSaved = true;
+        state.projectSession.pipelineApiConfigSaved = true;
+    } catch (error) {
+        setProjectBrowserApiConfigValidatedBaseline('components3D', state.projectSession.components3DConfig);
+        setProjectBrowserApiConfigValidatedBaseline('pipeline', state.projectSession.pipelineApiConfig);
+        state.projectSession.components3DConfigLastError = t('projectSession.apiConfigLoadFailed');
+        state.projectSession.pipelineApiConfigLastError = t('projectSession.apiConfigLoadFailed');
+        state.projectSession.lastError = error?.message || String(error);
+        state.projectSession.components3DTrellisStatus = null;
+    } finally {
+        state.projectSession.components3DConfigLoading = false;
+        state.projectSession.pipelineApiConfigLoading = false;
+        renderProjectBrowserPipelineApiConfig();
+        renderProjectBrowserComponents3DConfig();
+    }
+}
+
+async function refreshProjectBrowserComponents3DTrellisStatus() {
+    if (state.projectSession.components3DTrellisStatusRefreshing) return;
+    if (!state.projectSession?.authenticated || !state.projectSession.user || state.projectSession.isAdmin) {
+        showError(t('projectSession.loginRequired'));
+        return;
+    }
+    state.projectSession.components3DTrellisStatusRefreshing = true;
+    renderProjectBrowserComponents3DConfig();
+    try {
+        const config = await projectApi.getUserApiConfig(state.projectSession.user);
+        state.projectSession.components3DTrellisStatus = normalizeComponents3DTrellisStatus(config?.components3DTrellisStatus);
+    } catch (error) {
+        showError(`${t('projectSession.components3DTrellisStatusRefreshFailed')}: ${error?.message || String(error)}`);
+    } finally {
+        state.projectSession.components3DTrellisStatusRefreshing = false;
+        renderProjectBrowserComponents3DConfig();
+    }
+}
+
+async function saveProjectBrowserComponents3DConfig() {
+    if (state.projectSession.components3DConfigSaving) return;
+    if (!state.projectSession?.authenticated || !state.projectSession.user) {
+        showError(t('projectSession.loginRequired'));
+        return;
+    }
+    if (!isProjectBrowserApiConfigDirty('components3D')) return;
+    state.projectSession.components3DConfig = readComponents3DConfigFromForm();
+    state.projectSession.components3DConfigSaving = true;
+    state.projectSession.components3DConfigLastError = '';
+    state.projectSession.components3DTrellisStatus = null;
+    renderProjectBrowserComponents3DConfig();
+    try {
+        const config = await projectApi.saveUserApiConfig({
+            user: state.projectSession.user,
+            config: {
+                components3D: state.projectSession.components3DConfig,
+            },
+        });
+        state.projectSession.components3DConfig = normalizeComponents3DConfig(config?.components3D);
+        setProjectBrowserApiConfigValidatedBaseline('components3D', state.projectSession.components3DConfig);
+        state.projectSession.components3DTrellisStatus = normalizeComponents3DTrellisStatus(config?.components3DTrellisStatus);
+        state.projectSession.components3DConfigSaved = true;
+        showInfo(t('projectSession.apiConfigSaved'));
+    } catch (error) {
+        state.projectSession.components3DConfigSaved = false;
+        state.projectSession.components3DConfigLastError = t('projectSession.apiConfigSaveFailed');
+        showError(`${t('projectSession.apiConfigSaveFailed')}: ${error?.message || String(error)}`);
+    } finally {
+        state.projectSession.components3DConfigSaving = false;
+        renderProjectBrowserComponents3DConfig();
+    }
+}
+
+async function saveProjectBrowserPipelineApiConfig() {
+    if (state.projectSession.pipelineApiConfigSaving) return;
+    if (!state.projectSession?.authenticated || !state.projectSession.user) {
+        showError(t('projectSession.loginRequired'));
+        return;
+    }
+    if (!isProjectBrowserApiConfigDirty('pipeline')) return;
+    state.projectSession.pipelineApiConfig = readPipelineApiConfigFromForm();
+    state.projectSession.pipelineApiConfigSaving = true;
+    state.projectSession.pipelineApiConfigLastError = '';
+    renderProjectBrowserPipelineApiConfig();
+    try {
+        const config = await projectApi.saveUserApiConfig({
+            user: state.projectSession.user,
+            config: {
+                pipelineApi: state.projectSession.pipelineApiConfig,
+            },
+        });
+        state.projectSession.pipelineApiConfig = normalizePipelineApiConfig(config?.pipelineApi);
+        setProjectBrowserApiConfigValidatedBaseline('pipeline', state.projectSession.pipelineApiConfig);
+        state.projectSession.pipelineApiConfigSaved = true;
+        showInfo(t('projectSession.apiConfigSaved'));
+    } catch (error) {
+        state.projectSession.pipelineApiConfigSaved = false;
+        state.projectSession.pipelineApiConfigLastError = t('projectSession.apiConfigSaveFailed');
+        showError(`${t('projectSession.apiConfigSaveFailed')}: ${error?.message || String(error)}`);
+    } finally {
+        state.projectSession.pipelineApiConfigSaving = false;
+        renderProjectBrowserPipelineApiConfig();
+    }
+}
+
 function renderProjectBrowserProjectGrid() {
     if (!dom.projectBrowserProjectGrid) return;
     const projects = Array.isArray(state.projectSession?.projects) ? state.projectSession.projects : [];
@@ -2848,17 +4016,20 @@ async function deleteProjectFromBrowser(projectId) {
 
     showLoading(true, t('messages.deletingProject'), 60);
     try {
+        const deletingActiveProject = state.projectSession.activeProjectId === project.id;
         await projectApi.deleteProject(state.projectSession.user, project.id);
-        if (state.projectSession.activeProjectId === project.id) {
-            clearActiveServerProjectSelection();
-            resetAllAgentConversations();
-            resetAgentCodexSessionBinding();
-            updateWorkspaceStatusIndicator();
-        }
+        state.projectSession.projects = state.projectSession.projects.filter((item) => item.id !== project.id);
         cancelProjectRename();
-        await refreshProjectSessionProjects();
+        if (deletingActiveProject) {
+            detachDeletedServerProjectAsDraft();
+            closeProjectBrowserModal();
+        } else {
+            await refreshProjectSessionProjects();
+        }
         showLoading(false);
-        showInfo(t('projectSession.projectDeleted', { name: projectName }));
+        showInfo(deletingActiveProject
+            ? t('projectSession.currentProjectDeletedDraft')
+            : t('projectSession.projectDeleted', { name: projectName }));
     } catch (error) {
         showLoading(false);
         showError(error?.message || String(error));
@@ -3152,7 +4323,7 @@ function updateLocalizedStaticUi() {
     if (exportModeOptions[1]) exportModeOptions[1].textContent = t('modal.exportRenderModes.depth');
     if (exportModeOptions[2]) exportModeOptions[2].textContent = t('modal.exportRenderModes.normal');
     if (dom.exportProgressText && !isExporting) {
-        dom.exportProgressText.textContent = t('modal.exportProgressIdle');
+        setSelectionSafeElementText(dom.exportProgressText, t('modal.exportProgressIdle'));
     }
     setButtonTooltip(dom.helpTipsClose, t('modal.closeHelp'), t('modal.closeHelp'));
     const helpSectionTitles = dom.helpTipsModal?.querySelectorAll('.help-section h4') || [];
@@ -3190,6 +4361,9 @@ function syncProjectSessionModalLabels() {
     setButtonTooltip(dom.btnProjectBrowserClose, t('common.close'), t('common.close'));
     setButtonTooltip(dom.btnProjectCreateClose, t('common.close'), t('common.close'));
     syncWorkspaceTargetModalLabels(dom.workspaceTargetModal?.dataset.reason || 'status');
+    setElementText(dom.projectBrowserProjectsTab, t('projectSession.browserProjectsTab'));
+    setElementText(dom.projectBrowserApiTab, t('projectSession.apiManagementTab'));
+    setProjectBrowserTab(state.projectSession.projectBrowserActiveTab || 'projects');
     if (dom.projectSessionNewProjectName) {
         dom.projectSessionNewProjectName.placeholder = getProjectSessionDefaultProjectName();
     }
@@ -3202,12 +4376,18 @@ function syncProjectSessionModalLabels() {
     if (dom.projectBrowserCodexAuthKey) {
         dom.projectBrowserCodexAuthKey.placeholder = t('projectSession.codexAuthPlaceholder');
     }
+    if (dom.pipelineApiKey) {
+        dom.pipelineApiKey.placeholder = t('projectSession.apiProviderKeyPlaceholder');
+    }
     setElementText(dom.btnProjectBrowserCreateNew, t('projectSession.createNewProjectAction'));
     setElementText(dom.btnProjectBrowserSaveAs, t('projectSession.saveCurrentAsAction'));
     setElementText(dom.btnProjectBrowserSaveAsCancel, t('common.cancel'));
     setElementText(dom.btnProjectBrowserSaveAsConfirm, t('projectSession.saveAction'));
     setButtonTooltip(dom.btnProjectBrowserEditCodexAuth, t('projectSession.codexAuthEditAction'), t('projectSession.codexAuthEditAction'));
     setButtonTooltip(dom.btnProjectBrowserSaveCodexAuth, t('projectSession.codexAuthSubmitAction'), t('projectSession.codexAuthSubmitAction'));
+    setButtonTooltip(dom.btnComponents3DTrellisStatusRefresh, t('projectSession.components3DTrellisStatusRefresh'), t('projectSession.components3DTrellisStatusRefresh'));
+    setElementText(dom.btnProjectBrowserSavePipelineApiConfig, t('projectSession.apiConfigSaveAction'));
+    setElementText(dom.btnProjectBrowserSaveComponents3DConfig, t('projectSession.apiConfigSaveAction'));
     setElementText(dom.btnProjectBrowserLogout, t('projectSession.logoutAction'));
     setElementText(dom.btnProjectCreateCancel, t('common.cancel'));
     setElementText(dom.btnProjectCreateConfirm, t('projectSession.createAction'));
@@ -3215,6 +4395,8 @@ function syncProjectSessionModalLabels() {
     setButtonTooltip(dom.btnAdminProjectClose, t('common.close'), t('common.close'));
     setElementText(dom.btnAdminProjectLogout, t('projectSession.logoutAction'));
     renderProjectBrowserCodexAuthStatus();
+    renderProjectBrowserPipelineApiConfig();
+    renderProjectBrowserComponents3DConfig();
 }
 
 function refreshAgentWorkflowLanguageState() {
@@ -3728,12 +4910,22 @@ function normalizeHydratedAgentAttempt(attempt) {
     const steps = Array.isArray(attempt.steps)
         ? (isInterrupted ? normalizeInterruptedAttemptBlocks(attempt.steps) : attempt.steps)
         : null;
-    return {
+    const normalizedAttempt = {
         ...attempt,
         status,
         blocks,
         ...(steps ? { steps } : {}),
         ...(isInterrupted ? { pipelineState: normalizeInterruptedPipelineState(attempt.pipelineState) } : {}),
+    };
+    if (normalizedAttempt.workflow !== 'scene-build') return normalizedAttempt;
+    const migratedAttempt = migrateLegacySceneSkillAttempt(normalizedAttempt);
+    const sceneBranch = interruptSceneSkillBranchExecutions(migratedAttempt.sceneBranch);
+    const projectedBlocks = projectSceneSkillBranchToBlocks({ ...migratedAttempt, sceneBranch }, sceneBranch);
+    return {
+        ...migratedAttempt,
+        sceneBranch,
+        blocks: projectedBlocks,
+        ...(Array.isArray(migratedAttempt.steps) ? { steps: projectedBlocks } : {}),
     };
 }
 
@@ -3959,6 +5151,27 @@ function hydrateAgentBlockAssetUrls(block, resolveAssetUrl) {
     return block;
 }
 
+function hydrateSceneSkillBranchAssetUrls(sceneBranch, resolveAssetUrl) {
+    if (!sceneBranch || typeof sceneBranch !== 'object') return sceneBranch;
+    const normalized = normalizeSceneSkillBranch(sceneBranch);
+    return {
+        ...normalized,
+        candidatesById: Object.fromEntries(Object.entries(normalized.candidatesById).map(([candidateId, candidate]) => [
+            candidateId,
+            {
+                ...candidate,
+                context: {
+                    ...candidate.context,
+                    images: (Array.isArray(candidate.context?.images) ? candidate.context.images : []).map((image) => {
+                        const assetPath = String(image?.assetPath || image?.relativePath || '');
+                        return assetPath ? { ...image, src: resolveAssetUrl(assetPath), assetPath } : image;
+                    }),
+                },
+            },
+        ])),
+    };
+}
+
 function hydrateAgentConversationAssetUrls(snapshot, resolveAssetUrl) {
     if (!snapshot || typeof resolveAssetUrl !== 'function') {
         return snapshot;
@@ -3983,6 +5196,7 @@ function hydrateAgentConversationAssetUrls(snapshot, resolveAssetUrl) {
             if (item?.kind === 'session' && Array.isArray(item?.attempts)) {
                 item.attempts = item.attempts.map((attempt) => ({
                     ...attempt,
+                    sceneBranch: hydrateSceneSkillBranchAssetUrls(attempt.sceneBranch, resolveAssetUrl),
                     blocks: Array.isArray(attempt?.blocks)
                         ? attempt.blocks.map((block) => hydrateAgentBlockAssetUrls(block, resolveAssetUrl))
                         : [],
@@ -4024,6 +5238,22 @@ async function hydrateAgentConversationLocalWorkspaceAssets(snapshot, rootHandle
             }
             if (item?.kind === 'session' && Array.isArray(item?.attempts)) {
                 for (const attempt of item.attempts) {
+                    if (attempt.sceneBranch) {
+                        const normalizedBranch = normalizeSceneSkillBranch(attempt.sceneBranch);
+                        for (const candidate of Object.values(normalizedBranch.candidatesById)) {
+                            for (const image of Array.isArray(candidate.context?.images) ? candidate.context.images : []) {
+                                const imageAssetPath = String(image?.assetPath || image?.relativePath || '');
+                                if (!imageAssetPath) continue;
+                                try {
+                                    image.src = await resolveLocalAssetUrl(imageAssetPath);
+                                    image.assetPath = imageAssetPath;
+                                } catch (error) {
+                                    console.warn('[Agent Sessions] failed to hydrate local candidate asset', imageAssetPath, error);
+                                }
+                            }
+                        }
+                        attempt.sceneBranch = normalizedBranch;
+                    }
                     const blocks = [
                         ...(Array.isArray(attempt?.blocks) ? attempt.blocks : []),
                         ...(Array.isArray(attempt?.steps) ? attempt.steps : []),
@@ -4499,12 +5729,130 @@ function getAgentStepBlockContextFromElement(element) {
     };
 }
 
+const AGENT_PROGRESS_DOM_DYNAMIC_KEYS = new Set([
+    'title',
+    'statusText',
+    'statusId',
+    'value',
+    'assetProgress',
+    'startedAt',
+    'completedAt',
+]);
+
+function getAgentProgressBlockRenderContext(context) {
+    const stepBlocksCollapsed = Boolean(context?.attempt?.stepBlocksCollapsed);
+    const blocks = getAgentAttemptStepBlocks(context?.attempt);
+    return {
+        ...context,
+        stepBlocksCollapsed,
+        hiddenStepBlockIds: stepBlocksCollapsed ? new Set() : getDeferredAgentStepBlockIds(blocks),
+    };
+}
+
+function haveSameAgentProgressBlockStaticFields(previousBlock, nextBlock) {
+    const keys = new Set([
+        ...Object.keys(previousBlock || {}),
+        ...Object.keys(nextBlock || {}),
+    ]);
+    return Array.from(keys).every((key) => (
+        AGENT_PROGRESS_DOM_DYNAMIC_KEYS.has(key)
+        || Object.is(previousBlock?.[key], nextBlock?.[key])
+    ));
+}
+
+function canSyncAgentProgressBlockDom(previousContext, nextContext) {
+    const currentElement = getAgentStepBlockDomElement(nextContext?.blockId);
+    if (!(currentElement instanceof HTMLElement)) return false;
+    if (agentPendingStepRenders.has(nextContext.blockId)) return false;
+    if (!haveSameAgentProgressBlockStaticFields(previousContext?.block, nextContext?.block)) return false;
+    const previousState = getAgentProgressBlockRenderState(
+        previousContext.block,
+        getAgentProgressBlockRenderContext(previousContext),
+    );
+    const nextState = getAgentProgressBlockRenderState(
+        nextContext.block,
+        getAgentProgressBlockRenderContext(nextContext),
+    );
+    if (!previousState.showProgressTrack || !nextState.showProgressTrack) return false;
+    const shapeKeys = [
+        'isStepBlock',
+        'isInterruptedAttempt',
+        'isApplied',
+        'hasAssetProgress',
+        'isHiddenStepBlock',
+        'isOpen',
+        'showProgressTrack',
+        'showContinue',
+        'showInterruptedStepActions',
+    ];
+    if (shapeKeys.some((key) => Boolean(previousState[key]) !== Boolean(nextState[key]))) return false;
+    const textShapeKeys = ['statusText', 'stepStateLabel', 'stepProgressText', 'terminalElapsedText'];
+    if (textShapeKeys.some((key) => Boolean(previousState[key]) !== Boolean(nextState[key]))) return false;
+    return Boolean(
+        currentElement.querySelector('.agent-progress-fill')
+        && currentElement.querySelector('[data-agent-progress-elapsed]'),
+    );
+}
+
+function syncAgentProgressBlockDom(context, { autoScroll = 'preserve-or-pin-bottom' } = {}) {
+    const blockElement = getAgentStepBlockDomElement(context?.blockId);
+    if (!(blockElement instanceof HTMLElement)) return false;
+    const renderContext = getAgentProgressBlockRenderContext(context);
+    const renderState = getAgentProgressBlockRenderState(context.block, renderContext);
+    const prevScrollTop = dom.agentMessageScroll?.scrollTop ?? 0;
+    const prevClientHeight = dom.agentMessageScroll?.clientHeight ?? 0;
+    const prevScrollHeight = dom.agentMessageScroll?.scrollHeight ?? 0;
+    const title = renderState.isStepBlock
+        ? blockElement.querySelector('.agent-step-summary > .agent-block-title')
+        : blockElement.querySelector('.agent-block-header > .agent-block-title');
+    setSelectionSafeElementText(title, context.block.title || t('agent.blocks.progress'));
+    const percent = renderState.isStepBlock
+        ? blockElement.querySelector('.agent-step-summary-meta > .agent-block-meta')
+        : blockElement.querySelector('.agent-block-header > .agent-block-meta');
+    setSelectionSafeElementText(
+        percent,
+        renderState.isStepBlock ? renderState.stepProgressText : renderState.percentText,
+    );
+    const stepState = blockElement.querySelector('.agent-step-state');
+    if (stepState instanceof HTMLElement) {
+        stepState.className = `agent-step-state ${renderState.stepStateClass}`;
+        setSelectionSafeElementText(stepState, renderState.stepStateLabel);
+    }
+    setSelectionSafeElementText(blockElement.querySelector('.agent-block-status'), renderState.statusText);
+    const fill = blockElement.querySelector('.agent-progress-fill');
+    if (fill instanceof HTMLElement) {
+        const width = `${Math.round(renderState.progress * 100)}%`;
+        if (fill.style.width !== width) fill.style.width = width;
+    }
+    const elapsed = blockElement.querySelector('[data-agent-progress-elapsed]');
+    if (elapsed instanceof HTMLElement) {
+        elapsed.dataset.startedAt = String(context.block.startedAt || '');
+        elapsed.dataset.completedAt = String(context.block.completedAt || '');
+        setSelectionSafeElementText(elapsed, formatAgentProgressElapsed(getAgentProgressElapsedMs(context.block)));
+    }
+    syncAgentSessionHeaderDom(context.sessionId);
+    if (agentAssetProgressAnchorBlockId === context.blockId) refreshAgentAssetProgressPopoverAnchor();
+    if (dom.agentMessageScroll) {
+        dom.agentMessageScroll.scrollTop = resolveAgentMessageRefreshScrollTop({
+            mode: autoScroll,
+            prevScrollTop,
+            prevClientHeight,
+            prevScrollHeight,
+            nextScrollHeight: dom.agentMessageScroll.scrollHeight,
+        });
+    }
+    syncAgentMessageScrollbar();
+    return true;
+}
+
 function patchAgentStepBlock(context, patch) {
     if (!context) return null;
     const session = updateAgentSessionById(context.sessionId, (session) => {
         const patchBlockList = (blocks = []) => (
             (blocks || []).map((block) => (
-                block.id === context.blockId ? { ...block, ...patch } : block
+                block.id === context.blockId
+                    ? reconcileAgentProgressBlockTiming(block, { ...block, ...patch })
+                    : block
             ))
         );
         return {
@@ -4532,9 +5880,12 @@ function patchAgentStepBlock(context, patch) {
     if (!session) return null;
     const nextContext = getAgentStepBlockContextById(context.sessionId, context.attemptId, context.blockId);
     if (nextContext) {
-        renderAgentStepBlockElement(nextContext, {
-            autoScroll: 'preserve-or-pin-bottom',
-        });
+        const renderOptions = { autoScroll: 'preserve-or-pin-bottom' };
+        if (canSyncAgentProgressBlockDom(context, nextContext)) {
+            syncAgentProgressBlockDom(nextContext, renderOptions);
+        } else {
+            renderAgentStepBlockElement(nextContext, renderOptions);
+        }
     } else {
         renderAgentSessionElement(context.sessionId, {
             autoScroll: 'preserve-or-pin-bottom',
@@ -4546,63 +5897,6 @@ function patchAgentStepBlock(context, patch) {
 function patchAgentStepBlockByStepKey(sessionId, attemptId, stepKey, patch) {
     const context = getAgentStepBlockContextByStepKey(sessionId, attemptId, stepKey);
     return context ? patchAgentStepBlock(context, patch) : null;
-}
-
-function resetDownstreamScenePipelineStepsForRetry(context) {
-    if (!context?.sessionId || !context.attemptId || !context.stepKey) return null;
-    const retryIndex = SCENE_PIPELINE_STEP_DEFS.findIndex((step) => step.key === context.stepKey);
-    if (retryIndex < 0) return null;
-    clearAgentSceneInsertPreviewForContext(context);
-    const session = updateAgentSessionById(context.sessionId, (session) => ({
-        ...session,
-        attempts: (session.attempts || []).map((attempt) => {
-            if (attempt.id !== context.attemptId) return attempt;
-            const resetBlock = (block) => {
-                if (!block?.stepKey) return block;
-                const stepIndex = SCENE_PIPELINE_STEP_DEFS.findIndex((step) => step.key === block.stepKey);
-                if (stepIndex < 0) return block;
-                if (block.applied || stepIndex <= retryIndex) return block;
-                return {
-                    ...block,
-                    statusText: t('agent.pipelineSteps.pending'),
-                    statusId: 'pending',
-                    value: 0,
-                    indeterminate: false,
-                    images: [],
-                    selectedIndex: 0,
-                    applied: false,
-                    actions: [],
-                    isCurrent: false,
-                    expanded: false,
-                    artifacts: [],
-                    sceneInsertPlan: undefined,
-                };
-            };
-            const nextAttempt = {
-                ...attempt,
-                blocks: (attempt.blocks || []).map(resetBlock),
-                ...(Array.isArray(attempt.steps) ? { steps: attempt.steps.map(resetBlock) } : {}),
-                updatedAt: new Date().toISOString(),
-            };
-            return {
-                ...nextAttempt,
-                pipelineState: deriveScenePipelineState(session, nextAttempt, {
-                    currentStepKey: context.stepKey,
-                    status: 'running',
-                }),
-            };
-        }),
-        updatedAt: new Date().toISOString(),
-    }), {
-        autoScroll: 'preserve-or-pin-bottom',
-        skipRender: true,
-    });
-    if (session) {
-        renderAgentSessionElement(context.sessionId, {
-            autoScroll: 'preserve-or-pin-bottom',
-        });
-    }
-    return session;
 }
 
 function markSceneAttemptCanceled(context) {
@@ -4617,16 +5911,16 @@ function markSceneAttemptCanceled(context) {
                 const stepIndex = SCENE_PIPELINE_STEP_DEFS.findIndex((step) => step.key === block.stepKey);
                 if (stepIndex < 0) return block;
                 if (block.applied || stepIndex < cancelIndex) {
-                    return {
+                    return reconcileAgentProgressBlockTiming(block, {
                         ...block,
                         statusId: 'done',
                         value: 1,
                         indeterminate: false,
                         isCurrent: false,
                         actions: [],
-                    };
+                    });
                 }
-                return {
+                return reconcileAgentProgressBlockTiming(block, {
                     ...block,
                     statusId: 'canceled',
                     statusText: t('agent.pipelineSteps.canceled'),
@@ -4634,7 +5928,7 @@ function markSceneAttemptCanceled(context) {
                     indeterminate: false,
                     isCurrent: false,
                     actions: [],
-                };
+                });
             };
             const nextAttempt = {
                 ...attempt,
@@ -4768,6 +6062,22 @@ function renderAgentSessionStepBlocksExpanded(sessionId, attemptId, expanded) {
 
 function updateAgentStepSelectedIndex(context, selectedIndex) {
     if (!context) return null;
+    if (context.session?.workflow === 'scene-build' && context.attempt?.sceneBranch && context.stepKey) {
+        const session = updateSceneSkillAttemptBranch(context.sessionId, context.attemptId, (branch) => (
+            updateSceneSkillActiveCandidate(branch, context.stepKey, {
+                context: { selectedImageIndex: selectedIndex },
+            })
+        ), { render: false });
+        const nextContext = getAgentStepBlockContextById(context.sessionId, context.attemptId, context.blockId);
+        if (nextContext) {
+            void updateAgentStepGalleryDom(nextContext).then((updated) => {
+                if (updated) {
+                    void syncAgent3DBlocks();
+                }
+            });
+        }
+        return session;
+    }
     const session = updateAgentSessionById(context.sessionId, (session) => patchAgentSessionAttemptBlock(session, {
         attemptId: context.attemptId,
         blockId: context.blockId,
@@ -4778,10 +6088,24 @@ function updateAgentStepSelectedIndex(context, selectedIndex) {
     if (!session) return null;
     const nextContext = getAgentStepBlockContextById(context.sessionId, context.attemptId, context.blockId);
     if (nextContext) {
-        updateAgentStepGalleryDom(nextContext);
-        void syncAgent3DBlocks();
+        void updateAgentStepGalleryDom(nextContext).then((updated) => {
+            if (updated) {
+                void syncAgent3DBlocks();
+            }
+        });
     }
     return session;
+}
+
+function restoreAgentMessageScrollPosition(scrollTop) {
+    if (!dom.agentMessageScroll || !Number.isFinite(scrollTop)) return;
+    const restore = () => {
+        const maxScrollTop = Math.max(0, dom.agentMessageScroll.scrollHeight - dom.agentMessageScroll.clientHeight);
+        dom.agentMessageScroll.scrollTop = Math.min(Math.max(0, scrollTop), maxScrollTop);
+        syncAgentMessageScrollbar({ measure: true });
+    };
+    restore();
+    requestAnimationFrame(restore);
 }
 
 function getAgentStepBlockContextById(sessionId, attemptId, blockId) {
@@ -4816,24 +6140,50 @@ function getAgentStepBlockContextByStepKey(sessionId, attemptId, stepKey) {
     };
 }
 
-function updateAgentStepGalleryDom(context) {
+async function updateAgentStepGalleryDom(context) {
     const blockElement = Array.from(dom.agentMessageList?.querySelectorAll('[data-agent-block-id]') || [])
         .find((element) => element instanceof HTMLElement && element.dataset.agentBlockId === context.blockId);
-    if (!(blockElement instanceof HTMLElement)) return;
+    if (!(blockElement instanceof HTMLElement)) return false;
     const images = Array.isArray(context.block.images) ? context.block.images : [];
     const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(context.block.selectedIndex) || 0));
     const selectedImage = images[selectedIndex] || null;
+    const updateToken = (agentStepGalleryUpdateTokens.get(context.blockId) || 0) + 1;
+    agentStepGalleryUpdateTokens.set(context.blockId, updateToken);
     const galleryMain = blockElement.querySelector('.agent-step-gallery-main');
     if (galleryMain instanceof HTMLElement && selectedImage) {
-        galleryMain.innerHTML = renderAgentStepGalleryMain({
-            block: context.block,
-            images,
-            selectedImage,
-            selectedIndex,
-            isApplied: Boolean(context.block.applied),
-            isInterruptedAttempt: context.attempt?.status === 'interrupted',
-        });
-        syncAgentImageFrameAspectRatios(galleryMain);
+        const viewerBlock = createAgentStepImageViewer3DBlock(context.block, selectedImage, selectedIndex);
+        const currentImage = galleryMain.querySelector('.agent-image-frame.is-ready img');
+        const thumbnailSrc = getAgentStepImageThumbnailSrc(selectedImage);
+        let cachedImage = null;
+        if (!viewerBlock && thumbnailSrc) {
+            cachedImage = await preloadAgentImageSource(thumbnailSrc);
+        }
+        if (agentStepGalleryUpdateTokens.get(context.blockId) !== updateToken) return false;
+        const preservedScrollTop = dom.agentMessageScroll?.scrollTop;
+        if (!viewerBlock && currentImage instanceof HTMLImageElement && thumbnailSrc) {
+            const frame = currentImage.closest('.agent-image-frame');
+            const metadataRatio = getAgentImageAspectRatio(selectedImage);
+            const naturalRatio = cachedImage?.naturalWidth > 0 && cachedImage?.naturalHeight > 0
+                ? cachedImage.naturalWidth / cachedImage.naturalHeight
+                : null;
+            const imageRatio = metadataRatio || naturalRatio;
+            if (frame instanceof HTMLElement && Number.isFinite(imageRatio)) {
+                frame.style.setProperty('--agent-image-aspect-ratio', imageRatio.toFixed(4));
+            }
+            currentImage.alt = selectedImage.alt || selectedImage.title || context.block.title || t('agent.blocks.image');
+            currentImage.src = thumbnailSrc;
+        } else {
+            galleryMain.innerHTML = renderAgentStepGalleryMain({
+                block: context.block,
+                images,
+                selectedImage,
+                selectedIndex,
+                isApplied: Boolean(context.block.applied),
+                isInterruptedAttempt: context.attempt?.status === 'interrupted',
+            });
+            syncAgentImageFrameAspectRatios(galleryMain);
+        }
+        restoreAgentMessageScrollPosition(preservedScrollTop);
     }
     const count = blockElement.querySelector('.agent-step-gallery-count');
     if (count) {
@@ -4855,12 +6205,22 @@ function updateAgentStepGalleryDom(context) {
             || (direction === 'prev' && selectedIndex <= 0)
             || (direction === 'next' && selectedIndex >= images.length - 1);
     });
+    return true;
 }
 
 function renderAgentStepBlockElement(context, { autoScroll = 'preserve-or-pin-bottom' } = {}) {
     if (!context?.sessionId || !context.attemptId || !context.block?.id) return false;
     const currentElement = getAgentStepBlockDomElement(context.block.id);
     if (!currentElement) return false;
+    if (doesSelectionIntersectNode(currentElement)) {
+        agentPendingStepRenders.set(context.block.id, {
+            sessionId: context.sessionId,
+            attemptId: context.attemptId,
+            autoScroll,
+        });
+        return true;
+    }
+    agentPendingStepRenders.delete(context.block.id);
     const prevScrollTop = dom.agentMessageScroll?.scrollTop ?? 0;
     const prevClientHeight = dom.agentMessageScroll?.clientHeight ?? 0;
     const prevScrollHeight = dom.agentMessageScroll?.scrollHeight ?? 0;
@@ -4871,22 +6231,15 @@ function renderAgentStepBlockElement(context, { autoScroll = 'preserve-or-pin-bo
         prevScrollHeight,
     });
     const sessionElement = getAgentSessionDomElement(context.sessionId);
-    const stepBlocksCollapsed = Boolean(context.attempt?.stepBlocksCollapsed);
-    const blocks = getAgentAttemptStepBlocks(context.attempt);
-    const hiddenStepBlockIds = stepBlocksCollapsed
-        ? new Set()
-        : getDeferredAgentStepBlockIds(blocks);
+    const renderContext = getAgentProgressBlockRenderContext(context);
     const template = document.createElement('template');
     template.innerHTML = renderAgentProgressBlock(context.block, {
-        sessionId: context.sessionId,
-        attemptId: context.attemptId,
-        attempt: context.attempt,
-        stepBlocksCollapsed,
-        hiddenStepBlockIds,
+        ...renderContext,
     }).trim();
     const nextElement = template.content.firstElementChild;
     if (!(nextElement instanceof HTMLElement)) return false;
     currentElement.replaceWith(nextElement);
+    refreshAgentAssetProgressPopoverAnchor();
     syncAgentSessionHeaderDom(context.sessionId);
     syncAgentImageFrameAspectRatios(nextElement);
     retainAgentThumbnailImageCache(sessionElement || dom.agentMessageList);
@@ -4912,6 +6265,41 @@ function renderAgentStepBlockElement(context, { autoScroll = 'preserve-or-pin-bo
     return true;
 }
 
+function flushAgentPendingStepRenders() {
+    agentPendingStepRenders.forEach((pending, blockId) => {
+        const element = getAgentStepBlockDomElement(blockId);
+        if (!(element instanceof HTMLElement)) {
+            agentPendingStepRenders.delete(blockId);
+            return;
+        }
+        if (doesSelectionIntersectNode(element)) return;
+        const context = getAgentStepBlockContextById(pending.sessionId, pending.attemptId, blockId);
+        agentPendingStepRenders.delete(blockId);
+        if (context) renderAgentStepBlockElement(context, { autoScroll: pending.autoScroll });
+    });
+}
+
+function flushAgentPendingSessionRenders() {
+    agentPendingSessionRenders.forEach((pending, sessionId) => {
+        const element = getAgentSessionDomElement(sessionId);
+        if (!(element instanceof HTMLElement)) {
+            agentPendingSessionRenders.delete(sessionId);
+            return;
+        }
+        if (doesSelectionIntersectNode(element)) return;
+        agentPendingSessionRenders.delete(sessionId);
+        renderAgentSessionElement(sessionId, { autoScroll: pending.autoScroll });
+    });
+}
+
+function flushAgentPendingMessageListRender() {
+    if (!agentPendingMessageListRender || !dom.agentMessageList) return;
+    if (doesSelectionIntersectNode(dom.agentMessageList)) return;
+    const pending = agentPendingMessageListRender;
+    agentPendingMessageListRender = null;
+    renderAgentMessages({ autoScroll: pending.autoScroll });
+}
+
 function serializeAgentStepImage(image) {
     return {
         id: image?.id || image?.title || '',
@@ -4924,61 +6312,302 @@ function serializeAgentStepImage(image) {
     };
 }
 
-function getSelectedAgentStepImage(attempt, stepKey) {
-    const block = getAgentAttemptStepBlocks(attempt).find((item) => item?.stepKey === stepKey);
-    const images = Array.isArray(block?.images) ? block.images : [];
-    if (images.length <= 0) return null;
-    const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(block.selectedIndex) || 0));
-    return images[selectedIndex] || null;
+function normalizeSceneSkillCandidateImages(images = [], prompt = '') {
+    return (Array.isArray(images) ? images : []).map((image, index) => {
+        const assetPath = String(image?.relativePath || image?.assetPath || '');
+        return {
+            id: image?.id || image?.title || `Image ${index + 1}`,
+            title: image?.title || image?.id || `Image ${index + 1}`,
+            relativePath: assetPath,
+            assetPath,
+            mimeType: image?.mimeType || '',
+            bytes: image?.bytes || 0,
+            metadata: image?.metadata && typeof image.metadata === 'object' ? image.metadata : undefined,
+            src: assetPath
+                ? projectApi.getAssetUrl(state.projectSession.user, state.projectSession.activeProjectId, assetPath)
+                : image?.src || '',
+            alt: image?.alt || prompt,
+        };
+    });
 }
 
-function getSelectedAgentStepSourceImageFromSession(session, currentAttempt, stepKey) {
-    const attempts = [
-        currentAttempt,
-        ...(Array.isArray(session?.attempts) ? session.attempts : []),
-    ].filter(Boolean);
-    const seenAttempts = new Set();
-    let fallbackImage = null;
-    for (const attempt of attempts) {
-        if (seenAttempts.has(attempt)) continue;
-        seenAttempts.add(attempt);
-        const block = getAgentAttemptStepBlocks(attempt).find((item) => item?.stepKey === stepKey);
-        const image = getSelectedAgentStepImage(attempt, stepKey);
-        if (!image) continue;
-        if (block?.applied) {
-            return image;
+function createSceneSkillCandidateContext({ block = {}, patch = {}, result = {}, images = [] } = {}) {
+    const candidateResult = result?.candidateResult && typeof result.candidateResult === 'object'
+        ? result.candidateResult
+        : {};
+    const context = {
+        ...candidateResult,
+        images,
+        selectedImageIndex: Math.max(0, Math.min(images.length - 1, Number(
+            candidateResult.selectedImageIndex ?? patch.selectedIndex ?? block.selectedIndex
+        ) || 0)),
+        artifacts: Array.isArray(candidateResult.artifacts)
+            ? candidateResult.artifacts
+            : Array.isArray(patch.artifacts) ? patch.artifacts : Array.isArray(block.artifacts) ? block.artifacts : [],
+    };
+    const structuredData = candidateResult.structuredData && typeof candidateResult.structuredData === 'object'
+        ? candidateResult.structuredData
+        : {};
+    const assetProgress = candidateResult.assetProgress
+        || structuredData.assetProgress
+        || patch.assetProgress
+        || block.assetProgress;
+    if (assetProgress && typeof assetProgress === 'object') context.assetProgress = assetProgress;
+    const sceneInsertPlan = candidateResult.sceneInsertPlan || patch.sceneInsertPlan || block.sceneInsertPlan;
+    if (sceneInsertPlan && typeof sceneInsertPlan === 'object') context.sceneInsertPlan = sceneInsertPlan;
+    const dependencyTree = candidateResult.dependencyTree || result?.dependencyTree || result?.stepState?.dependencyTree;
+    if (dependencyTree) context.dependencyTree = dependencyTree;
+    return context;
+}
+
+function projectSceneSkillBranchToBlocks(attempt, sceneBranch = attempt?.sceneBranch) {
+    const branch = normalizeSceneSkillBranch(sceneBranch);
+    let activePrefixComplete = true;
+    return getAgentAttemptStepBlocks(attempt).map((block) => {
+        if (block?.type !== 'progress' || !block.stepKey) return block;
+        const gallery = getSceneSkillCandidateGallery(branch, block.stepKey);
+        const candidate = gallery.candidate;
+        if (!candidate) {
+            const isCurrent = activePrefixComplete;
+            activePrefixComplete = false;
+            return reconcileAgentProgressBlockTiming(block, {
+                ...block,
+                statusText: t('agent.pipelineSteps.pending'),
+                statusId: 'pending',
+                value: 0,
+                indeterminate: false,
+                images: [],
+                selectedIndex: 0,
+                applied: false,
+                actions: [],
+                isCurrent,
+                expanded: isCurrent ? Boolean(block.expanded) : false,
+                artifacts: [],
+                assetProgress: undefined,
+                sceneInsertPlan: undefined,
+            });
         }
-        if (!fallbackImage) {
-            fallbackImage = image;
+        const galleryImages = gallery.images;
+        const selectedIndex = gallery.selectedImageIndex;
+        const display = candidate.display && typeof candidate.display === 'object' ? candidate.display : {};
+        return reconcileAgentProgressBlockTiming(block, {
+            ...block,
+            statusText: display.statusText ?? block.statusText,
+            statusId: display.statusId || 'done',
+            value: display.value ?? 1,
+            indeterminate: false,
+            images: galleryImages,
+            selectedIndex,
+            applied: Boolean(display.applied),
+            actions: Array.isArray(display.actions) ? display.actions : block.actions,
+            isCurrent: display.isCurrent !== undefined ? Boolean(display.isCurrent) : !display.applied,
+            expanded: display.expanded !== undefined ? Boolean(display.expanded) : block.expanded,
+            artifacts: Array.isArray(candidate.context?.artifacts) ? candidate.context.artifacts : [],
+            ...(candidate.context?.assetProgress && typeof candidate.context.assetProgress === 'object'
+                ? { assetProgress: candidate.context.assetProgress }
+                : { assetProgress: undefined }),
+            galleryLocked: false,
+            sceneCandidateIds: gallery.candidateIds,
+            sceneCandidateIndex: gallery.candidateIndex,
+            sceneCandidateCount: gallery.candidateIds.length,
+            ...(candidate.context?.sceneInsertPlan && typeof candidate.context.sceneInsertPlan === 'object'
+                ? { sceneInsertPlan: candidate.context.sceneInsertPlan }
+                : { sceneInsertPlan: undefined }),
+        });
+    });
+}
+
+function updateSceneSkillAttemptBranch(sessionId, attemptId, updater, { render = true } = {}) {
+    return updateAgentSessionById(sessionId, (session) => ({
+        ...session,
+        attempts: (session.attempts || []).map((attempt) => {
+            if (attempt.id !== attemptId) return attempt;
+            const sceneBranch = updater(normalizeSceneSkillBranch(attempt.sceneBranch), attempt);
+            const blocks = projectSceneSkillBranchToBlocks(attempt, sceneBranch);
+            const nextAttempt = {
+                ...attempt,
+                sceneBranch,
+                blocks,
+                ...(Array.isArray(attempt.steps) ? { steps: blocks } : {}),
+                updatedAt: new Date().toISOString(),
+            };
+            return { ...nextAttempt, pipelineState: deriveScenePipelineState(session, nextAttempt) };
+        }),
+        updatedAt: new Date().toISOString(),
+    }), {
+        autoScroll: 'preserve-or-pin-bottom',
+        skipRender: !render,
+    });
+}
+
+function renderAgentStepCandidatePager(block, isInterruptedAttempt = false) {
+    const count = Math.max(0, Number(block?.sceneCandidateCount) || 0);
+    if (count <= 1) return '';
+    const selectedIndex = Math.max(0, Math.min(count - 1, Number(block.sceneCandidateIndex) || 0));
+    const locked = isInterruptedAttempt || Boolean(block.galleryLocked);
+    return `
+        <div class="agent-step-candidate-pager" aria-label="${escapeHtml(t('common.retryVersions'))}">
+            <button type="button" class="agent-step-candidate-nav" data-agent-step-candidate-nav="prev" data-agent-block-id="${block.id}" ${!locked && selectedIndex > 0 ? '' : 'disabled'} aria-label="Previous result">‹</button>
+            <span>${escapeHtml(t('common.version', { current: selectedIndex + 1, total: count }))}</span>
+            <button type="button" class="agent-step-candidate-nav" data-agent-step-candidate-nav="next" data-agent-block-id="${block.id}" ${!locked && selectedIndex < count - 1 ? '' : 'disabled'} aria-label="Next result">›</button>
+        </div>
+    `;
+}
+
+async function activateAgentSceneSkillCandidate(context, candidateId) {
+    if (!context?.sessionId || !context.attemptId || !candidateId) return false;
+    const activationKey = `${context.sessionId}:${context.attemptId}:${context.stepKey}`;
+    if (sceneSkillCandidateActivationKeys.has(activationKey)) return false;
+    sceneSkillCandidateActivationKeys.add(activationKey);
+    patchAgentStepBlock(context, { galleryLocked: true });
+    try {
+        abortSceneSkillExecutionsFromStep(context);
+        clearAgentSceneInsertPreviewForContext(context);
+        const session = updateSceneSkillAttemptBranch(context.sessionId, context.attemptId, (branch) => (
+            activateSceneSkillCandidate(branch, candidateId)
+        ));
+        const attempt = session?.attempts?.find((item) => item.id === context.attemptId);
+        const insertCandidate = getSceneSkillActiveCandidate(attempt?.sceneBranch, 'insert-scene');
+        if (insertCandidate?.context?.sceneInsertPlan) {
+            const insertContext = getAgentStepBlockContextByStepKey(context.sessionId, context.attemptId, 'insert-scene');
+            if (insertContext) {
+                patchAgentStepBlock(insertContext, { galleryLocked: true });
+                await createAgentSceneInsertPreview({
+                    ...insertContext,
+                    candidateId: insertCandidate.id,
+                    branchRevision: attempt.sceneBranch.revision,
+                }, insertCandidate.context.sceneInsertPlan);
+            }
         }
+        return true;
+    } finally {
+        sceneSkillCandidateActivationKeys.delete(activationKey);
+        const latestContext = getAgentStepBlockContextByStepKey(context.sessionId, context.attemptId, context.stepKey);
+        if (latestContext) patchAgentStepBlock(latestContext, { galleryLocked: false });
     }
-    return fallbackImage;
 }
 
-function serializeAgentStepSourceImage(attempt, stepKey) {
-    const image = getSelectedAgentStepImage(attempt, stepKey);
-    if (!image) return null;
-    return {
-        ...serializeAgentStepImage(image),
-        sourceStepKey: stepKey,
-    };
+function serializeSceneSkillContextSourceImages(activeContext = {}) {
+    return Object.entries(activeContext.candidatesByStep || {}).map(([stepKey, context]) => {
+        const images = Array.isArray(context?.images) ? context.images : [];
+        if (images.length <= 0) return null;
+        const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(context.selectedImageIndex) || 0));
+        const image = images[selectedIndex] || images[0];
+        return image ? { ...serializeAgentStepImage(image), sourceStepKey: stepKey } : null;
+    }).filter(Boolean);
 }
 
-function serializeAgentSessionStepSourceImage(session, currentAttempt, stepKey) {
-    const image = getSelectedAgentStepSourceImageFromSession(session, currentAttempt, stepKey);
-    if (!image) return null;
-    return {
-        ...serializeAgentStepImage(image),
-        sourceStepKey: stepKey,
-    };
+function registerSceneSkillExecutionController(executionRef) {
+    const controller = new AbortController();
+    sceneSkillExecutionControllers.set(executionRef.executionId, {
+        ...executionRef,
+        controller,
+    });
+    return controller;
+}
+
+function releaseSceneSkillExecutionController(executionId) {
+    sceneSkillExecutionControllers.delete(String(executionId || ''));
+}
+
+function abortSceneSkillExecutions({ sessionId = '', attemptId = '', stepKey = '' } = {}) {
+    for (const [executionId, entry] of sceneSkillExecutionControllers) {
+        if (sessionId && entry.sessionId !== sessionId) continue;
+        if (attemptId && entry.attemptId !== attemptId) continue;
+        if (stepKey && entry.stepKey !== stepKey) continue;
+        entry.controller.abort();
+        sceneSkillExecutionControllers.delete(executionId);
+    }
+}
+
+function abortSceneSkillExecutionsFromStep({ sessionId = '', attemptId = '', stepKey = '' } = {}) {
+    const startIndex = SCENE_PIPELINE_STEP_DEFS.findIndex((definition) => definition.key === stepKey);
+    for (const [executionId, entry] of sceneSkillExecutionControllers) {
+        if (sessionId && entry.sessionId !== sessionId) continue;
+        if (attemptId && entry.attemptId !== attemptId) continue;
+        const entryIndex = SCENE_PIPELINE_STEP_DEFS.findIndex((definition) => definition.key === entry.stepKey);
+        if (startIndex >= 0 && entryIndex >= 0 && entryIndex < startIndex) continue;
+        entry.controller.abort();
+        sceneSkillExecutionControllers.delete(executionId);
+    }
 }
 
 function shouldShowAgentPipelineContinue(context) {
-    return false;
+    return Boolean(
+        context?.session?.workflow === 'scene-build'
+        && context?.attempt?.sceneBranch
+        && context?.block?.statusId === 'pending'
+        && context?.block?.isCurrent
+        && getSceneSkillActiveParentCandidateIds(context.attempt.sceneBranch, context.stepKey).length > 0
+    );
 }
 
 function createAgentBlockId(prefix = 'block') {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function isAgentProgressBlockActive(block = {}) {
+    const statusId = normalizeAgentPipelineStatusId(block.statusId);
+    const value = Number(block.value);
+    return Boolean(
+        statusId === 'running'
+        || statusId === 'rendering'
+        || statusId === 'queuing'
+        || block.indeterminate
+        || (!statusId && Number.isFinite(value) && value > 0 && value < 1)
+    );
+}
+
+function isAgentProgressBlockTerminal(block = {}) {
+    const statusId = normalizeAgentPipelineStatusId(block.statusId);
+    return Boolean(
+        block.applied
+        || statusId === 'done'
+        || statusId === 'skipped'
+        || statusId === 'canceled'
+        || statusId === 'failed'
+        || statusId === 'TLE'
+    );
+}
+
+function reconcileAgentProgressBlockTiming(previousBlock, nextBlock, nowIso = new Date().toISOString()) {
+    if (nextBlock?.type !== 'progress') return nextBlock;
+    const previous = previousBlock?.type === 'progress' ? previousBlock : null;
+    const active = isAgentProgressBlockActive(nextBlock);
+    const terminal = isAgentProgressBlockTerminal(nextBlock);
+    const previousActive = isAgentProgressBlockActive(previous || {});
+    const previousTerminal = isAgentProgressBlockTerminal(previous || {});
+    let startedAt = String(previous?.startedAt || nextBlock.startedAt || '').trim();
+    let completedAt = String(previous?.completedAt || nextBlock.completedAt || '').trim();
+
+    if (active) {
+        if (!startedAt || previousTerminal) startedAt = nowIso;
+        completedAt = '';
+    } else if (terminal) {
+        if (!startedAt) startedAt = String(previous?.startedAt || nowIso).trim();
+        if (!completedAt || previousActive) completedAt = nowIso;
+    } else {
+        startedAt = '';
+        completedAt = '';
+    }
+
+    return {
+        ...nextBlock,
+        startedAt,
+        completedAt,
+    };
+}
+
+function reconcileAgentProgressBlockList(previousBlocks = [], nextBlocks = []) {
+    const previousByKey = new Map((Array.isArray(previousBlocks) ? previousBlocks : []).map((block) => [
+        String(block?.stepKey || block?.id || ''),
+        block,
+    ]));
+    const nowIso = new Date().toISOString();
+    return (Array.isArray(nextBlocks) ? nextBlocks : []).map((block) => {
+        const key = String(block?.stepKey || block?.id || '');
+        return reconcileAgentProgressBlockTiming(previousByKey.get(key), block, nowIso);
+    });
 }
 
 function createAgentProgressBlock({
@@ -4998,9 +6627,12 @@ function createAgentProgressBlock({
     artifacts = [],
     sceneInsertPlan = null,
     galleryLocked = null,
+    assetProgress = null,
+    startedAt = '',
+    completedAt = '',
 } = {}) {
     const gallery = Array.isArray(images) ? images : [];
-    return {
+    return reconcileAgentProgressBlockTiming(null, {
         id,
         type: 'progress',
         stepKey,
@@ -5016,9 +6648,12 @@ function createAgentProgressBlock({
         isCurrent: Boolean(isCurrent),
         expanded: Boolean(expanded),
         artifacts: Array.isArray(artifacts) ? artifacts.filter(Boolean).map((artifact) => ({ ...artifact })) : [],
+        startedAt: String(startedAt || '').trim(),
+        completedAt: String(completedAt || '').trim(),
         ...(sceneInsertPlan && typeof sceneInsertPlan === 'object' ? { sceneInsertPlan } : {}),
         ...(typeof galleryLocked === 'boolean' ? { galleryLocked } : {}),
-    };
+        ...(assetProgress && typeof assetProgress === 'object' ? { assetProgress } : {}),
+    });
 }
 
 function createScenePipelineStepBlock({
@@ -5068,10 +6703,11 @@ function isAgentStepGalleryNavigationLocked(block, attempt = null) {
 
 function normalizeAgentPipelineStatusId(statusId) {
     const normalized = String(statusId || '').trim();
+    if (normalized.toUpperCase() === 'TLE') return 'TLE';
     if (normalized === 'complete') return 'done';
     if (normalized === 'cancelled' || normalized === 'cancel') return 'canceled';
     if (normalized === 'fail' || normalized === 'error') return 'failed';
-    if (normalized === 'done' || normalized === 'rendering' || normalized === 'running' || normalized === 'skipped' || normalized === 'canceled' || normalized === 'failed' || normalized === 'pending') {
+    if (normalized === 'done' || normalized === 'rendering' || normalized === 'running' || normalized === 'queuing' || normalized === 'skipped' || normalized === 'canceled' || normalized === 'failed' || normalized === 'pending') {
         return normalized;
     }
     return '';
@@ -5090,8 +6726,8 @@ function getAgentPipelineStatusClass(statusId) {
 
 function shouldShowAgentStepProgressTrack(statusId, block = {}) {
     const normalized = normalizeAgentPipelineStatusId(statusId);
-    if (normalized === 'running' || normalized === 'rendering') return true;
-    if (normalized === 'pending' || normalized === 'done' || normalized === 'skipped' || normalized === 'canceled' || normalized === 'failed') return false;
+    if (normalized === 'running' || normalized === 'rendering' || normalized === 'queuing') return true;
+    if (normalized === 'pending' || normalized === 'done' || normalized === 'skipped' || normalized === 'canceled' || normalized === 'failed' || normalized === 'TLE') return false;
     const value = Number(block?.value);
     return Boolean(block?.indeterminate) || (Number.isFinite(value) && value > 0 && value < 1);
 }
@@ -5611,6 +7247,21 @@ function createPendingCodexTaskSession({
             attempt,
         });
     }
+    const attempt = createPendingSceneSkillAttempt({ workflowId });
+    const session = createAgentSession({
+        workflow: workflowId,
+        prompt,
+        attachments,
+        attempt,
+    });
+    const activeAttempt = getAgentSessionActiveAttempt(session);
+    if (activeAttempt) {
+        activeAttempt.pipelineState = deriveScenePipelineState(session, activeAttempt);
+    }
+    return session;
+}
+
+function createPendingSceneSkillAttempt({ workflowId = 'scene-build', prompt = '' } = {}) {
     const mainImageBlock = createAgentProgressBlock({
         title: t('agent.pipelineSteps.mainImage'),
         stepKey: 'main-image',
@@ -5627,22 +7278,53 @@ function createPendingCodexTaskSession({
     const steps = createScenePipelineSteps({ mainImageBlock });
     const attempt = createAgentGenerationAttempt({
         workflow: workflowId,
-        text: t('common.generating'),
+        text: prompt ? `${t('common.generating')}: ${prompt}` : t('common.generating'),
         blocks: steps,
         steps,
         status: 'running',
     });
-    const session = createAgentSession({
-        workflow: workflowId,
-        prompt,
-        attachments,
-        attempt,
-    });
-    const activeAttempt = getAgentSessionActiveAttempt(session);
-    if (activeAttempt) {
-        activeAttempt.pipelineState = deriveScenePipelineState(session, activeAttempt);
-    }
-    return session;
+    attempt.sceneBranch = createEmptySceneSkillBranch();
+    return attempt;
+}
+
+function interruptSceneSkillAttempt(attempt, status = 'interrupted') {
+    const patchBlock = (block) => {
+        if (block?.type !== 'progress') return block;
+        if (block.applied || (!block.indeterminate && Array.isArray(block.images) && block.images.length > 0)) {
+            return reconcileAgentProgressBlockTiming(block, {
+                ...block,
+                statusId: 'done',
+                value: 1,
+                indeterminate: false,
+                actions: [],
+                isCurrent: false,
+            });
+        }
+        return reconcileAgentProgressBlockTiming(block, {
+            ...block,
+            statusId: 'canceled',
+            statusText: status === 'canceled' ? t('common.canceled') : t('common.interrupted'),
+            value: 0,
+            indeterminate: false,
+            actions: [],
+            isCurrent: false,
+        });
+    };
+    const blocks = (attempt?.blocks || []).map(patchBlock);
+    const steps = Array.isArray(attempt?.steps) ? attempt.steps.map(patchBlock) : null;
+    return {
+        ...attempt,
+        status,
+        blocks,
+        ...(steps ? { steps } : {}),
+        sceneBranch: {
+            ...normalizeSceneSkillBranch(attempt?.sceneBranch),
+            revision: normalizeSceneSkillBranch(attempt?.sceneBranch).revision + 1,
+            activeExecutionByStep: {},
+            activeTaskExecution: null,
+        },
+        updatedAt: new Date().toISOString(),
+    };
 }
 
 function getNextScenePipelineStepKey(stepKey) {
@@ -6072,7 +7754,12 @@ function createAgentSessionHandle(sessionId, attemptId) {
                 const activeAttempt = getAgentSessionActiveAttempt(session);
                 const failedBlocks = getAgentAttemptStepBlocks(activeAttempt).map((block) => (
                     block.type === 'progress'
-                        ? { ...block, indeterminate: false, statusText: t('common.failed') }
+                        ? reconcileAgentProgressBlockTiming(block, {
+                            ...block,
+                            statusId: 'failed',
+                            indeterminate: false,
+                            statusText: t('common.failed'),
+                        })
                         : (block.type === 'image' || block.type === 'viewer3d')
                             ? { ...block, status: 'error' }
                             : block
@@ -6311,11 +7998,582 @@ function renderAgentStepGalleryMain({
     `;
 }
 
-function renderAgentProgressBlock(block, context = {}) {
+function formatAgentProgressElapsed(elapsedMs) {
+    const milliseconds = Math.max(0, Number(elapsedMs) || 0);
+    const seconds = milliseconds / 1000;
+    if (seconds < 60) return `${seconds.toFixed(1)}s`;
+    const totalSeconds = Math.floor(seconds);
+    const minutes = Math.floor(totalSeconds / 60);
+    return `${minutes}m${String(totalSeconds % 60).padStart(2, '0')}s`;
+}
+
+function doesSelectionIntersectNode(node) {
+    if (!(node instanceof Node) || typeof window.getSelection !== 'function') return false;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount <= 0) return false;
+    for (let index = 0; index < selection.rangeCount; index += 1) {
+        const range = selection.getRangeAt(index);
+        try {
+            if (typeof range.intersectsNode === 'function' && range.intersectsNode(node)) return true;
+        } catch {
+            // Detached nodes can make intersectsNode throw in some browsers.
+        }
+    }
+    return Boolean(
+        (selection.anchorNode && node.contains(selection.anchorNode))
+        || (selection.focusNode && node.contains(selection.focusNode)),
+    );
+}
+
+function getStableElementTextNode(element) {
+    if (!(element instanceof HTMLElement)) return null;
+    const firstChild = element.firstChild;
+    if (element.childNodes.length === 1 && firstChild?.nodeType === Node.TEXT_NODE) return firstChild;
+    const textNode = document.createTextNode(String(element.textContent || ''));
+    element.replaceChildren(textNode);
+    return textNode;
+}
+
+function setSelectionSafeElementText(element, value) {
+    if (!(element instanceof HTMLElement)) return false;
+    const nextValue = String(value ?? '');
+    const currentValue = element.childNodes.length === 1 && element.firstChild?.nodeType === Node.TEXT_NODE
+        ? element.firstChild.data
+        : String(element.textContent || '');
+    if (currentValue === nextValue) {
+        selectionSafeTextPendingElements.delete(element);
+        selectionSafeTextPendingValues.delete(element);
+        return false;
+    }
+    if (doesSelectionIntersectNode(element)) {
+        selectionSafeTextPendingElements.add(element);
+        selectionSafeTextPendingValues.set(element, nextValue);
+        return false;
+    }
+    const textNode = getStableElementTextNode(element);
+    if (!textNode) return false;
+    textNode.data = nextValue;
+    selectionSafeTextPendingElements.delete(element);
+    selectionSafeTextPendingValues.delete(element);
+    return true;
+}
+
+function flushSelectionSafeTextUpdates() {
+    selectionSafeTextPendingElements.forEach((element) => {
+        if (!(element instanceof HTMLElement) || !element.isConnected) {
+            selectionSafeTextPendingElements.delete(element);
+            selectionSafeTextPendingValues.delete(element);
+            return;
+        }
+        if (doesSelectionIntersectNode(element)) return;
+        const nextValue = selectionSafeTextPendingValues.get(element);
+        selectionSafeTextPendingElements.delete(element);
+        selectionSafeTextPendingValues.delete(element);
+        if (nextValue !== undefined) setSelectionSafeElementText(element, nextValue);
+    });
+}
+
+function getAgentProgressElapsedMs(block = {}, nowMs = Date.now()) {
+    const startedAtMs = Date.parse(String(block.startedAt || ''));
+    if (!Number.isFinite(startedAtMs)) return 0;
+    const completedAtMs = Date.parse(String(block.completedAt || ''));
+    const endMs = Number.isFinite(completedAtMs) ? completedAtMs : nowMs;
+    return Math.max(0, endMs - startedAtMs);
+}
+
+function isGenericAgentProgressStatusText(statusText) {
+    return /^(生成中|Generating|处理中|Processing|运行中|Running)$/i.test(String(statusText || '').trim());
+}
+
+function syncAgentProgressElapsedLabels(root = dom.agentMessageList) {
+    root?.querySelectorAll?.('[data-agent-progress-elapsed]').forEach((element) => {
+        if (!(element instanceof HTMLElement)) return;
+        setSelectionSafeElementText(element, formatAgentProgressElapsed(getAgentProgressElapsedMs({
+            startedAt: element.dataset.startedAt,
+            completedAt: element.dataset.completedAt,
+        })));
+    });
+    syncAgentTerminalElapsedVisibility(root);
+}
+
+function syncAgentTerminalElapsedVisibility(root = dom.agentMessageList) {
+    root?.querySelectorAll?.('.agent-step-summary-meta').forEach((meta) => {
+        if (!(meta instanceof HTMLElement)) return;
+        const elapsed = meta.querySelector('[data-agent-terminal-elapsed]');
+        if (!(elapsed instanceof HTMLElement)) return;
+        elapsed.hidden = false;
+        const summary = meta.closest('.agent-step-summary');
+        const title = summary?.querySelector('.agent-block-title');
+        const metaRect = meta.getBoundingClientRect();
+        const titleRect = title?.getBoundingClientRect();
+        const overflowsMeta = meta.scrollWidth > meta.clientWidth;
+        const overlapsTitle = Boolean(titleRect && titleRect.right + 8 > metaRect.left);
+        elapsed.hidden = overflowsMeta || overlapsTitle;
+    });
+}
+
+function startAgentProgressElapsedLoop() {
+    if (agentProgressElapsedTimer) return;
+    agentProgressElapsedTimer = window.setInterval(() => {
+        syncAgentProgressElapsedLabels();
+    }, 100);
+}
+
+function getAgentAssetProgressItems(snapshot) {
+    return Array.isArray(snapshot?.items) ? snapshot.items : [];
+}
+
+function getAgentAssetProgressStatusLabel(status) {
+    const rawStatus = String(status || '').trim();
+    const normalized = rawStatus.toLowerCase();
+    const statusKey = rawStatus.toUpperCase() === 'TLE'
+        ? 'TLE'
+        : ['pending', 'submitting', 'queued', 'running', 'downloading', 'done', 'failed', 'canceled'].includes(normalized)
+        ? normalized
+        : 'running';
+    return t(`agent.pipelineSteps.pipelineStatuses.${statusKey}`);
+}
+
+function getAgentStepExecutionId(context) {
+    const branch = normalizeSceneSkillBranch(context?.attempt?.sceneBranch);
+    const activeExecutionId = String(branch.activeExecutionByStep?.[context?.stepKey]?.executionId || '').trim();
+    if (activeExecutionId) return activeExecutionId;
+    const candidateExecutionId = String(getSceneSkillActiveCandidate(branch, context?.stepKey)?.executionId || '').trim();
+    if (candidateExecutionId) return candidateExecutionId;
+    return String(getAgentAssetProgressItems(context?.block?.assetProgress)[0]?.stepExecutionId || '').trim();
+}
+
+async function requestAgentExecutionCancellation({
+    kind,
+    sessionId = '',
+    attemptId = '',
+    stepExecutionId = '',
+    assetExecutionId = '',
+} = {}) {
+    if (!canUseServerCodexAgent()) {
+        return { accepted: true, state: 'canceled', kind };
+    }
+    const result = await projectApi.cancelAgentExecution({
+        user: state.projectSession.user,
+        projectId: state.projectSession.activeProjectId,
+        kind,
+        sessionId,
+        attemptId,
+        stepExecutionId,
+        assetExecutionId,
+    });
+    if (!result?.accepted || result.state !== 'canceled') {
+        throw new Error('Server did not accept cancellation');
+    }
+    return result;
+}
+
+function mergeAgentAssetProgressSnapshots(previous, next) {
+    if (!previous || typeof previous !== 'object') return next;
+    if (!next || typeof next !== 'object') return previous;
+    const itemsById = new Map(getAgentAssetProgressItems(previous).map((item) => [item.assetId, item]));
+    getAgentAssetProgressItems(next).forEach((item) => itemsById.set(item.assetId, item));
+    const items = Array.from(itemsById.values());
+    return {
+        ...previous,
+        ...next,
+        total: items.length,
+        submitted: items.filter((item) => item.jobId || item.status !== 'pending').length,
+        running: items.filter((item) => !['done', 'failed', 'TLE', 'canceled', 'pending'].includes(item.status)).length,
+        completed: items.filter((item) => item.status === 'done').length,
+        failed: items.filter((item) => ['failed', 'TLE'].includes(item.status)).length,
+        timedOut: items.filter((item) => item.status === 'TLE').length,
+        items,
+    };
+}
+
+function formatAgentAssetProgressTrellisHealth(snapshot) {
+    if (String(snapshot?.provider || '').trim().toLowerCase() !== 'trellis.2') return '';
+    const status = normalizeComponents3DTrellisStatus(state.projectSession.components3DTrellisStatus);
+    if (!status) {
+        return agentAssetProgressTrellisStatusRefreshPromise
+            ? t('projectSession.components3DTrellisStatusChecking')
+            : t('projectSession.components3DTrellisStatusUnknown');
+    }
+    if (!status.ok) return t('projectSession.components3DTrellisStatusUnavailable');
+    const workers = `${formatTrellisStatusNumber(status.busyWorkerCount)}/${formatTrellisStatusNumber(status.workerCount)}`;
+    return formatTrellisStatusParts([
+        `${t('projectSession.components3DTrellisStatusWorkers')} ${workers}`,
+        `${t('projectSession.components3DTrellisStatusQueued')} ${formatTrellisStatusNumber(status.queue?.queued)}`,
+        `${t('projectSession.components3DTrellisStatusRunning')} ${formatTrellisStatusNumber(status.queue?.running)}`,
+    ]);
+}
+
+function refreshAgentAssetProgressTrellisHealth(snapshot) {
+    if (String(snapshot?.provider || '').trim().toLowerCase() !== 'trellis.2') return Promise.resolve();
+    if (!state.projectSession?.authenticated || !state.projectSession.user || state.projectSession.isAdmin) return Promise.resolve();
+    if (Date.now() - agentAssetProgressTrellisStatusLastRequestedAt < 5000) return Promise.resolve();
+    const checkedAt = Date.parse(String(state.projectSession.components3DTrellisStatus?.checkedAt || ''));
+    if (Number.isFinite(checkedAt) && Date.now() - checkedAt < 5000) return Promise.resolve();
+    if (agentAssetProgressTrellisStatusRefreshPromise) return agentAssetProgressTrellisStatusRefreshPromise;
+    agentAssetProgressTrellisStatusLastRequestedAt = Date.now();
+    agentAssetProgressTrellisStatusRefreshPromise = projectApi.getUserApiConfig(state.projectSession.user)
+        .then((config) => {
+            state.projectSession.components3DTrellisStatus = normalizeComponents3DTrellisStatus(config?.components3DTrellisStatus);
+        })
+        .catch(() => {
+            state.projectSession.components3DTrellisStatus = null;
+        })
+        .finally(() => {
+            agentAssetProgressTrellisStatusRefreshPromise = null;
+            refreshAgentAssetProgressPopoverAnchor();
+        });
+    return agentAssetProgressTrellisStatusRefreshPromise;
+}
+
+function renderAgentAssetProgressPopover(snapshot) {
+    return `
+        <div class="agent-asset-progress-popover-header">
+            <span class="agent-asset-progress-popover-title">${escapeHtml(t('agent.pipelineSteps.assetProgressTitle'))}</span>
+            <span class="agent-asset-progress-popover-summary" data-agent-asset-progress-summary></span>
+        </div>
+        <div class="agent-asset-progress-popover-provider" data-agent-asset-progress-provider-row hidden>
+            <span data-agent-asset-progress-provider></span>
+            <span class="agent-asset-progress-popover-health" data-agent-asset-progress-health hidden></span>
+        </div>
+        <div class="agent-asset-progress-items" data-agent-asset-progress-items></div>
+    `;
+}
+
+function createAgentAssetProgressItemElement(assetId) {
+    const row = document.createElement('div');
+    row.className = 'agent-asset-progress-item';
+    row.dataset.agentAssetProgressId = assetId;
+    row.innerHTML = `
+        <div class="agent-asset-progress-item-header">
+            <span class="agent-asset-progress-item-name" data-agent-asset-progress-name></span>
+            <span class="agent-asset-progress-item-status" data-agent-asset-progress-status></span>
+        </div>
+        <div class="agent-asset-progress-item-stage" data-agent-asset-progress-stage></div>
+        <div class="agent-asset-progress-item-track">
+            <div class="agent-asset-progress-item-fill"></div>
+        </div>
+        <div class="agent-asset-progress-item-footer">
+            <span data-agent-asset-progress-label></span>
+            <span>
+                <span data-agent-asset-progress-percent></span>
+                <button type="button" class="agent-inline-btn agent-asset-progress-retry" hidden></button>
+            </span>
+        </div>
+    `;
+    return row;
+}
+
+function syncAgentAssetProgressItemElement(row, item, { retryAvailable = false } = {}) {
+    if (!(row instanceof HTMLElement)) return;
+    const progress = Math.max(0, Math.min(1, Number(item?.progress) || 0));
+    const percent = Math.round(progress * 100);
+    const stageIndex = Number(item?.stageIndex);
+    const stageCount = Number(item?.stageCount);
+    const stageProgress = item?.stageProgress == null ? '' : `${Math.round(Number(item.stageProgress) || 0)}%`;
+    const stagePosition = Number.isFinite(stageIndex) && Number.isFinite(stageCount) && stageCount > 0
+        ? `${stageIndex}/${stageCount}`
+        : '';
+    const stageText = [String(item?.stageKey || '').trim(), stagePosition, stageProgress].filter(Boolean).join(' ');
+    const rawStatus = String(item?.status || 'running').trim().toLowerCase();
+    const status = ['pending', 'submitting', 'queued', 'running', 'downloading', 'done', 'failed', 'tle', 'canceled'].includes(rawStatus)
+        ? rawStatus
+        : 'running';
+    const name = String(item?.modelName || item?.label || '');
+    const message = String(item?.message || '');
+    const nameElement = row.querySelector('[data-agent-asset-progress-name]');
+    const statusElement = row.querySelector('[data-agent-asset-progress-status]');
+    const stageElement = row.querySelector('[data-agent-asset-progress-stage]');
+    const labelElement = row.querySelector('[data-agent-asset-progress-label]');
+    const percentElement = row.querySelector('[data-agent-asset-progress-percent]');
+    setSelectionSafeElementText(nameElement, name);
+    setSelectionSafeElementText(statusElement, getAgentAssetProgressStatusLabel(status));
+    setSelectionSafeElementText(stageElement, stageText || message);
+    setSelectionSafeElementText(labelElement, item?.label || '');
+    setSelectionSafeElementText(percentElement, `${percent}%`);
+    if (nameElement instanceof HTMLElement && nameElement.title !== name) nameElement.title = name;
+    if (stageElement instanceof HTMLElement && stageElement.title !== message) stageElement.title = message;
+    row.className = `agent-asset-progress-item is-${status}`;
+    const fill = row.querySelector('.agent-asset-progress-item-fill');
+    if (fill instanceof HTMLElement) {
+        const width = `${percent}%`;
+        if (fill.style.width !== width) fill.style.width = width;
+    }
+    const retryButton = row.querySelector('.agent-asset-progress-retry');
+    if (retryButton instanceof HTMLButtonElement) {
+        const assetExecutionId = String(item?.assetExecutionId || '');
+        retryButton.hidden = !retryAvailable;
+        retryButton.dataset.agentAssetRetry = String(item?.assetId || '');
+        retryButton.dataset.agentAssetExecutionId = assetExecutionId;
+        retryButton.dataset.agentStepExecutionId = String(item?.stepExecutionId || '');
+        retryButton.disabled = agentAssetRetryInFlight.has(assetExecutionId);
+        setSelectionSafeElementText(retryButton, t('agent.actions.retry'));
+    }
+}
+
+function syncAgentAssetProgressPopover(snapshot) {
+    const popover = ensureAgentAssetProgressPopover();
+    if (doesSelectionIntersectNode(popover)) {
+        agentAssetProgressPendingSnapshot = snapshot;
+        return false;
+    }
+    agentAssetProgressPendingSnapshot = null;
+    const items = getAgentAssetProgressItems(snapshot);
+    const retryAvailable = items.length > 0 && items.every((item) => (
+        ['done', 'failed', 'tle', 'canceled'].includes(String(item?.status || '').toLowerCase())
+    ));
+    const completed = Number(snapshot?.completed) || 0;
+    const total = Number(snapshot?.total) || items.length;
+    const provider = String(snapshot?.provider || '').trim();
+    const serverHealth = formatAgentAssetProgressTrellisHealth(snapshot);
+    setSelectionSafeElementText(popover.querySelector('[data-agent-asset-progress-summary]'), `${completed}/${total}`);
+    const providerRow = popover.querySelector('[data-agent-asset-progress-provider-row]');
+    const providerElement = popover.querySelector('[data-agent-asset-progress-provider]');
+    const healthElement = popover.querySelector('[data-agent-asset-progress-health]');
+    if (providerRow instanceof HTMLElement) providerRow.hidden = !provider;
+    setSelectionSafeElementText(providerElement, provider);
+    if (healthElement instanceof HTMLElement) healthElement.hidden = !serverHealth;
+    setSelectionSafeElementText(healthElement, serverHealth);
+    const list = popover.querySelector('[data-agent-asset-progress-items]');
+    if (!(list instanceof HTMLElement)) return false;
+    const rowsById = new Map(Array.from(list.children).map((row) => (
+        row instanceof HTMLElement ? [String(row.dataset.agentAssetProgressId || ''), row] : ['', row]
+    )));
+    items.forEach((item, index) => {
+        const assetId = String(item?.assetId || `asset-${index}`);
+        const row = rowsById.get(assetId) || createAgentAssetProgressItemElement(assetId);
+        rowsById.delete(assetId);
+        const expectedRow = list.children[index] || null;
+        if (row !== expectedRow) list.insertBefore(row, expectedRow);
+        syncAgentAssetProgressItemElement(row, item, { retryAvailable });
+    });
+    rowsById.forEach((row) => row.remove());
+    return true;
+}
+
+function ensureAgentAssetProgressPopover() {
+    if (agentAssetProgressPopover instanceof HTMLElement && agentAssetProgressPopover.isConnected) {
+        return agentAssetProgressPopover;
+    }
+    const popover = document.createElement('div');
+    popover.className = 'agent-asset-progress-popover';
+    popover.setAttribute('role', 'dialog');
+    popover.setAttribute('aria-live', 'polite');
+    popover.hidden = true;
+    popover.innerHTML = renderAgentAssetProgressPopover(null);
+    popover.addEventListener('pointerenter', () => {
+        if (agentAssetProgressHideTimer) {
+            window.clearTimeout(agentAssetProgressHideTimer);
+            agentAssetProgressHideTimer = null;
+        }
+    });
+    popover.addEventListener('pointerleave', () => {
+        if (!popover.dataset.pinned) scheduleHideAgentAssetProgressPopover();
+    });
+    popover.addEventListener('click', (event) => {
+        const button = event.target instanceof Element ? event.target.closest('[data-agent-asset-retry]') : null;
+        if (!(button instanceof HTMLButtonElement)) return;
+        const context = getAgentStepBlockContextById(
+            String(button.dataset.agentSessionId || ''),
+            String(button.dataset.agentAttemptId || ''),
+            agentAssetProgressAnchorBlockId,
+        ) || getAgentStepBlockContextFromElement(
+            getAgentStepBlockDomElement(agentAssetProgressAnchorBlockId),
+        );
+        if (!context) return;
+        const assetId = String(button.dataset.agentAssetRetry || '').trim();
+        const assetExecutionId = String(button.dataset.agentAssetExecutionId || '').trim();
+        const stepExecutionId = String(button.dataset.agentStepExecutionId || getAgentStepExecutionId(context)).trim();
+        if (!assetId || !assetExecutionId || !stepExecutionId || agentAssetRetryInFlight.has(assetExecutionId)) return;
+        agentAssetRetryInFlight.add(assetExecutionId);
+        button.disabled = true;
+        requestAgentExecutionCancellation({
+            kind: 'asset',
+            sessionId: context.sessionId,
+            attemptId: context.attemptId,
+            stepExecutionId,
+            assetExecutionId,
+        }).then(() => handleAgentStepAction(context, 'retry-asset', { assetId })).catch((error) => {
+            showError(t('messages.agentOperationFailed', { message: error?.message || String(error) }));
+        }).finally(() => {
+            agentAssetRetryInFlight.delete(assetExecutionId);
+            refreshAgentAssetProgressPopoverAnchor();
+        });
+    });
+    document.body.appendChild(popover);
+    agentAssetProgressPopover = popover;
+    return popover;
+}
+
+function positionAgentAssetProgressPopover(anchor) {
+    const popover = agentAssetProgressPopover;
+    if (!(popover instanceof HTMLElement) || popover.hidden || !(anchor instanceof HTMLElement)) return;
+    const anchorRect = anchor.getBoundingClientRect();
+    const margin = 12;
+    const gap = 8;
+    const popoverWidth = Math.min(340, Math.max(240, window.innerWidth - margin * 2));
+    popover.style.width = `${popoverWidth}px`;
+    const popoverRect = popover.getBoundingClientRect();
+    let left = anchorRect.left;
+    if (left + popoverRect.width > window.innerWidth - margin) {
+        left = window.innerWidth - margin - popoverRect.width;
+    }
+    left = Math.max(margin, left);
+    let top = anchorRect.bottom + gap;
+    if (top + popoverRect.height > window.innerHeight - margin) {
+        top = anchorRect.top - popoverRect.height - gap;
+    }
+    top = Math.max(margin, top);
+    popover.style.left = `${Math.round(left)}px`;
+    popover.style.top = `${Math.round(top)}px`;
+}
+
+function getAgentAssetProgressTriggerContext(trigger) {
+    return trigger instanceof HTMLElement ? getAgentStepBlockContextFromElement(trigger) : null;
+}
+
+function showAgentAssetProgressPopover(trigger, { pinned = false } = {}) {
+    const context = getAgentAssetProgressTriggerContext(trigger);
+    const snapshot = context?.block?.assetProgress;
+    if (!context || !snapshot || getAgentAssetProgressItems(snapshot).length <= 0) return false;
+    const popover = ensureAgentAssetProgressPopover();
+    if (agentAssetProgressHideTimer) {
+        window.clearTimeout(agentAssetProgressHideTimer);
+        agentAssetProgressHideTimer = null;
+    }
+    agentAssetProgressAnchorBlockId = context.blockId;
+    popover.dataset.pinned = pinned ? 'true' : '';
+    void refreshAgentAssetProgressTrellisHealth(snapshot);
+    syncAgentAssetProgressPopover(snapshot);
+    popover.hidden = false;
+    positionAgentAssetProgressPopover(trigger);
+    return true;
+}
+
+function hideAgentAssetProgressPopover() {
+    if (agentAssetProgressHideTimer) {
+        window.clearTimeout(agentAssetProgressHideTimer);
+        agentAssetProgressHideTimer = null;
+    }
+    if (agentAssetProgressPopover instanceof HTMLElement) {
+        agentAssetProgressPopover.hidden = true;
+        delete agentAssetProgressPopover.dataset.pinned;
+    }
+    agentAssetProgressPendingSnapshot = null;
+    agentAssetProgressAnchorBlockId = '';
+}
+
+function scheduleHideAgentAssetProgressPopover() {
+    if (agentAssetProgressPopover?.dataset.pinned) return;
+    if (agentAssetProgressHideTimer) window.clearTimeout(agentAssetProgressHideTimer);
+    agentAssetProgressHideTimer = window.setTimeout(() => {
+        agentAssetProgressHideTimer = null;
+        hideAgentAssetProgressPopover();
+    }, 80);
+}
+
+function positionAgentAssetProgressPopoverAnchor() {
+    if (!agentAssetProgressAnchorBlockId) return;
+    const anchor = getAgentStepBlockDomElement(agentAssetProgressAnchorBlockId)?.querySelector('[data-agent-asset-progress-trigger]');
+    if (!(anchor instanceof HTMLElement)) {
+        hideAgentAssetProgressPopover();
+        return;
+    }
+    positionAgentAssetProgressPopover(anchor);
+}
+
+function refreshAgentAssetProgressPopoverAnchor() {
+    if (!agentAssetProgressAnchorBlockId) return;
+    const anchor = getAgentStepBlockDomElement(agentAssetProgressAnchorBlockId)?.querySelector('[data-agent-asset-progress-trigger]');
+    if (!(anchor instanceof HTMLElement)) {
+        hideAgentAssetProgressPopover();
+        return;
+    }
+    const context = getAgentAssetProgressTriggerContext(anchor);
+    if (!context?.block?.assetProgress) {
+        hideAgentAssetProgressPopover();
+        return;
+    }
+    syncAgentAssetProgressPopover(context.block.assetProgress);
+    positionAgentAssetProgressPopover(anchor);
+}
+
+function handleAgentProgressSelectionChange() {
+    if (
+        agentAssetProgressPendingSnapshot
+        && agentAssetProgressPopover instanceof HTMLElement
+        && !agentAssetProgressPopover.hidden
+        && !doesSelectionIntersectNode(agentAssetProgressPopover)
+    ) {
+        refreshAgentAssetProgressPopoverAnchor();
+    }
+    flushAgentPendingMessageListRender();
+    flushAgentPendingSessionRenders();
+    flushAgentPendingStepRenders();
+    flushSelectionSafeTextUpdates();
+}
+
+function handleAgentAssetProgressPointerOver(event) {
+    if (!(event.target instanceof Element)) return;
+    const trigger = event.target.closest('[data-agent-asset-progress-trigger]');
+    if (!(trigger instanceof HTMLElement) || trigger.contains(event.relatedTarget)) return;
+    showAgentAssetProgressPopover(trigger);
+}
+
+function handleAgentAssetProgressPointerOut(event) {
+    if (!(event.target instanceof Element)) return;
+    const trigger = event.target.closest('[data-agent-asset-progress-trigger]');
+    if (!(trigger instanceof HTMLElement) || trigger.contains(event.relatedTarget)) return;
+    if (event.relatedTarget instanceof Node && agentAssetProgressPopover?.contains(event.relatedTarget)) return;
+    scheduleHideAgentAssetProgressPopover();
+}
+
+function handleAgentAssetProgressFocusIn(event) {
+    if (!(event.target instanceof Element)) return;
+    const trigger = event.target.closest('[data-agent-asset-progress-trigger]');
+    if (trigger instanceof HTMLElement) showAgentAssetProgressPopover(trigger);
+}
+
+function handleAgentAssetProgressFocusOut(event) {
+    if (event.relatedTarget instanceof Node && agentAssetProgressPopover?.contains(event.relatedTarget)) return;
+    if (event.relatedTarget instanceof Element && event.relatedTarget.closest('[data-agent-asset-progress-trigger]')) return;
+    if (!agentAssetProgressPopover?.dataset.pinned) scheduleHideAgentAssetProgressPopover();
+}
+
+function handleAgentAssetProgressKeydown(event) {
+    if (!(event.target instanceof Element)) return;
+    const trigger = event.target.closest('[data-agent-asset-progress-trigger]');
+    if (!(trigger instanceof HTMLElement)) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        const isPinned = agentAssetProgressPopover?.dataset.pinned === 'true'
+            && agentAssetProgressAnchorBlockId === getAgentAssetProgressTriggerContext(trigger)?.blockId;
+        if (isPinned) hideAgentAssetProgressPopover();
+        else showAgentAssetProgressPopover(trigger, { pinned: true });
+    }
+    if (event.key === 'Escape') hideAgentAssetProgressPopover();
+}
+
+function handleAgentAssetProgressClick(event) {
+    if (!(event.target instanceof Element)) return false;
+    const trigger = event.target.closest('[data-agent-asset-progress-trigger]');
+    if (!(trigger instanceof HTMLElement)) return false;
+    const context = getAgentAssetProgressTriggerContext(trigger);
+    const isPinned = agentAssetProgressPopover?.dataset.pinned === 'true'
+        && agentAssetProgressAnchorBlockId === context?.blockId;
+    if (isPinned) hideAgentAssetProgressPopover();
+    else showAgentAssetProgressPopover(trigger, { pinned: true });
+    return true;
+}
+
+function getAgentProgressBlockRenderState(block, context = {}) {
     const progress = Math.max(0, Math.min(1, Number(block.value) || 0));
     const percentText = block.indeterminate ? t('agent.promptProcessing') : `${Math.round(progress * 100)}%`;
+    const stepProgressText = block.indeterminate ? '' : percentText;
     const images = Array.isArray(block.images) ? block.images : [];
     const artifacts = Array.isArray(block.artifacts) ? block.artifacts : [];
+    const assetProgress = block.assetProgress && typeof block.assetProgress === 'object' ? block.assetProgress : null;
+    const hasAssetProgress = getAgentAssetProgressItems(assetProgress).length > 0;
     const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(block.selectedIndex) || 0));
     const selectedImage = images[selectedIndex] || null;
     const isApplied = Boolean(block.applied);
@@ -6356,13 +8614,84 @@ function renderAgentProgressBlock(block, context = {}) {
     ) {
         statusText = '';
     }
+    if (isStepBlock && isGenericAgentProgressStatusText(statusText)) {
+        statusText = '';
+    }
+    if (
+        block.stepKey === 'components-3d'
+        && String(assetProgress?.provider || '').trim().toLowerCase() === 'trellis.2'
+    ) {
+        statusText = '';
+    }
     const showProgressTrack = !isStepBlock || (
         shouldShowAgentStepProgressTrack(statusId, block)
         && !isApplied
         && !isCanceledStep
         && !isInterruptedAttempt
     );
+    const terminalElapsedText = isStepBlock
+        && isAgentProgressBlockTerminal(block)
+        && block.startedAt
+        && block.completedAt
+        ? formatAgentProgressElapsed(getAgentProgressElapsedMs(block))
+        : '';
     const showInterruptedStepActions = isInterruptedAttempt && isStepBlock && block.isCurrent && !isApplied && context.sessionId;
+    return {
+        progress,
+        percentText,
+        stepProgressText,
+        images,
+        artifacts,
+        assetProgress,
+        hasAssetProgress,
+        selectedIndex,
+        selectedImage,
+        isApplied,
+        isStepBlock,
+        isInterruptedAttempt,
+        statusId,
+        actions,
+        isCanceledStep,
+        stepThumbnail,
+        showContinue,
+        forceCollapsed,
+        isHiddenStepBlock,
+        isOpen,
+        stepStateLabel,
+        stepStateClass,
+        statusText,
+        showProgressTrack,
+        terminalElapsedText,
+        showInterruptedStepActions,
+    };
+}
+
+function renderAgentProgressBlock(block, context = {}) {
+    const {
+        progress,
+        percentText,
+        stepProgressText,
+        images,
+        artifacts,
+        assetProgress,
+        hasAssetProgress,
+        selectedIndex,
+        selectedImage,
+        isApplied,
+        isStepBlock,
+        isInterruptedAttempt,
+        actions,
+        stepThumbnail,
+        showContinue,
+        isHiddenStepBlock,
+        isOpen,
+        stepStateLabel,
+        stepStateClass,
+        statusText,
+        showProgressTrack,
+        terminalElapsedText,
+        showInterruptedStepActions,
+    } = getAgentProgressBlockRenderState(block, context);
     const content = `
             ${isStepBlock ? '' : `
             <div class="agent-block-header">
@@ -6371,8 +8700,19 @@ function renderAgentProgressBlock(block, context = {}) {
             </div>
             `}
             ${showProgressTrack ? `
-            <div class="agent-progress-track ${block.indeterminate ? 'is-indeterminate' : ''}">
-                <div class="agent-progress-fill" style="width:${Math.round(progress * 100)}%"></div>
+            <div class="agent-progress-row">
+                <div
+                    class="agent-progress-track ${block.indeterminate ? 'is-indeterminate' : ''} ${hasAssetProgress ? 'has-asset-progress' : ''}"
+                    ${hasAssetProgress ? `data-agent-asset-progress-trigger tabindex="0" role="button" aria-haspopup="dialog" aria-label="${escapeHtml(t('agent.pipelineSteps.assetProgressOpen'))}" data-agent-block-id="${escapeHtml(block.id)}"` : ''}
+                >
+                    <div class="agent-progress-fill" style="width:${Math.round(progress * 100)}%"></div>
+                </div>
+                <span
+                    class="agent-progress-elapsed"
+                    data-agent-progress-elapsed
+                    data-started-at="${escapeHtml(block.startedAt || '')}"
+                    data-completed-at="${escapeHtml(block.completedAt || '')}"
+                >${escapeHtml(formatAgentProgressElapsed(getAgentProgressElapsedMs(block)))}</span>
             </div>
             ` : ''}
             ${statusText ? `<div class="agent-block-status">${escapeHtml(statusText)}</div>` : ''}
@@ -6384,6 +8724,7 @@ function renderAgentProgressBlock(block, context = {}) {
                     ${renderAgentStepImageMetadata(selectedImage)}
                 </div>
             ` : ''}
+            ${renderAgentStepCandidatePager(block, isInterruptedAttempt)}
             ${renderAgentBlockArtifacts(artifacts)}
             ${actions.length > 0 ? `
                 <div class="agent-step-actions">
@@ -6411,8 +8752,9 @@ function renderAgentProgressBlock(block, context = {}) {
                     ${stepThumbnail ? `<span class="agent-step-summary-thumb"><img src="${escapeHtml(stepThumbnail)}" alt="" loading="eager" decoding="async"></span>` : ''}
                     <span class="agent-block-title">${escapeHtml(block.title || t('agent.blocks.progress'))}</span>
                     <span class="agent-step-summary-meta">
+                        ${terminalElapsedText ? `<span class="agent-step-terminal-elapsed" data-agent-terminal-elapsed>${escapeHtml(terminalElapsedText)}</span>` : ''}
                         ${stepStateLabel ? `<span class="agent-step-state ${escapeHtml(stepStateClass)}">${escapeHtml(stepStateLabel)}</span>` : ''}
-                        ${showProgressTrack ? `<span class="agent-block-meta">${percentText}</span>` : ''}
+                        ${showProgressTrack && stepProgressText ? `<span class="agent-block-meta">${stepProgressText}</span>` : ''}
                     </span>
                 </summary>
                 <div class="agent-step-body">
@@ -6456,6 +8798,18 @@ function renderAgentBlockArtifacts(artifacts = []) {
 function renderAgentStepImageMetadata(image) {
     const metadata = image?.metadata && typeof image.metadata === 'object' ? image.metadata : null;
     if (!metadata) return '';
+    if (metadata.kind === 'object_image') {
+        const count = Number(metadata.objectImageCount) || 0;
+        const details = [
+            metadata.label ? String(metadata.label) : '',
+            count > 0 ? t('agent.pipelineSteps.objectImagesCount', { count }) : '',
+        ].filter(Boolean);
+        return `
+        <div class="agent-step-metadata">
+            ${details.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}
+        </div>
+    `;
+    }
     if (metadata.kind === 'components_3d') {
         const details = [
             metadata.label ? String(metadata.label) : '',
@@ -6481,7 +8835,18 @@ function renderAgentStepImageMetadata(image) {
         .map((item) => String(item?.label || '').trim())
         .filter(Boolean)
         .slice(0, 4);
-    const detectionCount = Number(metadata.detectionCount) || 9;
+    const toCount = (value) => {
+        const count = Number(value);
+        return Number.isFinite(count) && count >= 0 ? Math.floor(count) : null;
+    };
+    const legacyDetectionCount = toCount(metadata.detectionCount);
+    const actualDetectionCount = toCount(metadata.actualDetectionCount);
+    const provider = normalizeComponents3DProvider(
+        metadata.components3DProvider || state.projectSession.components3DConfig?.provider,
+    );
+    const detectionCount = provider === 'mocked'
+        ? legacyDetectionCount ?? actualDetectionCount ?? bboxData.length
+        : actualDetectionCount ?? bboxData.length;
     return `
         <div class="agent-step-metadata">
             <span>${escapeHtml(t('agent.pipelineSteps.layoutDetections', { count: detectionCount }))}</span>
@@ -6759,10 +9124,14 @@ function renderAgentSessionItem(session) {
     const archiveStateLabel = getAgentSessionStatusLabel(session, attempt);
     const isArchivedExpanded = session.archiveState !== 'active' && !session.collapsed;
     const attemptBlocks = getAgentAttemptStepBlocks(attempt);
+    const attemptText = attemptBlocks.length > 0 && isGenericAgentProgressStatusText(attempt?.text)
+        ? ''
+        : String(attempt?.text || '');
     const isThinkingBeforeMcp = session.archiveState === 'active'
         && attempt?.status === 'running'
         && attemptBlocks.length <= 0;
     const actionAvailability = resolveAgentSessionActionAvailability({
+        workflow: session.workflow,
         archiveState: session.archiveState,
         attemptStatus: attempt?.status || 'running',
     });
@@ -6799,15 +9168,15 @@ function renderAgentSessionItem(session) {
                             ` : ''}
                         </div>
                     </div>
-                    <div class="agent-message-text ${isThinkingBeforeMcp ? 'agent-thinking-text' : ''}">${escapeHtml(attempt?.text || '')}</div>
+                    ${attemptText ? `<div class="agent-message-text ${isThinkingBeforeMcp ? 'agent-thinking-text' : ''}">${escapeHtml(attemptText)}</div>` : ''}
                     ${renderAgentBlocks(attemptBlocks, { sessionId: session.id, attemptId: attempt?.id || '', attempt, stepBlocksCollapsed: arePipelineStepsCollapsed })}
                     ${renderAgentPromptSuggestions(attempt?.promptSuggestions)}
                     <div class="agent-session-footer">
                         ${isArchivedExpanded ? '' : `
                             <div class="agent-session-actions">
-                                <button type="button" class="agent-inline-btn" data-agent-session-action="cancel" data-agent-session-id="${session.id}">${escapeHtml(t('agent.actions.cancel'))}</button>
+                                ${actionAvailability.canCancel ? `<button type="button" class="agent-inline-btn" data-agent-session-action="cancel" data-agent-session-id="${session.id}">${escapeHtml(t('agent.actions.cancel'))}</button>` : ''}
                                 <button type="button" class="agent-inline-btn" data-agent-session-action="retry" data-agent-session-id="${session.id}" ${actionAvailability.canRetry ? '' : 'disabled'}>${escapeHtml(t('agent.actions.retry'))}</button>
-                                <button type="button" class="agent-inline-btn" data-agent-session-action="apply" data-agent-session-id="${session.id}" ${actionAvailability.canApply ? '' : 'disabled'}>${escapeHtml(t('agent.actions.apply'))}</button>
+                                ${session.workflow === 'scene-build' ? '' : `<button type="button" class="agent-inline-btn" data-agent-session-action="apply" data-agent-session-id="${session.id}" ${actionAvailability.canApply ? '' : 'disabled'}>${escapeHtml(t('agent.actions.apply'))}</button>`}
                             </div>
                         `}
                     </div>
@@ -6980,10 +9349,11 @@ function forceAgentMessageScrollToBottom() {
 function runAgentMessageBottomPinLoop() {
     agentMessageBottomPinRaf = 0;
     forceAgentMessageScrollToBottom();
-    if (agentMessageBottomPinFramesRemaining <= 0) {
+    const shouldContinueForDuration = performance.now() < agentMessageBottomPinUntil;
+    if (agentMessageBottomPinFramesRemaining <= 0 && !shouldContinueForDuration) {
         return;
     }
-    agentMessageBottomPinFramesRemaining -= 1;
+    agentMessageBottomPinFramesRemaining = Math.max(0, agentMessageBottomPinFramesRemaining - 1);
     agentMessageBottomPinRaf = requestAnimationFrame(runAgentMessageBottomPinLoop);
 }
 
@@ -6993,6 +9363,12 @@ function scheduleAgentMessageBottomPin(frames = 6) {
     agentMessageBottomPinFramesRemaining = Math.max(agentMessageBottomPinFramesRemaining, safeFrames);
     if (agentMessageBottomPinRaf !== 0) return;
     agentMessageBottomPinRaf = requestAnimationFrame(runAgentMessageBottomPinLoop);
+}
+
+function scheduleAgentMessageBottomPinForDuration(durationMs, trailingFrames = 2) {
+    const safeDurationMs = Math.max(0, Number(durationMs) || 0);
+    agentMessageBottomPinUntil = Math.max(agentMessageBottomPinUntil, performance.now() + safeDurationMs);
+    scheduleAgentMessageBottomPin(trailingFrames);
 }
 
 function bindAgentMessageAsyncBottomPin() {
@@ -7008,6 +9384,33 @@ function bindAgentMessageAsyncBottomPin() {
     });
 }
 
+function retainAgentCachedImage(src) {
+    if (!src || typeof Image === 'undefined') return null;
+    if (agentThumbnailImageCache.has(src)) return agentThumbnailImageCache.get(src);
+    const cachedImage = new Image();
+    cachedImage.decoding = 'async';
+    cachedImage.loading = 'eager';
+    cachedImage.src = src;
+    agentThumbnailImageCache.set(src, cachedImage);
+    cachedImage.decode?.().catch(() => {});
+    return cachedImage;
+}
+
+async function preloadAgentImageSource(src) {
+    const cachedImage = retainAgentCachedImage(src);
+    if (!(cachedImage instanceof HTMLImageElement)) {
+        return cachedImage;
+    }
+    if (!cachedImage.complete) {
+        await new Promise((resolve) => {
+            cachedImage.addEventListener('load', resolve, { once: true });
+            cachedImage.addEventListener('error', resolve, { once: true });
+        });
+    }
+    await cachedImage.decode?.().catch(() => {});
+    return cachedImage;
+}
+
 function retainAgentThumbnailImageCache(root = dom.agentMessageList) {
     if (!root || typeof Image === 'undefined') return;
     const activeSources = new Set();
@@ -7016,13 +9419,20 @@ function retainAgentThumbnailImageCache(root = dom.agentMessageList) {
         const src = String(img.currentSrc || img.src || '').trim();
         if (!src) return;
         activeSources.add(src);
-        if (agentThumbnailImageCache.has(src)) return;
-        const cachedImage = new Image();
-        cachedImage.decoding = 'async';
-        cachedImage.loading = 'eager';
-        cachedImage.src = src;
-        agentThumbnailImageCache.set(src, cachedImage);
-        cachedImage.decode?.().catch(() => {});
+        retainAgentCachedImage(src);
+    });
+    state.agentMessages.forEach((item) => {
+        const attempts = item?.kind === 'session' ? (item.attempts || []) : [];
+        attempts.forEach((attempt) => {
+            getAgentAttemptStepBlocks(attempt).forEach((block) => {
+                (Array.isArray(block?.images) ? block.images : []).forEach((image) => {
+                    const src = String(getAgentStepImageThumbnailSrc(image) || '').trim();
+                    if (!src) return;
+                    activeSources.add(src);
+                    retainAgentCachedImage(src);
+                });
+            });
+        });
     });
     Array.from(agentThumbnailImageCache.keys()).forEach((src) => {
         if (!activeSources.has(src)) {
@@ -7166,6 +9576,9 @@ function runAgentMessageLayoutAnimation(animation) {
             }
             element.style.height = `${endHeight}px`;
         });
+        if (animation.wasPinnedToBottom) {
+            scheduleAgentMessageBottomPinForDuration(AGENT_STEP_ANIMATION_MS + 40);
+        }
         scheduleAgentMessageScrollbarSync();
     });
     window.setTimeout(() => {
@@ -7211,9 +9624,10 @@ function syncAgentSessionHeaderDom(sessionId) {
     const attempt = getAgentSessionActiveAttempt(session);
     const status = sessionElement.querySelector('.agent-session-status');
     if (status) {
-        status.textContent = getAgentSessionStatusLabel(session, attempt);
+        setSelectionSafeElementText(status, getAgentSessionStatusLabel(session, attempt));
     }
     const actionAvailability = resolveAgentSessionActionAvailability({
+        workflow: session.workflow,
         archiveState: session.archiveState,
         attemptStatus: attempt?.status || 'running',
     });
@@ -7263,6 +9677,11 @@ function renderAgentSessionElement(sessionId, { autoScroll = 'preserve-or-pin-bo
         renderAgentMessages({ autoScroll, animateLayout });
         return false;
     }
+    if (doesSelectionIntersectNode(currentElement)) {
+        agentPendingSessionRenders.set(sessionId, { autoScroll });
+        return true;
+    }
+    agentPendingSessionRenders.delete(sessionId);
 
     const prevScrollTop = dom.agentMessageScroll?.scrollTop ?? 0;
     const prevClientHeight = dom.agentMessageScroll?.clientHeight ?? 0;
@@ -7282,6 +9701,7 @@ function renderAgentSessionElement(sessionId, { autoScroll = 'preserve-or-pin-bo
         return false;
     }
     currentElement.replaceWith(nextElement);
+    refreshAgentAssetProgressPopoverAnchor();
     const layoutAnimation = prepareAgentMessageLayoutAnimation(layoutSnapshot);
     restoreAgentMessageLayoutAnchor(layoutSnapshot);
     syncAgentImageFrameAspectRatios(nextElement);
@@ -7302,6 +9722,11 @@ function renderAgentSessionElement(sessionId, { autoScroll = 'preserve-or-pin-bo
 
 function renderAgentMessages({ autoScroll = 'preserve-or-pin-bottom', animateLayout = null } = {}) {
     if (!dom.agentMessageList) return;
+    if (doesSelectionIntersectNode(dom.agentMessageList)) {
+        agentPendingMessageListRender = { autoScroll };
+        return;
+    }
+    agentPendingMessageListRender = null;
     const prevScrollTop = dom.agentMessageScroll?.scrollTop ?? 0;
     const prevClientHeight = dom.agentMessageScroll?.clientHeight ?? 0;
     const prevScrollHeight = dom.agentMessageScroll?.scrollHeight ?? 0;
@@ -7317,6 +9742,7 @@ function renderAgentMessages({ autoScroll = 'preserve-or-pin-bottom', animateLay
             ? renderAgentSessionItem(item)
             : renderAgentMessageItem(item)
     )).join('');
+    refreshAgentAssetProgressPopoverAnchor();
     const layoutAnimation = prepareAgentMessageLayoutAnimation(layoutSnapshot);
     syncAgentImageFrameAspectRatios(dom.agentMessageList);
     syncAgentStepSummaryTitleReserves(dom.agentMessageList);
@@ -7405,30 +9831,40 @@ function syncAgentWorkbenchCollapsedState() {
 }
 
 function scheduleAgentWorkbenchCollapseLayoutSync({ persist = true } = {}) {
+    const token = ++agentWorkbenchCollapseAnimationToken;
+    if (agentWorkbenchCollapseSyncRaf !== 0) {
+        cancelAnimationFrame(agentWorkbenchCollapseSyncRaf);
+        agentWorkbenchCollapseSyncRaf = 0;
+    }
     if (agentWorkbenchTogglingTimer !== 0) {
         clearTimeout(agentWorkbenchTogglingTimer);
+        agentWorkbenchTogglingTimer = 0;
     }
     document.body.classList.add('agent-workbench-toggling');
 
-    if (agentWorkbenchCollapseSyncRaf !== 0) {
-        return;
+    if (persist) {
+        localStorage.setItem(AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY, String(state.agentWorkbenchCollapsed));
     }
 
-    agentWorkbenchCollapseSyncRaf = requestAnimationFrame(() => {
-        agentWorkbenchCollapseSyncRaf = requestAnimationFrame(() => {
+    const syncRaf = requestAnimationFrame(() => {
+        if (agentWorkbenchCollapseSyncRaf === syncRaf) {
             agentWorkbenchCollapseSyncRaf = 0;
-            if (persist) {
-                localStorage.setItem(AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY, String(state.agentWorkbenchCollapsed));
-            }
-            syncCanvasContainerToViewport();
-            scheduleAgentMessageScrollbarSync();
-
-            agentWorkbenchTogglingTimer = setTimeout(() => {
-                agentWorkbenchTogglingTimer = 0;
-                document.body.classList.remove('agent-workbench-toggling');
-            }, 120);
-        });
+        }
+        if (token !== agentWorkbenchCollapseAnimationToken) return;
+        syncCanvasContainerToViewport();
+        scheduleAgentMessageScrollbarSync();
     });
+    agentWorkbenchCollapseSyncRaf = syncRaf;
+
+    const togglingTimer = setTimeout(() => {
+        if (agentWorkbenchTogglingTimer === togglingTimer) {
+            agentWorkbenchTogglingTimer = 0;
+        }
+        if (token !== agentWorkbenchCollapseAnimationToken) return;
+        document.body.classList.remove('agent-workbench-toggling');
+        scheduleAgentMessageScrollbarSync();
+    }, AGENT_WORKBENCH_COLLAPSE_ANIMATION_MS + 40);
+    agentWorkbenchTogglingTimer = togglingTimer;
 }
 
 function applyAgentWorkbenchWidth(width, persist = true, {
@@ -7454,7 +9890,11 @@ function applyAgentWorkbenchWidth(width, persist = true, {
 }
 
 function setAgentWorkbenchCollapsed(collapsed, persist = true) {
-    state.agentWorkbenchCollapsed = Boolean(collapsed);
+    const nextCollapsed = Boolean(collapsed);
+    if (state.agentWorkbenchCollapsed === nextCollapsed) {
+        return;
+    }
+    state.agentWorkbenchCollapsed = nextCollapsed;
     syncAgentWorkbenchCollapsedState();
     scheduleAgentWorkbenchCollapseLayoutSync({ persist });
 }
@@ -7518,9 +9958,18 @@ function resetAllAgentConversations() {
 function animateAgentStepBlockToggle(details, expand) {
     if (!(details instanceof HTMLDetailsElement)) return false;
     if (details.classList.contains('is-animating')) return true;
+    const wasPinnedToBottom = shouldForceAgentMessageBottomAfterRender({
+        mode: 'preserve-or-pin-bottom',
+        prevScrollTop: dom.agentMessageScroll?.scrollTop ?? 0,
+        prevClientHeight: dom.agentMessageScroll?.clientHeight ?? 0,
+        prevScrollHeight: dom.agentMessageScroll?.scrollHeight ?? 0,
+    });
     const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
     if (prefersReducedMotion) {
         details.open = Boolean(expand);
+        if (wasPinnedToBottom) {
+            forceAgentMessageScrollToBottom();
+        }
         return true;
     }
 
@@ -7538,13 +9987,19 @@ function animateAgentStepBlockToggle(details, expand) {
     }
     const endHeight = expand ? details.scrollHeight : (details.querySelector('.agent-step-summary')?.offsetHeight || 34);
     details.style.height = `${endHeight}px`;
+    if (wasPinnedToBottom) {
+        scheduleAgentMessageBottomPinForDuration(AGENT_STEP_ANIMATION_MS + 40);
+    }
 
     const finish = () => {
         details.classList.remove('is-animating', 'is-opening', 'is-closing');
         details.style.height = '';
         details.open = Boolean(expand);
+        if (wasPinnedToBottom) {
+            scheduleAgentMessageBottomPin(2);
+        }
     };
-    window.setTimeout(finish, 220);
+    window.setTimeout(finish, AGENT_STEP_ANIMATION_MS);
     return true;
 }
 
@@ -7563,6 +10018,7 @@ function escapeCssIdentifier(value) {
 
 function handleAgentMessageListClick(event) {
     if (!(event.target instanceof Element)) return;
+    if (handleAgentAssetProgressClick(event)) return;
     const sessionStepToggle = event.target.closest('[data-agent-session-step-toggle]');
     if (sessionStepToggle instanceof HTMLElement) {
         const sessionId = String(sessionStepToggle.dataset.agentSessionStepToggle || '').trim();
@@ -7584,6 +10040,26 @@ function handleAgentMessageListClick(event) {
         if (!context || context.attempt?.status === 'interrupted' || !shouldShowAgentPipelineContinue(context)) return;
         handleAgentStepAction(context, 'retry').catch((error) => {
             console.warn('[Agent Step] continue failed', error);
+            showError(t('messages.agentOperationFailed', { message: error?.message || String(error) }));
+        });
+        return;
+    }
+    const stepCandidateNav = event.target.closest('[data-agent-step-candidate-nav]');
+    if (stepCandidateNav instanceof HTMLElement) {
+        const context = getAgentStepBlockContextFromElement(stepCandidateNav);
+        if (!context || isAgentStepGalleryNavigationLocked(context.block, context.attempt)) return;
+        const candidateIds = Array.isArray(context.block.sceneCandidateIds) ? context.block.sceneCandidateIds : [];
+        const itemCount = candidateIds.length;
+        if (itemCount <= 1) return;
+        const direction = stepCandidateNav.dataset.agentStepCandidateNav;
+        const currentIndex = Math.max(0, Math.min(itemCount - 1, Number(context.block.sceneCandidateIndex) || 0));
+        const selectedIndex = direction === 'prev'
+            ? Math.max(0, currentIndex - 1)
+            : Math.min(itemCount - 1, currentIndex + 1);
+        const candidateId = candidateIds[selectedIndex];
+        if (!candidateId) return;
+        activateAgentSceneSkillCandidate(context, candidateId).catch((error) => {
+            console.warn('[Agent Step] candidate activation failed', error);
             showError(t('messages.agentOperationFailed', { message: error?.message || String(error) }));
         });
         return;
@@ -8067,9 +10543,19 @@ function replaceAgentSessionAttempt(session, attemptId, nextAttempt) {
     if (!session || session.kind !== 'session' || !attemptId || !nextAttempt) return session;
     return {
         ...session,
-        attempts: (session.attempts || []).map((attempt) => (
-            attempt.id === attemptId ? { ...nextAttempt, id: attemptId } : attempt
-        )),
+        attempts: (session.attempts || []).map((attempt) => {
+            if (attempt.id !== attemptId) return attempt;
+            const nextBlocks = reconcileAgentProgressBlockList(
+                getAgentAttemptStepBlocks(attempt),
+                getAgentAttemptStepBlocks(nextAttempt),
+            );
+            return {
+                ...nextAttempt,
+                id: attemptId,
+                blocks: nextBlocks,
+                ...(Array.isArray(nextAttempt.steps) ? { steps: nextBlocks } : {}),
+            };
+        }),
         updatedAt: new Date().toISOString(),
     };
 }
@@ -8659,6 +11145,7 @@ function createCodexTaskAttemptFromResult({
                     id: image.id || `Image ${index + 1}`,
                     mimeType: image.mimeType || '',
                     bytes: image.bytes || 0,
+                    metadata: image.metadata && typeof image.metadata === 'object' ? image.metadata : undefined,
                 };
             })
             .filter(Boolean)
@@ -8675,7 +11162,7 @@ function createCodexTaskAttemptFromResult({
     }
 
     const taskStatusId = normalizeAgentPipelineStatusId(task.statusId);
-    const isFailedTask = taskStatusId === 'failed';
+    const isFailedTask = taskStatusId === 'failed' || taskStatusId === 'TLE';
     const progressBlock = createAgentProgressBlock({
         title: task.title || 'Codex',
         stepKey: 'main-image',
@@ -8686,10 +11173,21 @@ function createCodexTaskAttemptFromResult({
         images: progressImages,
         selectedIndex: 0,
         applied: false,
-        actions: progressImages.length > 0 ? ['cancel', 'retry', 'apply'] : (isFailedTask ? ['cancel', 'retry'] : []),
+        actions: isFailedTask ? ['cancel', 'retry'] : (progressImages.length > 0 ? ['cancel', 'retry', 'apply'] : []),
         isCurrent: progressImages.length > 0 || isFailedTask,
         expanded: true,
+        artifacts: Array.isArray(task.artifacts) ? task.artifacts : [],
+        assetProgress: task.assetProgress && typeof task.assetProgress === 'object' ? task.assetProgress : null,
     });
+    progressBlock.sceneCandidateContext = {
+        ...(result?.candidateResult && typeof result.candidateResult === 'object' ? result.candidateResult : {}),
+        images: progressImages,
+        selectedImageIndex: 0,
+        artifacts: Array.isArray(task.artifacts) ? task.artifacts : [],
+        ...(task.dependencyTree ? { dependencyTree: task.dependencyTree } : {}),
+        ...(Object.keys(task).length > 0 ? { structuredData: task } : {}),
+        ...(task.assetProgress && typeof task.assetProgress === 'object' ? { assetProgress: task.assetProgress } : {}),
+    };
     const steps = createScenePipelineSteps({
         mainImageBlock: progressBlock,
     });
@@ -8700,7 +11198,7 @@ function createCodexTaskAttemptFromResult({
         steps,
         status: 'complete',
     });
-    return attempt;
+    return workflowId === 'scene-build' ? migrateLegacySceneSkillAttempt(attempt) : attempt;
 }
 
 function createCodexTaskSessionFromResult({
@@ -8785,8 +11283,9 @@ function updateCodexTaskSessionProgress({
         const nextAttempts = (session.attempts || []).map((attempt) => {
             if (attempt.id !== attemptId) return attempt;
             const taskImages = Array.isArray(task.images) ? task.images : [];
+            const previousSteps = getAgentAttemptStepBlocks(attempt);
             const steps = workflowId === 'camera-direct'
-                ? createCameraPipelineSteps({ task })
+                ? reconcileAgentProgressBlockList(previousSteps, createCameraPipelineSteps({ task }))
                 : getAgentAttemptStepBlocks(attempt).map((block) => {
                     if (block?.type !== 'progress' || !block.indeterminate) return block;
                     return {
@@ -8796,6 +11295,7 @@ function updateCodexTaskSessionProgress({
                         value: task.progress ?? block.value ?? 0.01,
                         images: taskImages.length > 0 ? taskImages : (Array.isArray(block.images) ? block.images : []),
                         selectedIndex: taskImages.length > 0 ? taskImages.length - 1 : block.selectedIndex,
+                        ...(task.assetProgress && typeof task.assetProgress === 'object' ? { assetProgress: task.assetProgress } : {}),
                         expanded: true,
                     };
                 });
@@ -8827,6 +11327,15 @@ function runServerCodexAgentSessionAttempt({
     sessionId,
     attemptId,
 } = {}) {
+    const executionId = `scene-task-${attemptId}-${Date.now()}`;
+    const requestController = workflowId === 'scene-build'
+        ? registerSceneSkillExecutionController({
+            executionId,
+            requestKind: 'task',
+            sessionId,
+            attemptId,
+        })
+        : null;
     const debug = startAgentEndpointDebug({
         workflowId,
         endpoint: '/api/codex-agent/messages',
@@ -8841,7 +11350,10 @@ function runServerCodexAgentSessionAttempt({
         threadId: state.agentCodexThreadId,
         prompt,
         workflow: workflowId,
+        signal: requestController?.signal,
         onTask: (task) => {
+            const currentSession = state.agentMessages.find((item) => item?.kind === 'session' && item.id === sessionId);
+            if (workflowId === 'scene-build' && getAgentSessionActiveAttempt(currentSession)?.id !== attemptId) return;
             logAgentDebug(workflowId, 'task update', {
                 sessionId,
                 attemptId,
@@ -8857,6 +11369,12 @@ function runServerCodexAgentSessionAttempt({
             });
         },
     }).then(async (result) => {
+        releaseSceneSkillExecutionController(executionId);
+        const currentSession = state.agentMessages.find((item) => item?.kind === 'session' && item.id === sessionId);
+        if (workflowId === 'scene-build' && (
+            getAgentSessionActiveAttempt(currentSession)?.id !== attemptId
+            || currentSession?.archiveState !== 'active'
+        )) return;
         debug.finish(result);
         state.agentCodexConversationId = result?.conversationId || state.agentCodexConversationId;
         state.agentCodexThreadId = result?.threadId || state.agentCodexThreadId;
@@ -8885,6 +11403,8 @@ function runServerCodexAgentSessionAttempt({
             result,
         });
     }).catch((error) => {
+        releaseSceneSkillExecutionController(executionId);
+        if (error?.name === 'AbortError') return;
         debug.finish(null, error);
         createAgentSessionHandle(sessionId, attemptId).fail(t('messages.codexAgentFailed', {
             message: error?.message || String(error),
@@ -8960,6 +11480,15 @@ function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
         attemptId: pendingSession ? getAgentSessionActiveAttempt(pendingSession)?.id || '' : '',
     });
     const activePendingAttemptId = pendingSession ? getAgentSessionActiveAttempt(pendingSession)?.id || '' : '';
+    const executionId = `scene-task-${activePendingAttemptId}-${Date.now()}`;
+    const requestController = workflowId === 'scene-build' && pendingSession
+        ? registerSceneSkillExecutionController({
+            executionId,
+            requestKind: 'task',
+            sessionId: pendingSession.id,
+            attemptId: activePendingAttemptId,
+        })
+        : null;
     projectApi.sendCodexAgentMessageStream({
         user: state.projectSession.user,
         projectId: state.projectSession.activeProjectId,
@@ -8967,7 +11496,12 @@ function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
         threadId: state.agentCodexThreadId,
         prompt,
         workflow: workflowId,
+        signal: requestController?.signal,
         onTask: (task) => {
+            const currentSession = pendingSession
+                ? state.agentMessages.find((item) => item?.kind === 'session' && item.id === pendingSession.id)
+                : null;
+            if (workflowId === 'scene-build' && getAgentSessionActiveAttempt(currentSession)?.id !== activePendingAttemptId) return;
             logAgentDebug(workflowId, 'task update', {
                 sessionId: pendingSession?.id || '',
                 attemptId: activePendingAttemptId,
@@ -8983,6 +11517,14 @@ function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
             });
         },
     }).then(async (result) => {
+        releaseSceneSkillExecutionController(executionId);
+        const currentSession = pendingSession
+            ? state.agentMessages.find((item) => item?.kind === 'session' && item.id === pendingSession.id)
+            : null;
+        if (workflowId === 'scene-build' && (
+            getAgentSessionActiveAttempt(currentSession)?.id !== activePendingAttemptId
+            || currentSession?.archiveState !== 'active'
+        )) return;
         debug.finish(result);
         state.agentCodexConversationId = result?.conversationId || state.agentCodexConversationId;
         state.agentCodexThreadId = result?.threadId || state.agentCodexThreadId;
@@ -9025,6 +11567,8 @@ function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
         handle.updateText(result?.finalText || t('messages.agentExecutionFailed'));
         handle.finish();
     }).catch((error) => {
+        releaseSceneSkillExecutionController(executionId);
+        if (error?.name === 'AbortError') return;
         debug.finish(null, error);
         handle.fail(t('messages.codexAgentFailed', {
             message: error?.message || String(error),
@@ -9034,18 +11578,24 @@ function startServerCodexAgentResponse(workflowId, prompt, attachments = []) {
     return handle;
 }
 
-async function handleAgentStepAction(context, action) {
+async function handleAgentStepAction(context, action, { assetId = '' } = {}) {
     if (!canUseServerCodexAgent()) return;
     const liveContext = getAgentStepBlockContextById(context?.sessionId, context?.attemptId, context?.blockId) || context;
     if (!liveContext) return;
+    const sceneBranch = normalizeSceneSkillBranch(liveContext.attempt.sceneBranch);
+    const activeCandidate = getSceneSkillActiveCandidate(sceneBranch, liveContext.stepKey);
     if (action === 'apply' && liveContext.stepKey === 'insert-scene') {
-        const plan = liveContext.block?.sceneInsertPlan;
+        const plan = activeCandidate?.context?.sceneInsertPlan || liveContext.block?.sceneInsertPlan;
         if (!plan || typeof plan !== 'object') {
             throw new Error(t('messages.agentOperationFailed', { message: 'insert-scene plan is missing' }));
         }
         let inserted = { loaded: 0, failed: 0 };
         try {
-            inserted = commitAgentSceneInsertPreview(liveContext) || await applyAgentSceneInsertPlan(plan);
+            inserted = commitAgentSceneInsertPreview({
+                ...liveContext,
+                candidateId: activeCandidate?.id || '',
+                branchRevision: sceneBranch.revision,
+            }) || await applyAgentSceneInsertPlan(plan);
             if (inserted.loaded <= 0) {
                 throw new Error(t('messages.loadModelFailed', { name: 'insert-scene' }));
             }
@@ -9060,14 +11610,18 @@ async function handleAgentStepAction(context, action) {
             });
             throw error;
         }
-        patchAgentStepBlock(liveContext, {
-            statusText: t('agent.pipelineSteps.insertSceneInserted', { count: inserted.loaded }),
-            statusId: 'done',
-            value: 1,
-            indeterminate: false,
-            applied: true,
-            actions: [],
-        });
+        updateSceneSkillAttemptBranch(liveContext.sessionId, liveContext.attemptId, (branch) => (
+            updateSceneSkillActiveCandidate(branch, liveContext.stepKey, {
+                display: {
+                    statusText: t('agent.pipelineSteps.insertSceneInserted', { count: inserted.loaded }),
+                    statusId: 'done',
+                    value: 1,
+                    applied: true,
+                    actions: [],
+                    isCurrent: false,
+                },
+            })
+        ));
         updateAgentSessionById(liveContext.sessionId, (current) => setAgentSessionArchiveState(current, {
             archiveState: 'applied',
             summaryLabel: t('common.applied'),
@@ -9076,83 +11630,216 @@ async function handleAgentStepAction(context, action) {
         return;
     }
     clearAgentSceneInsertPreviewForContext(liveContext);
-    if (action === 'retry') {
-        resetDownstreamScenePipelineStepsForRetry(liveContext);
+    const isRetryAction = action === 'retry' || action === 'retry-asset';
+    const previousStepExecutionId = getAgentStepExecutionId(liveContext);
+    if (action === 'retry' && liveContext.stepKey === 'components-3d' && previousStepExecutionId) {
+        await requestAgentExecutionCancellation({
+            kind: 'step',
+            sessionId: liveContext.sessionId,
+            attemptId: liveContext.attemptId,
+            stepExecutionId: previousStepExecutionId,
+        });
     }
-    const currentImages = Array.isArray(liveContext.block.images) ? liveContext.block.images : [];
-    const selectedIndex = Math.max(0, Math.min(currentImages.length - 1, Number(liveContext.block.selectedIndex) || 0));
-    patchAgentStepBlock(liveContext, {
-        statusText: action === 'retry' ? t('common.generating') : liveContext.block.statusText,
-        statusId: action === 'retry' ? 'running' : liveContext.block.statusId,
-        indeterminate: action === 'retry',
+    if (action === 'cancel' && liveContext.stepKey === 'components-3d') {
+        if (!previousStepExecutionId) return;
+        await requestAgentExecutionCancellation({
+            kind: 'step',
+            sessionId: liveContext.sessionId,
+            attemptId: liveContext.attemptId,
+            stepExecutionId: previousStepExecutionId,
+        });
+    }
+    if (action === 'retry') {
+        abortSceneSkillExecutionsFromStep(liveContext);
+    }
+    const currentImages = Array.isArray(activeCandidate?.context?.images)
+        ? activeCandidate.context.images
+        : [];
+    const selectedIndex = Math.max(0, Math.min(currentImages.length - 1, Number(activeCandidate?.context?.selectedImageIndex) || 0));
+    const activeContext = resolveActiveSceneSkillContext(sceneBranch, liveContext.stepKey);
+    const executionRef = createSceneSkillExecutionRef({
+        attemptId: liveContext.attemptId,
+        stepKey: liveContext.stepKey,
+        branch: sceneBranch,
     });
+    const requestController = registerSceneSkillExecutionController({
+        ...executionRef,
+        sessionId: liveContext.sessionId,
+    });
+    updateSceneSkillAttemptBranch(liveContext.sessionId, liveContext.attemptId, (branch) => (
+        setSceneSkillStageExecution(branch, liveContext.stepKey, executionRef)
+    ), { render: false });
+    patchAgentStepBlock(liveContext, {
+        statusText: isRetryAction ? t('common.generating') : liveContext.block.statusText,
+        statusId: isRetryAction ? 'running' : liveContext.block.statusId,
+        indeterminate: isRetryAction,
+        galleryLocked: isRetryAction ? true : liveContext.block.galleryLocked,
+        actions: isRetryAction
+            ? (Array.isArray(liveContext.block.actions) ? liveContext.block.actions.filter((item) => item === 'cancel') : [])
+            : liveContext.block.actions,
+    });
+    let streamedImages = action === 'retry-asset' ? currentImages : [];
+    let streamedSelectedIndex = action === 'retry-asset' ? selectedIndex : 0;
+    let streamedSelectedImage = null;
+    const handleStepActionTask = (task) => {
+        if (liveContext.stepKey !== 'components-3d' || !task?.started) return;
+        const currentContext = getAgentStepBlockContextById(liveContext.sessionId, liveContext.attemptId, liveContext.blockId);
+        if (!currentContext || !isSceneSkillExecutionCurrent(currentContext.attempt.sceneBranch, executionRef)) return;
+        const incomingImages = normalizeAgentTaskPayloadImages(task.images);
+        if (incomingImages.length > 0) {
+            const merged = mergeAgentIncrementalImages(streamedImages, incomingImages, streamedSelectedIndex);
+            streamedImages = merged.images;
+            streamedSelectedIndex = merged.selectedIndex;
+            streamedSelectedImage = streamedImages[streamedSelectedIndex] || null;
+        }
+        patchAgentStepBlock(currentContext, {
+            title: task.title || currentContext.block.title,
+            statusText: task.statusText || currentContext.block.statusText,
+            statusId: normalizeAgentPipelineStatusId(task.statusId) || 'running',
+            value: Number.isFinite(Number(task.progress)) ? Number(task.progress) : currentContext.block.value,
+            indeterminate: false,
+            isCurrent: true,
+            expanded: true,
+            ...(incomingImages.length > 0 ? {
+                images: streamedImages,
+                selectedIndex: streamedSelectedIndex,
+            } : {}),
+            ...(task.assetProgress && typeof task.assetProgress === 'object'
+                ? { assetProgress: mergeAgentAssetProgressSnapshots(currentContext.block.assetProgress, task.assetProgress) }
+                : {}),
+        });
+    };
+    const stepActionInput = {
+        user: state.projectSession.user,
+        projectId: state.projectSession.activeProjectId,
+        sessionId: liveContext.sessionId,
+        attemptId: liveContext.attemptId,
+        executionId: executionRef.executionId,
+        stepKey: liveContext.stepKey,
+        action,
+        prompt: liveContext.session.prompt || liveContext.attempt.text || '',
+        selectedIndex,
+        images: currentImages.map((image) => serializeAgentStepImage(image)),
+        sourceImages: serializeSceneSkillContextSourceImages(activeContext),
+        branchRevision: executionRef.baseRevision,
+        parentCandidateIds: executionRef.parentCandidateIds,
+        activeContext,
+        assetId,
+        signal: requestController.signal,
+    };
     let result;
     try {
-        result = await projectApi.sendCodexAgentStepAction({
-            user: state.projectSession.user,
-            projectId: state.projectSession.activeProjectId,
-            sessionId: liveContext.sessionId,
-            stepKey: liveContext.stepKey,
-            action,
-            prompt: liveContext.session.prompt || liveContext.attempt.text || '',
-            selectedIndex,
-            images: currentImages.map((image) => serializeAgentStepImage(image)),
-            sourceImages: [
-                serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'main-image'),
-                serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'top-view'),
-                serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'layout'),
-                serializeAgentSessionStepSourceImage(liveContext.session, liveContext.attempt, 'components-3d'),
-            ].filter(Boolean),
-        });
+        result = liveContext.stepKey === 'components-3d'
+            ? await projectApi.sendCodexAgentStepActionStream({ ...stepActionInput, onTask: handleStepActionTask })
+            : await projectApi.sendCodexAgentStepAction(stepActionInput);
     } catch (error) {
+        releaseSceneSkillExecutionController(executionRef.executionId);
+        const latestContext = getAgentStepBlockContextById(liveContext.sessionId, liveContext.attemptId, liveContext.blockId);
+        const isCurrent = latestContext && isSceneSkillExecutionCurrent(
+            latestContext.attempt.sceneBranch,
+            executionRef,
+        );
+        if (!isCurrent || error?.name === 'AbortError') return;
+        updateSceneSkillAttemptBranch(liveContext.sessionId, liveContext.attemptId, (branch) => (
+            setSceneSkillStageExecution(branch, liveContext.stepKey, null)
+        ), { render: false });
+        const timedOut = Number(latestContext?.block?.assetProgress?.timedOut) > 0;
         patchAgentStepBlock(liveContext, {
             statusText: error?.message || String(error),
-            statusId: 'failed',
+            statusId: timedOut ? 'TLE' : 'failed',
             value: 1,
             indeterminate: false,
             applied: false,
             actions: ['cancel', 'retry'],
             isCurrent: true,
             expanded: true,
+            galleryLocked: false,
         });
         throw error;
     }
+    releaseSceneSkillExecutionController(executionRef.executionId);
+    const latestContext = getAgentStepBlockContextById(liveContext.sessionId, liveContext.attemptId, liveContext.blockId);
+    if (!latestContext || !isSceneSkillExecutionCurrent(latestContext.attempt.sceneBranch, executionRef, result)) {
+        return;
+    }
     const patch = result?.blockPatch || {};
-    const nextImages = Array.isArray(patch.images)
-        ? patch.images.map((image, index) => {
-            const assetPath = String(image?.relativePath || image?.assetPath || '');
-            return {
-                id: image?.id || image?.title || `Image ${index + 1}`,
-                title: image?.title || image?.id || `Image ${index + 1}`,
-                relativePath: assetPath,
-                assetPath,
-                mimeType: image?.mimeType || '',
-                bytes: image?.bytes || 0,
-                metadata: image?.metadata && typeof image.metadata === 'object' ? image.metadata : undefined,
-                src: assetPath
-                    ? projectApi.getAssetUrl(state.projectSession.user, state.projectSession.activeProjectId, assetPath)
-                    : image?.src || '',
-                alt: liveContext.session.prompt || liveContext.attempt.text || '',
-            };
-        })
-        : currentImages;
-    patchAgentStepBlock(liveContext, {
-        ...patch,
-        images: nextImages,
-        ...(patch.sceneInsertPlan && typeof patch.sceneInsertPlan === 'object' ? { sceneInsertPlan: patch.sceneInsertPlan } : {}),
-    });
+    const nextImages = normalizeSceneSkillCandidateImages(
+        Array.isArray(result?.candidateResult?.images) ? result.candidateResult.images : patch.images,
+        liveContext.session.prompt || liveContext.attempt.text || '',
+    );
+    if (isRetryAction) {
+        const candidateContext = createSceneSkillCandidateContext({
+            block: latestContext.block,
+            patch,
+            result,
+            images: nextImages,
+        });
+        if (streamedSelectedImage) {
+            candidateContext.selectedImageIndex = resolveAgentImageSelectionIndex(
+                nextImages,
+                streamedSelectedImage,
+                candidateContext.selectedImageIndex,
+            );
+        }
+        if (action === 'retry-asset') {
+            candidateContext.assetProgress = mergeAgentAssetProgressSnapshots(
+                latestContext.block.assetProgress,
+                candidateContext.assetProgress,
+            );
+        }
+        const candidate = createSceneSkillCandidate({
+            stepKey: liveContext.stepKey,
+            parentCandidateIds: executionRef.parentCandidateIds,
+            executionId: executionRef.executionId,
+            context: candidateContext,
+            display: {
+                statusText: patch.statusText || liveContext.block.statusText,
+                statusId: patch.statusId || 'done',
+                value: patch.value ?? 1,
+                applied: false,
+                actions: Array.isArray(patch.actions) ? patch.actions : ['cancel', 'retry', 'apply'],
+                isCurrent: true,
+                expanded: true,
+            },
+        });
+        updateSceneSkillAttemptBranch(liveContext.sessionId, liveContext.attemptId, (branch) => (
+            appendSceneSkillCandidate(setSceneSkillStageExecution(branch, liveContext.stepKey, null), candidate)
+        ));
+    } else {
+        updateSceneSkillAttemptBranch(liveContext.sessionId, liveContext.attemptId, (branch) => (
+            updateSceneSkillActiveCandidate(setSceneSkillStageExecution(branch, liveContext.stepKey, null), liveContext.stepKey, {
+                display: {
+                    statusText: patch.statusText || '',
+                    statusId: patch.statusId || 'done',
+                    value: patch.value ?? 1,
+                    applied: Boolean(patch.applied),
+                    actions: Array.isArray(patch.actions) ? patch.actions : [],
+                    isCurrent: Boolean(patch.isCurrent),
+                },
+            })
+        ));
+    }
     if (action === 'retry' && liveContext.stepKey === 'insert-scene' && patch.sceneInsertPlan && typeof patch.sceneInsertPlan === 'object') {
         try {
-            const preview = await createAgentSceneInsertPreview(liveContext, patch.sceneInsertPlan);
+            const currentContext = getAgentStepBlockContextByStepKey(liveContext.sessionId, liveContext.attemptId, 'insert-scene');
+            const currentCandidate = getSceneSkillActiveCandidate(currentContext?.attempt?.sceneBranch, 'insert-scene');
+            const preview = await createAgentSceneInsertPreview({
+                ...currentContext,
+                candidateId: currentCandidate?.id || '',
+                branchRevision: currentContext?.attempt?.sceneBranch?.revision,
+            }, patch.sceneInsertPlan);
             if (preview.loaded > 0) {
-                patchAgentStepBlock(liveContext, {
-                    statusText: t('agent.pipelineSteps.insertScenePreviewReady', { count: preview.loaded }),
-                    statusId: 'done',
-                    value: 1,
-                    indeterminate: false,
-                    applied: false,
-                    actions: ['cancel', 'retry', 'apply'],
-                });
+                updateSceneSkillAttemptBranch(liveContext.sessionId, liveContext.attemptId, (branch) => (
+                    updateSceneSkillActiveCandidate(branch, liveContext.stepKey, {
+                        display: {
+                            statusText: t('agent.pipelineSteps.insertScenePreviewReady', { count: preview.loaded }),
+                            statusId: 'done',
+                            value: 1,
+                            applied: false,
+                            actions: ['cancel', 'retry', 'apply'],
+                        },
+                    })
+                ));
             }
         } catch (error) {
             patchAgentStepBlock(liveContext, {
@@ -9180,6 +11867,23 @@ async function handleAgentStepAction(context, action) {
 async function advanceAgentPipelineAfterStepApply(context) {
     const nextStepKey = getNextScenePipelineStepKey(context?.stepKey || '');
     if (!nextStepKey) return;
+    if (context.stepKey === 'layout') {
+        const components3DProvider = normalizeComponents3DProvider(state.projectSession.components3DConfig?.provider);
+        updateSceneSkillAttemptBranch(context.sessionId, context.attemptId, (branch) => {
+            const candidate = getSceneSkillActiveCandidate(branch, context.stepKey);
+            return updateSceneSkillActiveCandidate(branch, context.stepKey, {
+                context: {
+                    images: (Array.isArray(candidate?.context?.images) ? candidate.context.images : []).map((image) => ({
+                        ...image,
+                        metadata: {
+                            ...(image?.metadata && typeof image.metadata === 'object' ? image.metadata : {}),
+                            components3DProvider,
+                        },
+                    })),
+                },
+            });
+        }, { render: false });
+    }
     patchAgentStepBlockByStepKey(context.sessionId, context.attemptId, nextStepKey, {
         statusText: t('common.generating'),
         statusId: 'running',
@@ -9215,10 +11919,31 @@ async function handleAgentSessionAction(sessionId, action) {
             restoreAgentCameraTrajectoryPreview();
         }
         if (session.workflow === 'scene-build') {
+            await requestAgentExecutionCancellation({
+                kind: 'workflow',
+                sessionId,
+                attemptId: activeAttempt?.id || '',
+            });
+            abortSceneSkillExecutions({
+                sessionId,
+                attemptId: activeAttempt?.id || '',
+            });
             clearAgentSceneInsertPreviewForContext({
                 sessionId,
                 attemptId: activeAttempt?.id || '',
             });
+            updateAgentSessionById(sessionId, (current) => {
+                const attempts = (current.attempts || []).map((attempt) => (
+                    attempt.id === activeAttempt?.id ? interruptSceneSkillAttempt(attempt, 'canceled') : attempt
+                ));
+                return setAgentSessionArchiveState({ ...current, attempts }, {
+                    archiveState: 'canceled',
+                    summaryLabel: t('common.canceled'),
+                    thumbnailUrl,
+                });
+            });
+            await invokeAgentSessionActionHandler('onCancel', payload);
+            return;
         }
         updateAgentSessionById(sessionId, (current) => setAgentSessionArchiveState(current, {
             archiveState: 'canceled',
@@ -9237,6 +11962,7 @@ async function handleAgentSessionAction(sessionId, action) {
     }
 
     if (action === 'apply') {
+        if (session.workflow === 'scene-build') return;
         if (session.workflow === 'camera-direct') {
             commitAgentCameraTrajectoryPreview();
         }
@@ -9277,10 +12003,45 @@ async function handleAgentSessionAction(sessionId, action) {
             return;
         }
         if (session.workflow === 'scene-build') {
+            await requestAgentExecutionCancellation({
+                kind: 'workflow',
+                sessionId,
+                attemptId: activeAttempt?.id || '',
+            });
+            abortSceneSkillExecutions({
+                sessionId,
+                attemptId: activeAttempt?.id || '',
+            });
             clearAgentSceneInsertPreviewForContext({
                 sessionId,
                 attemptId: activeAttempt?.id || '',
             });
+            const nextAttempt = createPendingSceneSkillAttempt({
+                workflowId: session.workflow,
+                prompt: retryPrompt,
+            });
+            updateAgentSessionById(sessionId, (current) => {
+                const interrupted = {
+                    ...current,
+                    attempts: (current.attempts || []).map((attempt) => (
+                        attempt.id === activeAttempt?.id ? interruptSceneSkillAttempt(attempt) : attempt
+                    )),
+                };
+                return appendAgentSessionWholeTaskRetryAttempt(interrupted, nextAttempt);
+            }, {
+                autoScroll: 'preserve-or-pin-bottom',
+            });
+            await invokeAgentSessionActionHandler('onRetry', {
+                ...payload,
+                nextAttempt,
+            });
+            runServerCodexAgentSessionAttempt({
+                workflowId: session.workflow,
+                prompt: retryPrompt,
+                sessionId,
+                attemptId: nextAttempt.id,
+            });
+            return;
         }
         const interruptedStepContext = getInterruptedAgentStepContext(sessionId, activeAttempt?.id || '');
         if (interruptedStepContext) {
@@ -11013,13 +13774,13 @@ function showLoading(show, text = t('loading.default'), progress = 0, options = 
             dom.loadingOverlay.classList.toggle('loading-overlay-passive', options?.passive === true);
             const loadingText = dom.loadingOverlay.querySelector('.loading-text');
             const loadingDetail = dom.loadingOverlay.querySelector('.loading-detail');
-            if (loadingText) loadingText.textContent = text;
+            if (loadingText) setSelectionSafeElementText(loadingText, text);
             if (loadingDetail) {
-                loadingDetail.textContent = options?.detail || '';
+                setSelectionSafeElementText(loadingDetail, options?.detail || '');
                 loadingDetail.toggleAttribute('hidden', !options?.detail);
             }
             if (dom.progressFill) dom.progressFill.style.width = `${progress}%`;
-            if (dom.progressText) dom.progressText.textContent = `${Math.round(progress)}%`;
+            if (dom.progressText) setSelectionSafeElementText(dom.progressText, `${Math.round(progress)}%`);
         } else {
             dom.loadingOverlay.classList.remove('loading-overlay-passive');
             dom.loadingOverlay.classList.add('hidden');
@@ -11034,6 +13795,7 @@ function setBootLoadingVisible(visible) {
 }
 
 function setBootLoadingStatus(detail = t('loading.bootPreparing')) {
+    reportDevBootProgress(detail);
     if (!dom.bootLoadingOverlay) return;
     const loadingText = dom.bootLoadingOverlay.querySelector('.loading-text');
     const loadingDetail = dom.bootLoadingOverlay.querySelector('.loading-detail');
@@ -11907,9 +14669,9 @@ function setExportProgress(percent, visible = pendingExportType === 'video') {
         dom.exportProgressFill.style.width = `${displayPercent}%`;
     }
     if (dom.exportProgressText) {
-        dom.exportProgressText.textContent = displayPercent > 0
+        setSelectionSafeElementText(dom.exportProgressText, displayPercent > 0
             ? t('modal.exportProgressValue', { percent: displayPercent })
-            : t('modal.exportProgressIdle');
+            : t('modal.exportProgressIdle'));
     }
     return displayPercent;
 }
@@ -12846,6 +15608,13 @@ function clearAgentSceneInsertPreviewForContext(context = null) {
     if (context?.attemptId && preview.attemptId && preview.attemptId !== context.attemptId) {
         return { loaded: 0, failed: 0 };
     }
+    if (context?.candidateId && preview.candidateId && preview.candidateId !== context.candidateId) {
+        return { loaded: 0, failed: 0 };
+    }
+    if (context?.branchRevision !== undefined && preview.branchRevision !== undefined
+        && Number(preview.branchRevision) !== Number(context.branchRevision)) {
+        return { loaded: 0, failed: 0 };
+    }
     const modelIds = Array.isArray(preview.modelIds) ? preview.modelIds : [];
     let removed = 0;
     for (const modelId of modelIds) {
@@ -12979,6 +15748,8 @@ async function createAgentSceneInsertPreview(context, plan) {
         sessionId: context?.sessionId || '',
         attemptId: context?.attemptId || '',
         stepKey: 'insert-scene',
+        candidateId: context?.candidateId || '',
+        branchRevision: Number(context?.branchRevision) || 0,
         modelIds: result.modelIds,
         assetReferences: result.assetReferences,
         createdAt: new Date().toISOString(),
@@ -12994,6 +15765,9 @@ function commitAgentSceneInsertPreview(context) {
     if (!preview) return null;
     if (context?.sessionId && preview.sessionId && preview.sessionId !== context.sessionId) return null;
     if (context?.attemptId && preview.attemptId && preview.attemptId !== context.attemptId) return null;
+    if (context?.candidateId && preview.candidateId && preview.candidateId !== context.candidateId) return null;
+    if (context?.branchRevision !== undefined && preview.branchRevision !== undefined
+        && Number(preview.branchRevision) !== Number(context.branchRevision)) return null;
     const loaded = Array.isArray(preview.modelIds) ? preview.modelIds.length : 0;
     const failed = Number(preview.failed) || 0;
     agentSceneInsertPreview = null;
@@ -13528,6 +16302,22 @@ function markWorkspaceDirty(reason = 'scene-change') {
         return;
     }
 
+    if (isDraftWorkspaceMode()) {
+        clearWorkspaceAutosaveTimer();
+        state.workspace = {
+            ...state.workspace,
+            name: null,
+            writable: false,
+            dirty: true,
+            saving: false,
+            error: null,
+            lastDirtyReason: reason,
+            syncStatus: 'no-workspace',
+        };
+        updateWorkspaceStatusIndicator();
+        return;
+    }
+
     syncWorkspaceStateFromSceneFS({
         dirty: true,
         error: null,
@@ -13795,7 +16585,6 @@ async function uploadServerProjectAssets({ user, projectId, assetInputs = [], ex
             continue;
         }
         console.debug('[ProjectSync] uploadServerProjectAssets:file:start', {
-    reportDevBootProgress(detail);
             user,
             projectId,
             sourcePath: asset?.sourcePath || '',
@@ -14603,6 +17392,14 @@ async function createServerProjectFromCurrentScene(options = {}) {
             : dom.projectSessionNewProjectNameError;
     clearProjectNameConflictState(nameInput, errorElement);
     const projectName = String(nameInput?.value || '').trim() || getProjectSessionDefaultProjectName();
+    const projectNameAvailable = await validateProjectNameBeforeCreate({
+        projectName,
+        input: nameInput,
+        errorElement,
+    });
+    if (!projectNameAvailable) {
+        return false;
+    }
     if (reopenModalOnError === 'post-login') {
         closePostLoginProjectModal();
     }
@@ -16798,7 +19595,7 @@ function toggleCameraLoop() {
  * 更新时间显示
  */
 function updateTimeDisplay() {
-    if (dom.timeValue) dom.timeValue.textContent = `${state.currentTime.toFixed(3)}s`;
+    if (dom.timeValue) setSelectionSafeElementText(dom.timeValue, `${state.currentTime.toFixed(3)}s`);
 }
 
 function handleTimelinePointerSelection(event) {
@@ -17037,6 +19834,8 @@ function initEventListeners() {
     dom.projectBrowserProjectGrid?.addEventListener('click', (event) => {
         const deleteButton = event.target.closest?.('[data-project-delete]');
         if (deleteButton instanceof HTMLElement) {
+            event.preventDefault();
+            event.stopPropagation();
             const projectId = String(deleteButton.dataset.projectDelete || '').trim();
             if (projectId) {
                 void deleteProjectFromBrowser(projectId);
@@ -17045,6 +19844,8 @@ function initEventListeners() {
         }
         const renameButton = event.target.closest?.('[data-project-rename-start]');
         if (renameButton instanceof HTMLElement) {
+            event.preventDefault();
+            event.stopPropagation();
             const projectId = String(renameButton.dataset.projectRenameStart || '').trim();
             if (projectId) {
                 startProjectRename(projectId);
@@ -17053,6 +19854,8 @@ function initEventListeners() {
         }
         const button = event.target.closest?.('[data-project-open]');
         if (!(button instanceof HTMLElement)) return;
+        event.preventDefault();
+        event.stopPropagation();
         const projectId = String(button.dataset.projectOpen || '').trim();
         if (!projectId) return;
         void openServerProject(projectId);
@@ -17081,6 +19884,11 @@ function initEventListeners() {
         void commitProjectRename(input.dataset.projectRenameInput);
     });
     dom.btnProjectBrowserClose?.addEventListener('click', closeProjectBrowserModal);
+    [dom.projectBrowserProjectsTab, dom.projectBrowserApiTab].forEach((tabButton) => {
+        tabButton?.addEventListener('click', () => {
+            setProjectBrowserTab(tabButton.dataset.projectBrowserTab || 'projects');
+        });
+    });
     dom.btnProjectBrowserCreateNew?.addEventListener('click', openProjectCreateDialog);
     dom.btnProjectBrowserSaveAs?.addEventListener('click', openProjectBrowserSaveAsPanel);
     dom.projectBrowserSaveAsName?.addEventListener('input', () => {
@@ -17103,10 +19911,64 @@ function initEventListeners() {
     dom.btnProjectBrowserSaveCodexAuth?.addEventListener('click', () => {
         void saveProjectBrowserCodexAuth();
     });
+    dom.btnProjectBrowserSavePipelineApiConfig?.addEventListener('click', () => {
+        void saveProjectBrowserPipelineApiConfig();
+    });
+    dom.btnComponents3DTrellisStatusRefresh?.addEventListener('click', () => {
+        void refreshProjectBrowserComponents3DTrellisStatus();
+    });
+    dom.projectBrowserComponents3DProvider?.addEventListener('click', (event) => {
+        const button = event.target.closest?.('[data-components3d-provider]');
+        if (!(button instanceof HTMLElement)) return;
+        setComponents3DProvider(button.dataset.components3dProvider || 'mocked');
+    });
+    [
+        dom.components3DTrellisBaseUrl,
+        dom.components3DTrellisHost,
+        dom.components3DTrellisPort,
+        dom.components3DTrellisModel,
+        dom.components3DTrellisPollInterval,
+        dom.components3DTrellisMaxWait,
+        dom.components3DHunyuanBaseUrl,
+        dom.components3DHunyuanSecretId,
+        dom.components3DHunyuanSecretKey,
+        dom.components3DHunyuanRegion,
+        dom.components3DHunyuanVersion,
+        dom.components3DHunyuanModel,
+        dom.components3DHunyuanPollInterval,
+        dom.components3DHunyuanMaxWait,
+    ].forEach((input) => input?.addEventListener('input', () => {
+        handleProjectBrowserApiConfigFormInput('components3D');
+    }));
+    [
+        dom.pipelineApiKey,
+        dom.pipelineApiBase,
+        dom.pipelineApiProvider,
+        dom.pipelineApiModelName,
+        dom.pipelineApiImageUrl,
+        dom.pipelineApiImageModel,
+        dom.pipelineApiImageTimeoutSeconds,
+    ].forEach((input) => input?.addEventListener('input', () => {
+        handleProjectBrowserApiConfigFormInput('pipeline');
+    }));
+    dom.components3DTrellisStatusBody?.addEventListener('click', (event) => {
+        const toggle = event.target.closest?.('[data-trellis-gpu-details-toggle]');
+        if (!(toggle instanceof HTMLElement)) return;
+        const collapsed = toggle.getAttribute('aria-expanded') === 'true';
+        setProjectBrowserComponents3DGpuDetailsCollapsed(collapsed);
+    });
+    dom.btnProjectBrowserSaveComponents3DConfig?.addEventListener('click', () => {
+        void saveProjectBrowserComponents3DConfig();
+    });
     dom.projectBrowserCodexAuthKey?.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter') return;
         event.preventDefault();
         void saveProjectBrowserCodexAuth();
+    });
+    dom.pipelineApiKey?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        void saveProjectBrowserPipelineApiConfig();
     });
     dom.projectBrowserCodexAuthKey?.addEventListener('blur', () => {
         if (!state.projectSession.codexAuthEditing || state.projectSession.codexAuthSaving) return;
@@ -17158,6 +20020,7 @@ function initEventListeners() {
     });
     dom.agentMessageScroll?.addEventListener('scroll', () => {
         scheduleAgentMessageScrollbarSync({ measure: false });
+        if (agentAssetProgressPopover && !agentAssetProgressPopover.hidden) positionAgentAssetProgressPopoverAnchor();
     }, { passive: true });
     dom.agentMessageScrollbar?.addEventListener('mousedown', beginAgentMessageScrollbarDrag);
     dom.agentComposer?.addEventListener('submit', handleAgentComposerSubmit);
@@ -17168,6 +20031,11 @@ function initEventListeners() {
     dom.agentComposerInput?.addEventListener('focusin', handleAgentComposerFocusIn);
     dom.agentComposerAttachments?.addEventListener('click', handleAgentComposerAttachmentClick);
     dom.agentMessageList?.addEventListener('click', handleAgentMessageListClick);
+    dom.agentMessageList?.addEventListener('pointerover', handleAgentAssetProgressPointerOver);
+    dom.agentMessageList?.addEventListener('pointerout', handleAgentAssetProgressPointerOut);
+    dom.agentMessageList?.addEventListener('focusin', handleAgentAssetProgressFocusIn);
+    dom.agentMessageList?.addEventListener('focusout', handleAgentAssetProgressFocusOut);
+    dom.agentMessageList?.addEventListener('keydown', handleAgentAssetProgressKeydown);
     dom.btnAgentAddImage?.addEventListener('click', openAgentImagePicker);
     dom.agentImageInput?.addEventListener('change', handleAgentImageInputChange);
     dom.agentComposerDock?.addEventListener('dragenter', handleAgentComposerDragOver);
@@ -17556,6 +20424,16 @@ function initEventListeners() {
         if (dom.exportToolFlyout?.contains(e.target)) return;
         setExportFlyoutOpen(false);
     });
+    document.addEventListener('pointerdown', (event) => {
+        if (!agentAssetProgressPopover?.dataset.pinned) return;
+        if (agentAssetProgressPopover.contains(event.target)) return;
+        if (event.target instanceof Element && event.target.closest('[data-agent-asset-progress-trigger]')) return;
+        hideAgentAssetProgressPopover();
+    });
+    document.addEventListener('selectionchange', handleAgentProgressSelectionChange);
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') hideAgentAssetProgressPopover();
+    });
     document.addEventListener('mousemove', moveCameraPreviewPanel);
     document.addEventListener('mouseup', endCameraPreviewPanelDrag);
     document.addEventListener('mousemove', moveCameraPreviewPanelResize);
@@ -17568,6 +20446,7 @@ function initEventListeners() {
         if (state.cameraSettingsOpen) {
             positionCameraSettingsPanel();
         }
+        positionAgentAssetProgressPopoverAnchor();
     });
 
     console.log(`[Editor ${state.VERSION}] Event listeners initialized`);
@@ -17780,6 +20659,7 @@ async function init() {
     syncAgentMessageScrollbar({ measure: true });
     syncCameraSequenceDragButton();
     startAnimationControlsSyncLoop();
+    startAgentProgressElapsedLoop();
 
     // 初始化时间轴按钮状态
     updatePlayButtonUI();
@@ -17797,9 +20677,9 @@ async function init() {
     console.log('- 打开浏览器开发者工具查看控制台输出');
     console.log('- 如果有问题，请提供控制台错误信息');
     console.log('- 版本号：', state.VERSION);
+    setBootLoadingStatus(t('loading.bootReady'));
     setBootLoadingVisible(false);
 }
 
 // 启动应用
 document.addEventListener('DOMContentLoaded', init);
-    setBootLoadingStatus(t('loading.bootReady'));

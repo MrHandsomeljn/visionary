@@ -13,6 +13,8 @@ test('project api client exposes Codex agent message endpoint', async () => {
     assert.match(clientSource, /function parseSseResponse\(response, handlers = \{\}\)/);
     assert.match(clientSource, /async sendCodexAgentStepAction\(\{[\s\S]*sessionId,[\s\S]*stepKey,[\s\S]*action,[\s\S]*selectedIndex,[\s\S]*images,[\s\S]*sourceImages,[\s\S]*\}\)/);
     assert.match(clientSource, /fetch\('\/api\/agent\/step-action'/);
+    assert.match(clientSource, /async sendCodexAgentStepActionStream\(\{[\s\S]*onTask,[\s\S]*signal,[\s\S]*\}\)/);
+    assert.match(clientSource, /fetch\('\/api\/agent\/step-action\/stream'/);
     assert.match(clientSource, /async prepareCameraTrajectory\(\{[\s\S]*humanText,[\s\S]*segmentCount,[\s\S]*sceneBoundsScale,[\s\S]*\}\)/);
     assert.match(clientSource, /camera-trajectory\/prepare/);
     assert.match(clientSource, /async continueCameraTrajectory\(\{[\s\S]*preparedPath,[\s\S]*\}\)/);
@@ -29,7 +31,7 @@ test('project api client exposes Codex agent message endpoint', async () => {
     assert.match(serverSource, /url\.pathname === AGENT_STEP_ACTION_PREFIX/);
     assert.match(serverSource, /url\.pathname === `\$\{CODEX_AGENT_PREFIX\}\/step-actions`/);
     assert.match(serverSource, /await codexAgent\.sendMessage\(\{/);
-    assert.match(serverSource, /await codexAgent\.handleStepAction\(\{/);
+    assert.match(serverSource, /await codexAgent\.handleStepAction\(codexStepActionInputFromBody\(body, controller\.signal\)\)/);
     assert.match(serverSource, /sourceImages: Array\.isArray\(body\.sourceImages\) \? body\.sourceImages : undefined/);
 });
 
@@ -43,6 +45,40 @@ test('project api exposes per-user Codex auth status and save endpoints', async 
     assert.match(serverSource, /url\.pathname === CODEX_AUTH_PREFIX/);
     assert.match(serverSource, /storage\.getUserCodexAuthStatus\(getQueryString\(url, 'user'\)\)/);
     assert.match(serverSource, /storage\.saveUserCodexAuth\(\{/);
+});
+
+test('project api exposes per-user API config endpoints for pipeline API and components 3D providers', async () => {
+    const clientSource = await readFile(new URL('../src/editor/project-api-client.js', import.meta.url), 'utf8');
+    const serverSource = await readFile(new URL('../src/server/project-api.ts', import.meta.url), 'utf8');
+    const storageSource = await readFile(new URL('../src/server/project-storage.ts', import.meta.url), 'utf8');
+    const configSource = await readFile(new URL('../src/server/components-3d-config.ts', import.meta.url), 'utf8');
+    const statusSource = await readFile(new URL('../src/server/components-3d-status.ts', import.meta.url), 'utf8');
+
+    assert.match(clientSource, /async getUserApiConfig\(user\)/);
+    assert.match(clientSource, /async saveUserApiConfig\(\{ user, config \}\)/);
+    assert.match(serverSource, /const USER_API_CONFIG_PREFIX = '\/api\/user-api-config';/);
+    assert.match(serverSource, /url\.pathname === USER_API_CONFIG_PREFIX/);
+    assert.match(serverSource, /async function createUserApiConfigResponse\([\s\S]*config: UserApiConfig,[\s\S]*options: \{ includeTrellisStatus\?: boolean \} = \{\},[\s\S]*\): Promise<ClientUserApiConfigResponse>/);
+    assert.match(serverSource, /includeTrellisStatus && config\.components3D\.provider === 'trellis\.2'/);
+    assert.match(serverSource, /await createUserApiConfigResponse\(await storage\.getUserApiConfig\(getQueryString\(url, 'user'\)\)\)/);
+    assert.match(serverSource, /includeTrellisStatus: Object\.prototype\.hasOwnProperty\.call\(configRecord, 'components3D'\)/);
+    assert.match(storageSource, /const USER_API_CONFIG_FILE = 'api_config\.json';/);
+    assert.match(storageSource, /async getUserApiConfig\(userInput: string\): Promise<UserApiConfig>/);
+    assert.match(storageSource, /async saveUserApiConfig\(input: SaveUserApiConfigInput\): Promise<UserApiConfig>/);
+    assert.match(configSource, /pipelineApi: defaultPipelineApiConfig\(\),/);
+    assert.match(configSource, /codex: defaultCodexApiConfig\(\),/);
+    assert.match(configSource, /function defaultPipelineApiConfig\(\)/);
+    assert.match(configSource, /apiBase: DEFAULT_PIPELINE_API_BASE,/);
+    assert.match(configSource, /baseUrl: 'https:\/\/ai3d\.tencentcloudapi\.com'/);
+    assert.match(configSource, /region: 'ap-guangzhou'/);
+    assert.match(configSource, /version: '2025-05-13'/);
+    assert.match(configSource, /secretKey: '',/);
+    assert.match(configSource, /hasSecretKey: Boolean\(config\.secretKey\)/);
+    assert.match(statusSource, /export function buildComponents3DTrellisStatusUrl\(config: Components3DEndpointConfig\): string/);
+    assert.match(statusSource, /export function summarizeComponents3DTrellisStatusPayload\(/);
+    assert.match(statusSource, /export async function queryComponents3DTrellisStatus\(/);
+    assert.match(statusSource, /components3DEndpointBaseUrl\(config\)}\/status/);
+    assert.match(storageSource, /await chmod\(this\.getUserApiConfigPath\(userId\), 0o600\);/);
 });
 
 test('editor routes server project agent prompts through Codex before falling back to mock responses', async () => {
@@ -155,15 +191,36 @@ test('editor renders Codex pending state as a spinner inside the assistant bubbl
     assert.match(css, /@keyframes agentThinkingDots\s*\{[\s\S]*content:\s*'\.';[\s\S]*content:\s*'\.\.';[\s\S]*content:\s*'\.\.\.';[\s\S]*\}/);
 });
 
+test('scene task controls interrupt the whole attempt without exposing task apply', async () => {
+    const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const renderStart = source.indexOf('function renderAgentSessionItem(session)');
+    const renderEnd = source.indexOf('function invalidateAgentMessageScrollbarMetrics', renderStart);
+    const sessionActionStart = source.indexOf('async function handleAgentSessionAction');
+    const sessionActionEnd = source.indexOf('function submitAgentPrompt', sessionActionStart);
+    const renderSource = source.slice(renderStart, renderEnd);
+    const actionSource = source.slice(sessionActionStart, sessionActionEnd);
+
+    assert.match(renderSource, /resolveAgentSessionActionAvailability\(\{[\s\S]*workflow: session\.workflow/);
+    assert.match(renderSource, /session\.workflow === 'scene-build' \? '' : `<button[^`]*data-agent-session-action="apply"/);
+    assert.match(actionSource, /if \(action === 'apply'\) \{[\s\S]*if \(session\.workflow === 'scene-build'\) return;/);
+    assert.match(actionSource, /if \(session\.workflow === 'scene-build'\) \{[\s\S]*abortSceneSkillExecutions\(\{[\s\S]*clearAgentSceneInsertPreviewForContext/);
+    assert.match(actionSource, /createPendingSceneSkillAttempt\(\{[\s\S]*appendAgentSessionWholeTaskRetryAttempt\(interrupted, nextAttempt\)/);
+    assert.match(actionSource, /interruptSceneSkillAttempt\(attempt, 'canceled'\)/);
+    assert.match(actionSource, /setAgentSessionArchiveState\(\{ \.\.\.current, attempts \}, \{[\s\S]*archiveState: 'canceled'/);
+    assert.match(source, /signal: requestController\?\.signal/);
+    assert.match(source, /if \(error\?\.name === 'AbortError'\) return;/);
+});
+
 test('editor shows Codex generation controls only after an explicit task signal', async () => {
     const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
     const cssSource = await readFile(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const layoutServerSource = await readFile(new URL('../src/server/mcp/new-pipeline-layout-server.ts', import.meta.url), 'utf8');
     const startFunction = source.match(/function startServerCodexAgentResponse\(workflowId, prompt, attachments = \[\]\) \{[\s\S]*?\n\}/)?.[0] || '';
     const createSessionFunction = source.match(/function createCodexTaskSessionFromResult\([\s\S]*?\n\}/)?.[0] || '';
 
     assert.match(source, /function hasCodexTaskSignal\(result\) \{[\s\S]*result\?\.task\?\.started/);
     assert.match(source, /function createCodexTaskSessionFromResult\([\s\S]*createAgentProgressBlock/);
-    assert.match(source, /const SCENE_PIPELINE_STEP_DEFS = \[[\s\S]*key: 'main-image'[\s\S]*key: 'top-view'[\s\S]*key: 'layout'[\s\S]*key: 'components-3d'[\s\S]*key: 'insert-scene'/);
+    assert.match(source, /const SCENE_PIPELINE_STEP_DEFS = \[[\s\S]*key: 'main-image'[\s\S]*key: 'top-view'[\s\S]*key: 'layout'[\s\S]*key: 'object-images'[\s\S]*key: 'components-3d'[\s\S]*key: 'insert-scene'/);
     assert.doesNotMatch(source, /key: 'front-view'/);
     assert.match(source, /function createScenePipelineSteps\(\{/);
     assert.match(source, /function createPendingCodexTaskSession\(\{/);
@@ -174,7 +231,7 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.match(source, /createAgentProgressBlock\(\{[\s\S]*images: progressImages/);
     assert.match(source, /selectedIndex: 0/);
     assert.match(source, /applied: false/);
-    assert.match(source, /actions: progressImages\.length > 0 \? \['cancel', 'retry', 'apply'\] : \(isFailedTask \? \['cancel', 'retry'\] : \[\]\)/);
+    assert.match(source, /actions: isFailedTask \? \['cancel', 'retry'\] : \(progressImages\.length > 0 \? \['cancel', 'retry', 'apply'\] : \[\]\)/);
     assert.match(source, /const steps = createScenePipelineSteps\(\{[\s\S]*mainImageBlock: progressBlock/);
     assert.match(source, /steps,/);
     assert.match(source, /const attemptBlocks = getAgentAttemptStepBlocks\(attempt\);[\s\S]*renderAgentBlocks\(attemptBlocks,/);
@@ -182,6 +239,11 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.match(source, /class="agent-step-gallery/);
     assert.match(source, /data-agent-step-gallery-nav="prev"/);
     assert.match(source, /data-agent-step-gallery-nav="next"/);
+    assert.match(source, /data-agent-step-candidate-nav="prev"/);
+    assert.match(source, /data-agent-step-candidate-nav="next"/);
+    assert.match(source, /images: galleryImages/);
+    assert.match(source, /sceneCandidateIndex: gallery\.candidateIndex/);
+    assert.match(source, /context: \{ selectedImageIndex: selectedIndex \}/);
     assert.match(source, /\$\{selectedIndex \+ 1\} \/ \$\{images\.length\}/);
     assert.doesNotMatch(source, /agent-step-gallery-dots/);
     assert.match(source, /function getAgentStepImageGlbPath\(image\)/);
@@ -202,8 +264,13 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.doesNotMatch(source, /class="agent-step-viewer-thumb"/);
     assert.match(source, /renderAgentStepGalleryMain\(\{ block, images, selectedImage, selectedIndex, isApplied, isInterruptedAttempt \}\)/);
     assert.match(source, /function updateAgentStepSelectedIndex\(context, selectedIndex\)/);
-    assert.match(source, /function updateAgentStepGalleryDom\(context\)/);
-    assert.match(source, /galleryMain\.innerHTML = renderAgentStepGalleryMain\(\{/);
+    assert.match(source, /context\.session\?\.workflow === 'scene-build'[\s\S]*updateSceneSkillAttemptBranch\([\s\S]*\{ render: false \}\);[\s\S]*updateAgentStepGalleryDom\(nextContext\)/);
+    assert.match(source, /void updateAgentStepGalleryDom\(nextContext\)\.then\(\(updated\) => \{[\s\S]*if \(updated\) \{[\s\S]*void syncAgent3DBlocks\(\);/);
+    assert.match(source, /function restoreAgentMessageScrollPosition\(scrollTop\) \{[\s\S]*dom\.agentMessageScroll\.scrollTop = Math\.min\(Math\.max\(0, scrollTop\), maxScrollTop\);[\s\S]*requestAnimationFrame\(restore\);/);
+    assert.match(source, /async function updateAgentStepGalleryDom\(context\)/);
+    assert.match(source, /cachedImage = await preloadAgentImageSource\(thumbnailSrc\);[\s\S]*agentStepGalleryUpdateTokens\.get\(context\.blockId\) !== updateToken/);
+    assert.match(source, /currentImage\.src = thumbnailSrc;[\s\S]*galleryMain\.innerHTML = renderAgentStepGalleryMain\(\{/);
+    assert.match(source, /restoreAgentMessageScrollPosition\(preservedScrollTop\);/);
     assert.match(source, /button\.disabled = isAgentStepGalleryNavigationLocked\(context\.block, context\.attempt\)/);
     assert.match(source, /if \(!context \|\| isAgentStepGalleryNavigationLocked\(context\.block, context\.attempt\)\) return;/);
     assert.match(source, /void syncAgent3DBlocks\(\);/);
@@ -216,22 +283,50 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.notEqual(interruptedStepStart, -1);
     const patchStepSource = source.slice(patchStepStart, interruptedStepStart);
     assert.match(patchStepSource, /skipRender: true/);
-    assert.match(patchStepSource, /renderAgentStepBlockElement\(nextContext, \{[\s\S]*autoScroll: 'preserve-or-pin-bottom'/);
+    assert.match(patchStepSource, /const renderOptions = \{ autoScroll: 'preserve-or-pin-bottom' \};[\s\S]*canSyncAgentProgressBlockDom\(context, nextContext\)[\s\S]*syncAgentProgressBlockDom\(nextContext, renderOptions\)[\s\S]*renderAgentStepBlockElement\(nextContext, renderOptions\)/);
     assert.doesNotMatch(patchStepSource, /renderAgentMessages\(/);
     assert.match(source, /data-agent-step-action="\$\{escapeHtml\(action\)\}"/);
     assert.match(source, /const stepActionButton = event\.target\.closest\('\[data-agent-step-action\]'\)/);
     assert.match(source, /handleAgentStepAction\(context, action\)\.catch/);
-    assert.match(source, /function handleAgentStepAction\(context, action\)/);
-    assert.match(source, /projectApi\.sendCodexAgentStepAction\(\{/);
+    assert.match(source, /function handleAgentStepAction\(context, action, \{ assetId = '' \} = \{\}\)/);
+    assert.match(source, /projectApi\.sendCodexAgentStepAction\(stepActionInput\)/);
+    assert.match(source, /projectApi\.sendCodexAgentStepActionStream\(\{ \.\.\.stepActionInput, onTask: handleStepActionTask \}\)/);
+    assert.match(source, /const handleStepActionTask = \(task\)[\s\S]*assetProgress: mergeAgentAssetProgressSnapshots\(currentContext\.block\.assetProgress, task\.assetProgress\)/);
+    assert.match(source, /const incomingImages = normalizeAgentTaskPayloadImages\(task\.images\);[\s\S]*mergeAgentIncrementalImages\(streamedImages, incomingImages, streamedSelectedIndex\)/);
+    assert.match(source, /images: streamedImages,[\s\S]*selectedIndex: streamedSelectedIndex/);
+    assert.match(source, /candidateContext\.selectedImageIndex = resolveAgentImageSelectionIndex\([\s\S]*streamedSelectedImage/);
+    assert.match(source, /actions: isRetryAction[\s\S]*filter\(\(item\) => item === 'cancel'\)/);
+    assert.match(source, /function renderAgentAssetProgressPopover\(snapshot\)/);
+    assert.match(source, /const retryAvailable = items\.length > 0 && items\.every\([\s\S]*\['done', 'failed', 'tle', 'canceled'\]/);
+    assert.match(source, /requestAgentExecutionCancellation\(\{[\s\S]*kind: 'asset'[\s\S]*\}\)\.then\(\(\) => handleAgentStepAction\(context, 'retry-asset', \{ assetId \}\)\)/);
+    assert.match(source, /async function requestAgentExecutionCancellation\([\s\S]*await projectApi\.cancelAgentExecution\([\s\S]*if \(!result\?\.accepted \|\| result\.state !== 'canceled'\)/);
+    assert.match(source, /if \(action === 'retry' && liveContext\.stepKey === 'components-3d' && previousStepExecutionId\) \{[\s\S]*await requestAgentExecutionCancellation\([\s\S]*abortSceneSkillExecutionsFromStep\(liveContext\)/);
+    assert.match(source, /if \(session\.workflow === 'scene-build'\) \{[\s\S]*await requestAgentExecutionCancellation\(\{[\s\S]*kind: 'workflow'[\s\S]*abortSceneSkillExecutions\([\s\S]*runServerCodexAgentSessionAttempt\(/);
+    assert.match(source, /function formatAgentAssetProgressTrellisHealth\(snapshot\)[\s\S]*busyWorkerCount[\s\S]*workerCount[\s\S]*queue\?\.queued[\s\S]*queue\?\.running/);
+    assert.match(source, /function refreshAgentAssetProgressTrellisHealth\(snapshot\)[\s\S]*Date\.now\(\) - agentAssetProgressTrellisStatusLastRequestedAt < 5000[\s\S]*Date\.now\(\) - checkedAt < 5000[\s\S]*projectApi\.getUserApiConfig\(state\.projectSession\.user\)[\s\S]*components3DTrellisStatus/);
+    assert.match(source, /void refreshAgentAssetProgressTrellisHealth\(snapshot\);[\s\S]*syncAgentAssetProgressPopover\(snapshot\)/);
+    assert.match(source, /agent-asset-progress-popover-provider[\s\S]*agent-asset-progress-popover-health/);
+    assert.match(source, /function handleAgentAssetProgressClick\(event\)/);
+    assert.match(source, /data-agent-asset-progress-trigger/);
+    assert.match(source, /refreshAgentAssetProgressPopoverAnchor\(\)/);
+    assert.match(source, /candidate\.context\?\.assetProgress && typeof candidate\.context\.assetProgress === 'object'/);
+    assert.match(cssSource, /\.agent-asset-progress-popover\s*\{[\s\S]*position:\s*fixed;[\s\S]*z-index:/);
+    assert.match(cssSource, /\.agent-asset-progress-popover-provider\s*\{[\s\S]*justify-content:\s*space-between/);
+    assert.match(cssSource, /\.agent-asset-progress-popover-health\s*\{[\s\S]*text-align:\s*right/);
+    assert.match(cssSource, /\.agent-progress-track\.has-asset-progress:focus-visible/);
     assert.match(source, /failed:\s*\{[\s\S]*labelKey: 'agent\.pipelineSteps\.pipelineStatuses\.failed'[\s\S]*className: 'is-failed'/);
     assert.match(source, /failed: '失败'/);
     assert.match(source, /failed: 'Failed'/);
+    assert.match(source, /queuing:\s*\{[\s\S]*className: 'is-queuing'/);
+    assert.match(source, /TLE:\s*\{[\s\S]*className: 'is-failed'/);
     assert.match(cssSource, /\.agent-step-state\.is-failed/);
     assert.match(source, /normalized === 'failed'/);
     assert.match(source, /const liveContext = getAgentStepBlockContextById\(context\?\.sessionId, context\?\.attemptId, context\?\.blockId\) \|\| context;/);
-    assert.match(source, /catch \(error\) \{[\s\S]*patchAgentStepBlock\(liveContext, \{[\s\S]*statusId: 'failed'[\s\S]*actions: \['cancel', 'retry'\]/);
-    assert.match(source, /function getSelectedAgentStepSourceImageFromSession\(session, currentAttempt, stepKey\)/);
-    assert.match(source, /sourceImages: \[[\s\S]*serializeAgentSessionStepSourceImage\(liveContext\.session, liveContext\.attempt, 'main-image'\)[\s\S]*serializeAgentSessionStepSourceImage\(liveContext\.session, liveContext\.attempt, 'top-view'\)[\s\S]*serializeAgentSessionStepSourceImage\(liveContext\.session, liveContext\.attempt, 'layout'\)[\s\S]*serializeAgentSessionStepSourceImage\(liveContext\.session, liveContext\.attempt, 'components-3d'\)/);
+    assert.match(source, /catch \(error\) \{[\s\S]*const timedOut = Number\(latestContext\?\.block\?\.assetProgress\?\.timedOut\) > 0;[\s\S]*statusId: timedOut \? 'TLE' : 'failed'[\s\S]*actions: \['cancel', 'retry'\]/);
+    assert.match(source, /const activeContext = resolveActiveSceneSkillContext\(sceneBranch, liveContext\.stepKey\);/);
+    assert.match(source, /sourceImages: serializeSceneSkillContextSourceImages\(activeContext\)/);
+    assert.match(source, /attemptId: liveContext\.attemptId,[\s\S]*executionId: executionRef\.executionId,[\s\S]*branchRevision: executionRef\.baseRevision,[\s\S]*parentCandidateIds: executionRef\.parentCandidateIds,[\s\S]*activeContext,/);
+    assert.match(source, /isSceneSkillExecutionCurrent\(latestContext\.attempt\.sceneBranch, executionRef, result\)/);
     assert.doesNotMatch(source, /serializeAgentSessionStepSourceImage\(liveContext\.session, liveContext\.attempt, 'front-view'\)/);
     assert.match(source, /await advanceAgentPipelineAfterStepApply\(liveContext\)/);
     assert.match(source, /await handleAgentStepAction\(nextContext, 'retry'\)/);
@@ -241,7 +336,12 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.match(source, /const showProgressTrack = !isStepBlock \|\| \([\s\S]*shouldShowAgentStepProgressTrack\(statusId, block\)[\s\S]*!isApplied[\s\S]*!isCanceledStep[\s\S]*!isInterruptedAttempt[\s\S]*\);/);
     assert.match(source, /const forceCollapsed = isStepBlock && Boolean\(context\.stepBlocksCollapsed\);/);
     assert.match(source, /const isOpen = !isStepBlock \|\| \(!forceCollapsed && Boolean\(block\.expanded \|\| block\.isCurrent \|\| \(!isApplied && \(selectedImage \|\| actions\.length > 0 \|\| showContinue\)\)\)\);/);
-    assert.match(source, /\$\{showProgressTrack \? `<span class="agent-block-meta">\$\{percentText\}<\/span>` : ''\}/);
+    assert.match(source, /\$\{showProgressTrack && stepProgressText \? `<span class="agent-block-meta">\$\{stepProgressText\}<\/span>` : ''\}/);
+    assert.match(source, /const stepProgressText = block\.indeterminate \? '' : percentText;/);
+    assert.match(source, /function isGenericAgentProgressStatusText\(statusText\)/);
+    assert.match(source, /isStepBlock && isGenericAgentProgressStatusText\(statusText\)/);
+    assert.match(source, /const attemptText = attemptBlocks\.length > 0 && isGenericAgentProgressStatusText\(attempt\?\.text\)/);
+    assert.match(source, /\$\{attemptText \? `<div class="agent-message-text/);
     assert.match(source, /function getAgentStepBlockThumbnail\(block\)/);
     assert.match(source, /class="agent-step-summary-thumb"><img src="\$\{escapeHtml\(stepThumbnail\)\}" alt="" loading="eager" decoding="async"><\/span>/);
     assert.match(source, /function getAgentImageAspectRatio\(image\)/);
@@ -273,7 +373,8 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.match(source, /function syncAgentImageFrameAspectRatios\(root = dom\.agentMessageList\)/);
     assert.match(source, /frame\.style\.setProperty\('--agent-image-aspect-ratio', \(width \/ height\)\.toFixed\(4\)\)/);
     assert.match(source, /function retainAgentThumbnailImageCache\(root = dom\.agentMessageList\)/);
-    assert.match(source, /const cachedImage = new Image\(\);/);
+    assert.match(source, /function retainAgentCachedImage\(src\) \{[\s\S]*const cachedImage = new Image\(\);/);
+    assert.match(source, /async function preloadAgentImageSource\(src\) \{[\s\S]*if \(!cachedImage\.complete\) \{[\s\S]*cachedImage\.addEventListener\('load', resolve, \{ once: true \}\);[\s\S]*await cachedImage\.decode\?\.\(\)\.catch\(\(\) => \{\}\);/);
     assert.match(source, /renderAgentMessages\(\{ autoScroll, animateLayout \}\)/);
     assert.match(source, /renderAgentSessionStepBlocksExpanded\(sessionId, attemptId, !nextCollapsed\);/);
     assert.doesNotMatch(source, /animateAgentSessionStepBlocks\(sessionId, attemptId, !nextCollapsed\);[\s\S]*window\.setTimeout\(\(\) => \{[\s\S]*setAgentSessionStepBlocksExpanded\(sessionId, attemptId, !nextCollapsed\);/);
@@ -283,17 +384,37 @@ test('editor shows Codex generation controls only after an explicit task signal'
     assert.match(source, /metadata\.kind === 'insert_scene'/);
     assert.match(source, /insertSceneAsset/);
     assert.match(source, /metadata\.kind !== 'layout_bbox'/);
+    assert.match(source, /const actualDetectionCount = toCount\(metadata\.actualDetectionCount\);/);
+    assert.match(source, /const provider = normalizeComponents3DProvider\([\s\S]*metadata\.components3DProvider \|\| state\.projectSession\.components3DConfig\?\.provider/);
+    assert.match(source, /provider === 'mocked'[\s\S]*legacyDetectionCount \?\? actualDetectionCount \?\? bboxData\.length[\s\S]*actualDetectionCount \?\? bboxData\.length/);
+    assert.match(layoutServerSource, /actualDetectionCount: Number\.isFinite\(Number\(result\.detection_count\)\)[\s\S]*Math\.max\(0, Math\.floor\(Number\(result\.detection_count\)\)\)/);
     const renderMetadataFunction = source.match(/function renderAgentStepImageMetadata\(image\) \{[\s\S]*?\n\}/)?.[0] || '';
     assert.doesNotMatch(renderMetadataFunction, /metadata\.bboxJsonPath \? `<span>\$\{escapeHtml\(metadata\.bboxJsonPath\)\}<\/span>` : ''/);
     assert.doesNotMatch(renderMetadataFunction, /metadata\.glbPaths/);
     assert.doesNotMatch(renderMetadataFunction, /components3dAssets/);
-    assert.match(source, /patchAgentStepBlock\(liveContext, \{[\s\S]*images: nextImages/);
-    assert.match(source, /\.\.\.\(patch\.sceneInsertPlan && typeof patch\.sceneInsertPlan === 'object' \? \{ sceneInsertPlan: patch\.sceneInsertPlan \} : \{\}\)/);
+    assert.match(source, /appendSceneSkillCandidate\(setSceneSkillStageExecution\(branch, liveContext\.stepKey, null\), candidate\)/);
+    assert.match(source, /createSceneSkillCandidateContext\(\{[\s\S]*patch,[\s\S]*result,[\s\S]*images: nextImages/);
     assert.doesNotMatch(source, /await applyAgentSceneInsertPlan\(patch\.sceneInsertPlan\)/);
     assert.match(source, /function buildAgentStepStatesSnapshot\(\)/);
     assert.match(source, /stepStates: buildAgentStepStatesSnapshot\(\)/);
     assert.match(source, /function buildAgentPipelineStatesSnapshot\(\)/);
     assert.match(source, /pipelineStates: buildAgentPipelineStatesSnapshot\(\)/);
+    assert.match(source, /function reconcileAgentProgressBlockTiming\(previousBlock, nextBlock, nowIso = new Date\(\)\.toISOString\(\)\)/);
+    assert.match(source, /let startedAt = String\(previous\?\.startedAt \|\| nextBlock\.startedAt \|\| ''\)\.trim\(\);/);
+    assert.match(source, /function reconcileAgentProgressBlockList\(previousBlocks = \[\], nextBlocks = \[\]\)/);
+    assert.match(source, /context\.stepKey === 'layout'[\s\S]*components3DProvider[\s\S]*updateSceneSkillAttemptBranch\(context\.sessionId, context\.attemptId,[\s\S]*updateSceneSkillActiveCandidate\(branch, context\.stepKey,[\s\S]*metadata:[\s\S]*components3DProvider/);
+    assert.match(source, /function formatAgentProgressElapsed\(elapsedMs\)[\s\S]*seconds\.toFixed\(1\)[\s\S]*String\(totalSeconds % 60\)\.padStart\(2, '0'\)/);
+    assert.match(source, /class="agent-progress-row"[\s\S]*class="agent-progress-elapsed"[\s\S]*data-agent-progress-elapsed[\s\S]*data-started-at=/);
+    assert.match(source, /const terminalElapsedText = isStepBlock[\s\S]*isAgentProgressBlockTerminal\(block\)[\s\S]*block\.completedAt/);
+    assert.match(source, /class="agent-step-summary-meta">[\s\S]*agent-step-terminal-elapsed[\s\S]*data-agent-terminal-elapsed[\s\S]*agent-step-state/);
+    assert.match(source, /function syncAgentTerminalElapsedVisibility\(root = dom\.agentMessageList\)[\s\S]*elapsed\.hidden = false;[\s\S]*meta\.scrollWidth > meta\.clientWidth[\s\S]*titleRect\.right \+ 8 > metaRect\.left[\s\S]*elapsed\.hidden = overflowsMeta \|\| overlapsTitle;/);
+    assert.match(source, /function startAgentProgressElapsedLoop\(\)[\s\S]*window\.setInterval\([\s\S]*syncAgentProgressElapsedLabels\(\)[\s\S]*100/);
+    assert.match(source, /startAgentProgressElapsedLoop\(\);/);
+    assert.match(cssSource, /\.agent-progress-row\s*\{[\s\S]*display:\s*flex;[\s\S]*gap:\s*8px;/);
+    assert.match(cssSource, /\.agent-progress-elapsed\s*\{[\s\S]*width:\s*42px;[\s\S]*flex:\s*0 0 42px;[\s\S]*text-align:\s*right;[\s\S]*white-space:\s*nowrap;/);
+    assert.match(cssSource, /\.agent-step-terminal-elapsed\s*\{[\s\S]*width:\s*42px;[\s\S]*flex:\s*0 0 42px;[\s\S]*text-align:\s*right;[\s\S]*white-space:\s*nowrap;/);
+    assert.match(cssSource, /\.agent-step-terminal-elapsed\[hidden\]\s*\{[\s\S]*display:\s*none !important;/);
+    assert.match(source, /const failedBlocks = getAgentAttemptStepBlocks\(activeAttempt\)\.map[\s\S]*reconcileAgentProgressBlockTiming\(block,[\s\S]*statusId: 'failed'/);
     assert.match(source, /function normalizeRestoredAgentAttemptStatus\(status = 'running'\)/);
     assert.match(source, /return normalized === 'running' \? 'interrupted' : normalized;/);
     assert.match(source, /function isAgentAttemptInternallyRunning\(attempt\)/);
@@ -347,7 +468,7 @@ test('editor shows Codex generation controls only after an explicit task signal'
 
 test('editor applies insert-scene plan only after final user confirmation', async () => {
     const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
-    const stepActionStart = source.indexOf('async function handleAgentStepAction(context, action)');
+    const stepActionStart = source.indexOf("async function handleAgentStepAction(context, action, { assetId = '' } = {})");
     const sessionActionStart = source.indexOf('async function handleAgentSessionAction', stepActionStart);
     const stepActionSource = source.slice(stepActionStart, sessionActionStart);
     const createPreviewStart = source.indexOf('async function createAgentSceneInsertPreview');
@@ -388,15 +509,15 @@ test('editor applies insert-scene plan only after final user confirmation', asyn
     assert.match(commitPreviewSource, /agentSceneInsertPreview = null;[\s\S]*refreshCanonicalAssetReferenceState\(\);[\s\S]*markWorkspaceDirty\('agent-insert-scene'\)/);
     assert.match(source, /if \(isServerAgentAssetPath\(relativePath\) \|\| isServerMaterializedAssetPath\(relativePath\)\) \{/);
     assert.match(stepActionSource, /if \(action === 'apply' && liveContext\.stepKey === 'insert-scene'\)/);
-    assert.match(stepActionSource, /const plan = liveContext\.block\?\.sceneInsertPlan/);
-    assert.match(stepActionSource, /inserted = commitAgentSceneInsertPreview\(liveContext\) \|\| await applyAgentSceneInsertPlan\(plan\)/);
+    assert.match(stepActionSource, /const plan = activeCandidate\?\.context\?\.sceneInsertPlan \|\| liveContext\.block\?\.sceneInsertPlan/);
+    assert.match(stepActionSource, /commitAgentSceneInsertPreview\(\{[\s\S]*candidateId: activeCandidate\?\.id \|\| '',[\s\S]*branchRevision: sceneBranch\.revision/);
     assert.match(stepActionSource, /clearAgentSceneInsertPreviewForContext\(liveContext\)/);
-    assert.match(stepActionSource, /await createAgentSceneInsertPreview\(liveContext, patch\.sceneInsertPlan\)/);
+    assert.match(stepActionSource, /createAgentSceneInsertPreview\(\{[\s\S]*candidateId: currentCandidate\?\.id \|\| '',[\s\S]*branchRevision:/);
     assert.match(stepActionSource, /statusText: t\('agent\.pipelineSteps\.insertScenePreviewReady', \{ count: preview\.loaded \}\)/);
     assert.match(stepActionSource, /setAgentSessionArchiveState\(current, \{[\s\S]*archiveState: 'applied'[\s\S]*summaryLabel: t\('common\.applied'\)/);
     assert.match(source, /insertScenePreviewReady: '已在画布生成 \{count\} 个场景对象预览，请检查后应用、重试或取消'/);
     assert.match(source, /insertScenePreviewReady: 'Previewed \{count\} scene objects on the canvas\. Review, then apply, retry, or cancel\.'/);
-    assert.match(stepActionSource, /\.\.\.\(patch\.sceneInsertPlan && typeof patch\.sceneInsertPlan === 'object' \? \{ sceneInsertPlan: patch\.sceneInsertPlan \} : \{\}\)/);
+    assert.match(source, /candidateId: context\?\.candidateId \|\| '',[\s\S]*branchRevision: Number\(context\?\.branchRevision\) \|\| 0/);
     assert.match(source, /projectApi\.getAssetUrl\(\s*state\.projectSession\.user,[\s\S]*state\.projectSession\.activeProjectId,[\s\S]*sourcePath/);
     assert.match(source, /const canonicalAsset = await canonicalizeServerProjectAssetBlob\(\{[\s\S]*sourcePath,[\s\S]*fileName: targetName,[\s\S]*blob/);
     assert.match(source, /assetId: `sha256:\$\{canonicalAsset\.hash\}`/);
@@ -418,28 +539,22 @@ test('editor applies insert-scene plan only after final user confirmation', asyn
     assert.match(source, /session\.workflow === 'scene-build'[\s\S]*clearAgentSceneInsertPreviewForContext\(\{[\s\S]*sessionId,[\s\S]*attemptId: activeAttempt\?\.id \|\| ''/);
 });
 
-test('editor scene step retry invalidates downstream unconfirmed stage state', async () => {
+test('editor scene step retry appends a candidate and projects a dependency-consistent branch', async () => {
     const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
-    const resetStart = source.indexOf('function resetDownstreamScenePipelineStepsForRetry');
-    const stepActionStart = source.indexOf('async function handleAgentStepAction(context, action)');
+    const stepActionStart = source.indexOf("async function handleAgentStepAction(context, action, { assetId = '' } = {})");
     const advanceStart = source.indexOf('async function advanceAgentPipelineAfterStepApply', stepActionStart);
-    assert.notEqual(resetStart, -1);
     assert.notEqual(stepActionStart, -1);
     assert.notEqual(advanceStart, -1);
-    const resetSource = source.slice(resetStart, stepActionStart);
     const stepActionSource = source.slice(stepActionStart, advanceStart);
 
-    assert.match(resetSource, /const retryIndex = SCENE_PIPELINE_STEP_DEFS\.findIndex\(\(step\) => step\.key === context\.stepKey\)/);
-    assert.match(resetSource, /if \(block\.applied \|\| stepIndex <= retryIndex\) return block;/);
-    assert.match(resetSource, /images:\s*\[\]/);
-    assert.match(resetSource, /selectedIndex:\s*0/);
-    assert.match(resetSource, /applied:\s*false/);
-    assert.match(resetSource, /actions:\s*\[\]/);
-    assert.match(resetSource, /artifacts:\s*\[\]/);
-    assert.match(resetSource, /sceneInsertPlan:\s*undefined/);
-    assert.match(resetSource, /pipelineState: deriveScenePipelineState\(session, nextAttempt, \{/);
-    assert.match(resetSource, /clearAgentSceneInsertPreviewForContext\(context\)/);
-    assert.match(stepActionSource, /if \(action === 'retry'\) \{[\s\S]*resetDownstreamScenePipelineStepsForRetry\(liveContext\);[\s\S]*\}/);
+    assert.match(source, /function projectSceneSkillBranchToBlocks\(attempt, sceneBranch = attempt\?\.sceneBranch\)/);
+    assert.match(source, /const gallery = getSceneSkillCandidateGallery\(branch, block\.stepKey\)/);
+    assert.match(source, /images: galleryImages,[\s\S]*sceneCandidateIds: gallery\.candidateIds/);
+    assert.match(source, /if \(!candidate\) \{[\s\S]*statusId: 'pending',[\s\S]*images: \[\],[\s\S]*sceneInsertPlan: undefined/);
+    assert.match(stepActionSource, /if \(action === 'retry'\) \{[\s\S]*abortSceneSkillExecutionsFromStep\(liveContext\);/);
+    assert.match(stepActionSource, /createSceneSkillCandidate\(\{[\s\S]*parentCandidateIds: executionRef\.parentCandidateIds/);
+    assert.match(stepActionSource, /appendSceneSkillCandidate\(setSceneSkillStageExecution\(branch, liveContext\.stepKey, null\), candidate\)/);
+    assert.doesNotMatch(stepActionSource, /resetDownstreamScenePipelineStepsForRetry\(liveContext\)/);
 });
 
 test('editor preserves failed initial scene-build task state with retry and cancel actions', async () => {
@@ -451,9 +566,9 @@ test('editor preserves failed initial scene-build task state with retry and canc
     const attemptSource = source.slice(attemptStart, sessionStart);
 
     assert.match(attemptSource, /const taskStatusId = normalizeAgentPipelineStatusId\(task\.statusId\);/);
-    assert.match(attemptSource, /const isFailedTask = taskStatusId === 'failed';/);
+    assert.match(attemptSource, /const isFailedTask = taskStatusId === 'failed' \|\| taskStatusId === 'TLE';/);
     assert.match(attemptSource, /statusId: taskStatusId \|\| \(progressImages\.length > 0 \? 'done' : ''\)/);
-    assert.match(attemptSource, /actions: progressImages\.length > 0 \? \['cancel', 'retry', 'apply'\] : \(isFailedTask \? \['cancel', 'retry'\] : \[\]\)/);
+    assert.match(attemptSource, /actions: isFailedTask \? \['cancel', 'retry'\] : \(progressImages\.length > 0 \? \['cancel', 'retry', 'apply'\] : \[\]\)/);
     assert.match(attemptSource, /isCurrent: progressImages\.length > 0 \|\| isFailedTask/);
 });
 
@@ -471,6 +586,40 @@ test('editor streams task images into the active agent progress step', async () 
     assert.match(runtimeSource, /initialViewImages\?: CodexGeneratedImage\[\];/);
     assert.match(runtimeSource, /task\.initialViewImages = initialViewImages;/);
     assert.match(runtimeSource, /task\.directorIntentText = payload\.directorIntentText\.trim\(\);/);
+});
+
+test('agent progress text updates preserve live selections with stable keyed DOM', async () => {
+    const source = await readFile(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const popoverRefreshStart = source.indexOf('function refreshAgentAssetProgressPopoverAnchor()');
+    const pointerOverStart = source.indexOf('function handleAgentAssetProgressPointerOver', popoverRefreshStart);
+    assert.notEqual(popoverRefreshStart, -1);
+    assert.notEqual(pointerOverStart, -1);
+    const popoverRefreshSource = source.slice(popoverRefreshStart, pointerOverStart);
+
+    assert.match(source, /function doesSelectionIntersectNode\(node\)[\s\S]*selection\.isCollapsed[\s\S]*range\.intersectsNode\(node\)/);
+    assert.match(source, /function setSelectionSafeElementText\(element, value\)[\s\S]*currentValue === nextValue[\s\S]*doesSelectionIntersectNode\(element\)[\s\S]*selectionSafeTextPendingValues\.set\(element, nextValue\)[\s\S]*textNode\.data = nextValue/);
+    assert.match(source, /function syncAgentProgressElapsedLabels\(root = dom\.agentMessageList\)[\s\S]*setSelectionSafeElementText\(element, formatAgentProgressElapsed/);
+    assert.doesNotMatch(source, /element\.textContent = formatAgentProgressElapsed/);
+    assert.match(source, /setSelectionSafeElementText\(status, getAgentSessionStatusLabel\(session, attempt\)\)/);
+    assert.match(source, /setSelectionSafeElementText\(dom\.progressText, `\$\{Math\.round\(progress\)\}%`\)/);
+    assert.match(source, /setSelectionSafeElementText\(dom\.exportProgressText, displayPercent > 0/);
+    assert.match(source, /setSelectionSafeElementText\(dom\.timeValue, `\$\{state\.currentTime\.toFixed\(3\)\}s`\)/);
+
+    assert.match(source, /function renderAgentAssetProgressPopover\(snapshot\)[\s\S]*data-agent-asset-progress-summary[\s\S]*data-agent-asset-progress-items/);
+    assert.match(source, /function createAgentAssetProgressItemElement\(assetId\)[\s\S]*row\.dataset\.agentAssetProgressId = assetId/);
+    assert.match(source, /function syncAgentAssetProgressPopover\(snapshot\)[\s\S]*doesSelectionIntersectNode\(popover\)[\s\S]*agentAssetProgressPendingSnapshot = snapshot[\s\S]*rowsById[\s\S]*list\.insertBefore\(row, expectedRow\)[\s\S]*rowsById\.forEach\(\(row\) => row\.remove\(\)\)/);
+    assert.doesNotMatch(source, /popover\.innerHTML = renderAgentAssetProgressPopover\(snapshot\)/);
+    assert.match(popoverRefreshSource, /syncAgentAssetProgressPopover\(context\.block\.assetProgress\)[\s\S]*positionAgentAssetProgressPopover\(anchor\)/);
+    assert.doesNotMatch(popoverRefreshSource, /innerHTML/);
+    assert.match(source, /dom\.agentMessageScroll\?\.addEventListener\('scroll',[\s\S]*positionAgentAssetProgressPopoverAnchor\(\)/);
+
+    assert.match(source, /function canSyncAgentProgressBlockDom\(previousContext, nextContext\)[\s\S]*haveSameAgentProgressBlockStaticFields[\s\S]*showProgressTrack/);
+    assert.match(source, /function syncAgentProgressBlockDom\(context,[\s\S]*setSelectionSafeElementText[\s\S]*fill\.style\.width[\s\S]*refreshAgentAssetProgressPopoverAnchor\(\)/);
+    assert.match(source, /function renderAgentStepBlockElement\(context,[\s\S]*doesSelectionIntersectNode\(currentElement\)[\s\S]*agentPendingStepRenders\.set/);
+    assert.match(source, /function renderAgentSessionElement\(sessionId,[\s\S]*doesSelectionIntersectNode\(currentElement\)[\s\S]*agentPendingSessionRenders\.set/);
+    assert.match(source, /function renderAgentMessages\([\s\S]*doesSelectionIntersectNode\(dom\.agentMessageList\)[\s\S]*agentPendingMessageListRender = \{ autoScroll \}/);
+    assert.match(source, /function handleAgentProgressSelectionChange\(\)[\s\S]*refreshAgentAssetProgressPopoverAnchor\(\)[\s\S]*flushAgentPendingMessageListRender\(\)[\s\S]*flushAgentPendingSessionRenders\(\)[\s\S]*flushAgentPendingStepRenders\(\)[\s\S]*flushSelectionSafeTextUpdates\(\)/);
+    assert.match(source, /document\.addEventListener\('selectionchange', handleAgentProgressSelectionChange\)/);
 });
 
 test('insert-scene MCP produces a scene insert plan instead of Blender output', async () => {

@@ -869,34 +869,208 @@
                 <div class="modal-body project-session-modal-body">
                     <div class="project-browser-summary-row">
                         <div id="projectBrowserUserSummary" class="project-session-summary"></div>
-                        <div id="projectBrowserCodexAuthInline" class="project-browser-auth-inline">
-                            <span class="project-browser-auth-label" data-i18n="projectSession.codexAuthTitle">Codex Auth:</span>
-                            <span id="projectBrowserCodexAuthStatus" class="project-browser-auth-status"></span>
-                            <span id="projectBrowserAgentRuntimeStatus" class="project-browser-agent-runtime-status" title="Agent: Demo">Agent: Demo</span>
-                            <button id="btnProjectBrowserEditCodexAuth" type="button" class="project-browser-auth-icon-btn" title="编辑 Codex Auth" aria-label="编辑 Codex Auth" data-i18n-attrs="title:projectSession.codexAuthEditAction;aria-label:projectSession.codexAuthEditAction">
-                                <svg viewBox="0 0 24 24" aria-hidden="true">
-                                    <path d="M12 20h9" />
-                                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                                </svg>
-                            </button>
-                            <input id="projectBrowserCodexAuthKey" class="project-browser-auth-inline-input" type="password" autocomplete="off" placeholder="CODEX_API_KEY" data-i18n-placeholder="projectSession.codexAuthPlaceholder" hidden>
-                            <button id="btnProjectBrowserSaveCodexAuth" type="button" class="project-browser-auth-submit-btn" title="提交 Codex Auth" aria-label="提交 Codex Auth" data-i18n-attrs="title:projectSession.codexAuthSubmitAction;aria-label:projectSession.codexAuthSubmitAction" hidden>
-                                <svg viewBox="0 0 24 24" aria-hidden="true">
-                                    <path d="M20 6 9 17l-5-5" />
-                                </svg>
-                            </button>
-                        </div>
                     </div>
-                    <div id="projectBrowserProjectGrid" class="project-browser-project-grid"></div>
-                    <div id="projectBrowserSaveAsPanel" class="project-browser-saveas-panel hidden">
-                        <label class="project-session-label" for="projectBrowserSaveAsName" data-i18n="projectSession.saveAsLabel">另存为项目名</label>
-                        <div id="projectBrowserSaveAsNameError" class="project-session-inline-error hidden" role="alert"></div>
-                        <input id="projectBrowserSaveAsName" class="project-session-input" type="text" maxlength="96" placeholder="Untitled Project">
-                        <div class="project-browser-saveas-actions">
-                            <button id="btnProjectBrowserSaveAsCancel" class="button button-secondary" data-i18n="common.cancel">取消</button>
-                            <button id="btnProjectBrowserSaveAsConfirm" class="button button-primary" data-i18n="projectSession.saveAction">保存</button>
-                        </div>
+                    <div class="project-browser-tabs" role="tablist" aria-label="项目与 API">
+                        <button id="projectBrowserProjectsTab" type="button" class="project-browser-tab is-active" role="tab" aria-selected="true" aria-controls="projectBrowserProjectsPanel" data-project-browser-tab="projects" data-i18n="projectSession.browserProjectsTab">我的项目</button>
+                        <button id="projectBrowserApiTab" type="button" class="project-browser-tab" role="tab" aria-selected="false" aria-controls="projectBrowserApiPanel" data-project-browser-tab="api" data-i18n="projectSession.apiManagementTab">API 管理</button>
                     </div>
+                    <section id="projectBrowserProjectsPanel" class="project-browser-panel" role="tabpanel" aria-labelledby="projectBrowserProjectsTab" data-project-browser-panel="projects">
+                        <div id="projectBrowserProjectGrid" class="project-browser-project-grid"></div>
+                        <div id="projectBrowserSaveAsPanel" class="project-browser-saveas-panel hidden">
+                            <label class="project-session-label" for="projectBrowserSaveAsName" data-i18n="projectSession.saveAsLabel">另存为项目名</label>
+                            <div id="projectBrowserSaveAsNameError" class="project-session-inline-error hidden" role="alert"></div>
+                            <input id="projectBrowserSaveAsName" class="project-session-input" type="text" maxlength="96" placeholder="Untitled Project">
+                            <div class="project-browser-saveas-actions">
+                                <button id="btnProjectBrowserSaveAsCancel" class="button button-secondary" data-i18n="common.cancel">取消</button>
+                                <button id="btnProjectBrowserSaveAsConfirm" class="button button-primary" data-i18n="projectSession.saveAction">保存</button>
+                            </div>
+                        </div>
+                    </section>
+                    <section id="projectBrowserApiPanel" class="project-browser-panel project-browser-api-panel" role="tabpanel" aria-labelledby="projectBrowserApiTab" data-project-browser-panel="api" hidden>
+                        <div class="project-browser-api-heading">
+                            <h4 data-i18n="projectSession.apiManagementTitle">API 管理</h4>
+                            <p data-i18n="projectSession.apiManagementDescription">集中配置 Codex、3D 生成和 Pipeline 对话所需的密钥。</p>
+                        </div>
+                        <div class="project-browser-api-grid">
+                            <section class="project-browser-api-provider">
+                                <div class="project-browser-api-provider-header">
+                                    <div class="project-browser-api-provider-copy">
+                                        <h5 data-i18n="projectSession.codexAuthTitle">Codex Auth</h5>
+                                        <p data-i18n="projectSession.codexAuthDescription">用于后台 Codex Agent 的项目内对话与任务执行。</p>
+                                    </div>
+                                </div>
+                                <div id="projectBrowserCodexAuthInline" class="project-browser-auth-inline">
+                                    <span class="project-browser-auth-label" data-i18n="projectSession.codexAuthTitle">Codex Auth:</span>
+                                    <span id="projectBrowserCodexAuthStatus" class="project-browser-auth-status"></span>
+                                    <span id="projectBrowserAgentRuntimeStatus" class="project-browser-agent-runtime-status" title="Agent: Demo">Agent: Demo</span>
+                                    <button id="btnProjectBrowserEditCodexAuth" type="button" class="project-browser-auth-icon-btn" title="编辑 Codex Auth" aria-label="编辑 Codex Auth" data-i18n-attrs="title:projectSession.codexAuthEditAction;aria-label:projectSession.codexAuthEditAction">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                                            <path d="M12 20h9" />
+                                            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                        </svg>
+                                    </button>
+                                    <input id="projectBrowserCodexAuthKey" class="project-browser-auth-inline-input" type="password" autocomplete="off" placeholder="CODEX_API_KEY" data-i18n-placeholder="projectSession.codexAuthPlaceholder" hidden>
+                                    <button id="btnProjectBrowserSaveCodexAuth" type="button" class="project-browser-auth-submit-btn" title="提交 Codex Auth" aria-label="提交 Codex Auth" data-i18n-attrs="title:projectSession.codexAuthSubmitAction;aria-label:projectSession.codexAuthSubmitAction" hidden>
+                                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                                            <path d="M20 6 9 17l-5-5" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </section>
+                            <section class="project-browser-api-provider">
+                                <div class="project-browser-api-provider-header">
+                                    <div class="project-browser-api-provider-copy">
+                                        <h5 data-i18n="projectSession.apiProvider3DTitle">3D 生成 API</h5>
+                                        <p data-i18n="projectSession.apiProvider3DDescription">用于从对话生成 Mesh、3DGS 或 4DGS 资产。</p>
+                                    </div>
+                                    <span id="projectBrowserComponents3DStatus" class="project-browser-api-provider-status" data-i18n="projectSession.apiConfigNotSaved">未保存</span>
+                                </div>
+                                <div id="projectBrowserComponents3DProvider" class="project-browser-provider-segmented" role="radiogroup" aria-label="3D 生成 Provider">
+                                    <button id="btnComponents3DProviderMocked" type="button" class="project-browser-provider-option is-active" data-components3d-provider="mocked" data-i18n="projectSession.components3DProviderMocked">Mocked</button>
+                                    <button id="btnComponents3DProviderHunyuan" type="button" class="project-browser-provider-option" data-components3d-provider="hunyuan" data-i18n="projectSession.components3DProviderHunyuan">Hunyuan</button>
+                                    <button id="btnComponents3DProviderTrellis2" type="button" class="project-browser-provider-option" data-components3d-provider="trellis.2" data-i18n="projectSession.components3DProviderTrellis2">私有部署</button>
+                                </div>
+                                <div id="components3DMockedPanel" class="project-browser-provider-panel">
+                                    <span class="project-browser-api-help" data-i18n="projectSession.components3DMockedHint">使用本地 demo GLB，不会调用外部 3D 生成服务。</span>
+                                </div>
+                                <div id="components3DTrellisPanel" class="project-browser-provider-panel" hidden>
+                                    <div class="project-browser-api-field-grid">
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldBaseUrl">Base URL</span>
+                                            <input id="components3DTrellisBaseUrl" class="project-browser-api-input" type="url" placeholder="http://127.0.0.1:25367">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldHost">Host/IP</span>
+                                            <input id="components3DTrellisHost" class="project-browser-api-input" type="text" placeholder="127.0.0.1">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldPort">端口</span>
+                                            <input id="components3DTrellisPort" class="project-browser-api-input" type="number" min="1" max="65535" step="1" placeholder="25367">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldModel">模型</span>
+                                            <input id="components3DTrellisModel" class="project-browser-api-input" type="text" list="components3DTrellisModelOptions" placeholder="TRELLIS.2-1024">
+                                            <datalist id="components3DTrellisModelOptions">
+                                                <option value="TRELLIS.2-512"></option>
+                                                <option value="TRELLIS.2-1024"></option>
+                                                <option value="TRELLIS.2-1536"></option>
+                                            </datalist>
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldPollInterval">轮询间隔（秒）</span>
+                                            <input id="components3DTrellisPollInterval" class="project-browser-api-input" type="number" min="0.2" max="3600" step="0.5" placeholder="5">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldMaxWait">最长等待（秒）</span>
+                                            <input id="components3DTrellisMaxWait" class="project-browser-api-input" type="number" min="1" max="86400" step="1" placeholder="1800">
+                                        </label>
+                                    </div>
+                                    <input id="components3DTrellisCallbackUrl" type="hidden">
+                                    <input id="components3DTrellisDownloadBaseUrl" type="hidden">
+                                    <div id="components3DTrellisStatusPanel" class="project-browser-api-status-panel" hidden>
+                                        <div class="project-browser-api-status-header">
+                                            <span data-i18n="projectSession.components3DTrellisStatusTitle">TRELLIS 状态</span>
+                                            <div class="project-browser-api-status-controls">
+                                                <button id="btnComponents3DTrellisStatusRefresh" class="project-browser-api-status-refresh" type="button" data-i18n-attrs="title:projectSession.components3DTrellisStatusRefresh;aria-label:projectSession.components3DTrellisStatusRefresh">
+                                                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                                        <path d="M20 11a8 8 0 0 0-15.5-2M4 4v5h5"></path>
+                                                        <path d="M4 13a8 8 0 0 0 15.5 2M20 20v-5h-5"></path>
+                                                    </svg>
+                                                </button>
+                                                <span id="components3DTrellisStatusBadge" class="project-browser-api-status-badge" data-i18n="projectSession.components3DTrellisStatusUnknown">未检查</span>
+                                            </div>
+                                        </div>
+                                        <div id="components3DTrellisStatusBody" class="project-browser-api-status-body"></div>
+                                    </div>
+                                </div>
+                                <div id="components3DHunyuanPanel" class="project-browser-provider-panel" hidden>
+                                    <div class="project-browser-api-field-grid">
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldEndpoint">Endpoint</span>
+                                            <input id="components3DHunyuanBaseUrl" class="project-browser-api-input" type="url" placeholder="https://ai3d.tencentcloudapi.com">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldSecretKey">Secret Key</span>
+                                            <input id="components3DHunyuanSecretKey" class="project-browser-api-input" type="password" autocomplete="off" placeholder="留空保持已保存密钥" data-i18n-placeholder="projectSession.apiProviderSecretKeyPlaceholder">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldSecretId">Secret ID</span>
+                                            <input id="components3DHunyuanSecretId" class="project-browser-api-input" type="text" autocomplete="off" placeholder="AKID...">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldRegion">地域</span>
+                                            <input id="components3DHunyuanRegion" class="project-browser-api-input" type="text" placeholder="ap-guangzhou">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldVersion">版本</span>
+                                            <input id="components3DHunyuanVersion" class="project-browser-api-input" type="text" placeholder="2025-05-13">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldModel">模型</span>
+                                            <input id="components3DHunyuanModel" class="project-browser-api-input" type="text" placeholder="3.1">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldPollInterval">轮询间隔（秒）</span>
+                                            <input id="components3DHunyuanPollInterval" class="project-browser-api-input" type="number" min="0.2" max="3600" step="0.5" placeholder="15">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldMaxWait">最长等待（秒）</span>
+                                            <input id="components3DHunyuanMaxWait" class="project-browser-api-input" type="number" min="1" max="86400" step="1" placeholder="600">
+                                        </label>
+                                    </div>
+                                    <input id="components3DHunyuanHost" type="hidden">
+                                    <input id="components3DHunyuanPort" type="hidden">
+                                    <input id="components3DHunyuanCallbackUrl" type="hidden">
+                                    <input id="components3DHunyuanDownloadBaseUrl" type="hidden">
+                                </div>
+                                <div class="project-browser-api-actions">
+                                    <button id="btnProjectBrowserSaveComponents3DConfig" type="button" class="button button-primary" data-i18n="projectSession.apiConfigSaveAction" disabled>保存 API 配置</button>
+                                </div>
+                            </section>
+                            <section class="project-browser-api-provider">
+                                <div class="project-browser-api-provider-header">
+                                    <div class="project-browser-api-provider-copy">
+                                        <h5 data-i18n="projectSession.apiProviderPipelineTitle">Pipeline API</h5>
+                                        <p data-i18n="projectSession.apiProviderPipelineDescription">用于 Pipeline 内部主图、VLM 和相机轨迹调用的模型服务配置。</p>
+                                    </div>
+                                    <span id="projectBrowserPipelineApiStatus" class="project-browser-api-provider-status" data-i18n="projectSession.apiConfigNotSaved">未保存</span>
+                                </div>
+                                <div class="project-browser-api-field-grid">
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldApiBase">API Base</span>
+                                        <input id="pipelineApiBase" class="project-browser-api-input" type="url" placeholder="https://api.apiyi.com">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldApiKey">API Key</span>
+                                        <input id="pipelineApiKey" class="project-browser-api-input" type="password" autocomplete="off" placeholder="留空保持已保存密钥" data-i18n-placeholder="projectSession.apiProviderKeyPlaceholder">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldProvider">Provider</span>
+                                        <input id="pipelineApiProvider" class="project-browser-api-input" type="text" placeholder="gemini">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldDialogueModel">对话模型</span>
+                                        <input id="pipelineApiModelName" class="project-browser-api-input" type="text" placeholder="gemini-3.1-pro-preview">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldImageUrl">主图 URL</span>
+                                        <input id="pipelineApiImageUrl" class="project-browser-api-input" type="url" placeholder="https://api.apiyi.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldImageModel">主图模型</span>
+                                        <input id="pipelineApiImageModel" class="project-browser-api-input" type="text" placeholder="gemini-3.1-flash-image-preview">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldImageTimeout">主图超时（秒）</span>
+                                        <input id="pipelineApiImageTimeoutSeconds" class="project-browser-api-input" type="number" min="1" max="86400" step="1" placeholder="300">
+                                    </label>
+                                </div>
+                                <div class="project-browser-api-actions">
+                                    <button id="btnProjectBrowserSavePipelineApiConfig" type="button" class="button button-primary" data-i18n="projectSession.apiConfigSaveAction" disabled>保存 API 配置</button>
+                                </div>
+                            </section>
+                        </div>
+                    </section>
                 </div>
                 <div class="modal-footer project-session-modal-footer">
                     <button id="btnProjectBrowserCreateNew" class="button button-primary" data-i18n="projectSession.createNewProjectAction">创建新项目</button>
@@ -1032,7 +1206,7 @@
         </div>
     </div>
 
+    <script src="./editor-module-load-guard.js"></script>
     <script type="module" src="./editor.js"></script>
 </body>
 </html>
-    <script src="./editor-module-load-guard.js"></script>

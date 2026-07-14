@@ -127,7 +127,10 @@ test('editor exposes a lightweight workspace status indicator in the toolbar', a
   assert.match(css, /\.workspace-status-dot/);
   assert.match(js, /function updateWorkspaceStatusIndicator\(\)/);
   assert.match(js, /function isServerProjectSessionActive\(\)/);
+  assert.match(js, /function isDraftWorkspaceMode\(\)/);
   assert.match(js, /function isLocalWorkspaceSyncMode\(\)/);
+  assert.match(js, /return !isServerProjectSessionActive\(\) && !isDraftWorkspaceMode\(\);/);
+  assert.match(js, /if \(isDraftWorkspaceMode\(\)\) \{[\s\S]*label: combinedDirty \? t\('workspaceStatus\.unsavedDraft'\) : t\('workspaceStatus\.noLocalWorkspace'\),[\s\S]*detail: t\('workspaceStatus\.deletedProjectDraft'\),/);
   assert.match(js, /navigator\.onLine/);
   assert.match(js, /lastSavedAt/);
   assert.match(js, /workspace\.name \? t\('workspaceStatus\.localOnly'\) : t\('workspaceStatus\.noLocalWorkspace'\)/);
@@ -214,7 +217,7 @@ test('startup loading overlay shows the current initialization step', async () =
   assert.match(source, /setBootLoadingStatus\(t\('loading\.bootLoadingEditorApp'\)\)/);
   assert.match(source, /setBootLoadingStatus\(t\('loading\.bootInitializingWebGpu'\)\)/);
   assert.match(source, /setBootLoadingStatus\(t\('loading\.bootConnectingEditor'\)\)/);
-  assert.match(source, /loadingDetail\.textContent = options\?\.detail \|\| '';/);
+  assert.match(source, /setSelectionSafeElementText\(loadingDetail, options\?\.detail \|\| ''\);/);
 });
 
 test('workspace and server save flows emit debug logs for file-level progress', async () => {
