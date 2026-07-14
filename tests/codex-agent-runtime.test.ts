@@ -217,6 +217,35 @@ test('codex project environment appends the new pipeline MCP servers and scene s
       user: 'Demo User',
       name: 'MCP Project',
     });
+    await storage.saveUserApiConfig({
+      user: 'Demo User',
+      config: {
+        pipelineApi: {
+          apiKey: 'sk-user-apiyi',
+          apiBase: 'https://api.custom.test/v1',
+          apiProvider: 'gemini',
+          modelName: 'gemini-custom-pro',
+          imageUrl: 'https://image.custom.test/v1beta/models/custom-image:generateContent',
+          imageModel: 'custom-image',
+          imageTimeoutMs: 123000,
+        },
+        components3D: {
+          provider: 'trellis.2',
+          trellis2: {
+            host: '10.0.0.8',
+            port: '25367',
+            secretId: '',
+            secretKey: '',
+            region: '',
+            version: '',
+            model: 'TRELLIS.2-1536',
+            pollIntervalSeconds: 2,
+            maxWaitSeconds: 300,
+            downloadBaseUrl: 'http://127.0.0.1:25367',
+          },
+        },
+      },
+    });
 
     const env = await resolveCodexProjectEnvironment(storage, 'Demo User', project.id);
     const config = await readFile(path.join(env.codexHome, 'config.toml'), 'utf8');
@@ -231,6 +260,8 @@ test('codex project environment appends the new pipeline MCP servers and scene s
     assert.match(config, /new-pipeline-top-view-server\.ts/);
     assert.match(config, /\[mcp_servers\.visionary_new_pipeline_layout\]/);
     assert.match(config, /new-pipeline-layout-server\.ts/);
+    assert.match(config, /\[mcp_servers\.visionary_new_pipeline_object_images\]/);
+    assert.match(config, /new-pipeline-object-images-server\.ts/);
     assert.match(config, /\[mcp_servers\.visionary_new_pipeline_components_3d\]/);
     assert.match(config, /new-pipeline-components-3d-server\.ts/);
     assert.match(config, /\[mcp_servers\.visionary_new_pipeline_insert_scene\]/);
@@ -242,17 +273,33 @@ test('codex project environment appends the new pipeline MCP servers and scene s
     assert.match(config, /VISIONARY_PROJECT_ROOT = /);
     assert.match(config, /tool_timeout_sec = 900/);
     assert.match(config, /VISIONARY_NEW_PIPELINE_PYTHON = /);
+    assert.equal(env.components3DConfig.provider, 'trellis.2');
+    assert.equal(env.components3DConfig.trellis2.host, '10.0.0.8');
+    assert.match(config, /VISIONARY_COMPONENTS_3D_PROVIDER = "trellis\.2"/);
+    assert.match(config, /VISIONARY_COMPONENTS_3D_TRELLIS_HOST = "10\.0\.0\.8"/);
+    assert.match(config, /VISIONARY_COMPONENTS_3D_TRELLIS_PORT = "25367"/);
+    assert.match(config, /VISIONARY_COMPONENTS_3D_TRELLIS_MODEL = "TRELLIS\.2-1536"/);
+    assert.match(config, /VISIONARY_COMPONENTS_3D_TRELLIS_POLL_INTERVAL_SECONDS = "2"/);
+    assert.match(config, /VISIONARY_COMPONENTS_3D_TRELLIS_MAX_WAIT_SECONDS = "300"/);
+    assert.match(config, /VISIONARY_COMPONENTS_3D_TRELLIS_DOWNLOAD_BASE_URL = "http:\/\/127\.0\.0\.1:25367"/);
     assert.match(config, /VISIONARY_TRAJECTORY_GEN_ROOT = /);
-    assert.match(config, /GENAI_API_KEY = /);
-    assert.match(config, /GENAI_API_BASE = /);
+    assert.equal(env.pipelineApiConfig.apiKey, 'sk-user-apiyi');
+    assert.equal(env.pipelineApiConfig.apiBase, 'https://api.custom.test');
+    assert.match(config, /GENAI_API_KEY = "sk-user-apiyi"/);
+    assert.match(config, /GENAI_API_BASE = "https:\/\/api\.custom\.test"/);
+    assert.match(config, /GEMINI_BASE_URL = "https:\/\/api\.custom\.test\/v1"/);
     assert.match(config, /LLM_API_PROVIDER = "gemini"/);
-    assert.match(config, /LLM_MODEL_NAME = "gemini-3\.1-pro-preview"/);
+    assert.match(config, /LLM_MODEL_NAME = "gemini-custom-pro"/);
+    assert.match(config, /GEMINI_MODEL = "gemini-custom-pro"/);
+    assert.match(config, /VISIONARY_NEW_PIPELINE_CONFIG_OVERRIDES = "\{\\\"GEMINI_API_KEY\\\":\\\"sk-user-apiyi\\\"/);
     assert.match(sceneSkill, /name: scene-skill/);
     assert.match(sceneSkill, /prompt contains `\$scene-skill`/);
     assert.match(sceneSkill, /mcp__visionary_new_pipeline_main_image__generate_main_image/);
     assert.match(sceneSkill, /Remove the `\$scene-skill` routing token/);
     assert.match(sceneSkill, /Organize the remaining user request into a final image-generation prompt/);
-    assert.match(config, /GEMINI_IMAGE_URL = /);
+    assert.match(config, /GEMINI_IMAGE_URL = "https:\/\/image\.custom\.test\/v1beta\/models\/custom-image:generateContent"/);
+    assert.match(config, /GEMINI_IMAGE_MODEL = "custom-image"/);
+    assert.match(config, /VISIONARY_IMAGE_GEN_TIMEOUT_MS = "123000"/);
     assert.match(cameraSkill, /name: camera-skill/);
     assert.match(cameraSkill, /prompt contains `\$camera-skill`/);
     assert.match(cameraSkill, /mcp__visionary_new_pipeline_camera_trajectory__export_scene_info/);
@@ -766,9 +813,11 @@ test('top-view MCP rejects successful script runs with zero generated images', (
 test('codex runtime rejects empty non-insert scene stage results instead of marking them done', async () => {
   const source = await readFile(new URL('../src/server/codex-agent-runtime.ts', import.meta.url), 'utf8');
   assert.match(source, /const taskStatusId = normalizeTaskStatusId\(taskPayload\.statusId \|\| taskPayload\.statusKey \|\| taskPayload\.state\);/);
-  assert.match(source, /if \(taskStatusId === 'failed'\) \{[\s\S]*throw new ProjectStorageError\('BAD_REQUEST'/);
-  assert.match(source, /if \(stepKey !== 'insert-scene' && images\.length <= 0\) \{[\s\S]*throw new ProjectStorageError\('BAD_REQUEST'/);
-  assert.match(source, /\['running', 'rendering', 'done', 'skipped', 'canceled', 'pending', 'failed'\]/);
+  assert.match(source, /const hasStructuredIncompleteResult = stepKey === 'object-images'[\s\S]*result\.incomplete === true;/);
+  assert.match(source, /if \(taskStatusId === 'failed' && !hasStructuredIncompleteResult\) \{[\s\S]*throw new ProjectStorageError\('BAD_REQUEST'/);
+  assert.match(source, /if \(stepKey !== 'insert-scene' && images\.length <= 0 && !hasStructuredIncompleteResult\) \{[\s\S]*throw new ProjectStorageError\('BAD_REQUEST'/);
+  assert.match(source, /statusId === 'TLE'/);
+  assert.match(source, /\['running', 'rendering', 'queuing', 'done', 'skipped', 'canceled', 'pending', 'failed'\]/);
 });
 
 test('codex layout retry requires an applied top view source', async () => {
@@ -847,8 +896,8 @@ test('layout MCP creates an SVG visualization when extract_bbox does not return 
     assert.equal(images[0].mimeType, 'image/svg+xml');
     assert.match(images[0].relativePath, /image_001_bbox_front_visual\.svg$/);
     assert.equal(images[0].metadata?.kind, 'layout_bbox');
-    assert.equal(images[0].metadata?.detectionCount, 9);
-    assert.equal(images[0].metadata?.actualDetectionCount, 1);
+  assert.equal(images[0].metadata?.detectionCount, 9);
+  assert.equal(images[0].metadata?.actualDetectionCount, 1);
     const svg = await readFile(path.join(projectRoot, images[0].relativePath), 'utf8');
     assert.match(svg, /assembly station/);
     assert.match(svg, /<rect x="100" y="200"/);
@@ -857,7 +906,43 @@ test('layout MCP creates an SVG visualization when extract_bbox does not return 
   }
 });
 
-test('codex components-3d retry requires an applied layout source', async () => {
+test('codex object-images retry requires an applied layout source', async () => {
+  const { storage, cleanup } = await createTempStorage();
+  try {
+    const project = await storage.createProject({
+      user: 'Demo User',
+      name: 'Object Images Project',
+    });
+    const runtime = new CodexAgentRuntime(storage);
+
+    await assert.rejects(
+      () => runtime.handleStepAction({
+        user: 'Demo User',
+        projectId: project.id,
+        sessionId: 'agent-session-1',
+        stepKey: 'objectImages',
+        action: 'retry',
+        prompt: '生成一个车间流水线',
+        selectedIndex: 0,
+        images: [],
+        sourceImages: [
+          {
+            id: 'main_image_001',
+            sourceStepKey: 'main-image',
+            relativePath: 'agent_history/assets/new_pipeline/project/run/main_images/image_001.png',
+            mimeType: 'image/png',
+            bytes: 1,
+          },
+        ],
+      }),
+      /layout is required for object-images/,
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('codex components-3d retry requires an applied object-images source', async () => {
   const { storage, cleanup } = await createTempStorage();
   try {
     const project = await storage.createProject({
@@ -886,14 +971,14 @@ test('codex components-3d retry requires an applied layout source', async () => 
           },
         ],
       }),
-      /layout is required for components-3d/,
+      /object-images is required for components-3d/,
     );
   } finally {
     await cleanup();
   }
 });
 
-test('components-3d MCP uses local demo GLB outputs instead of calling Hunyuan', async () => {
+test('components-3d MCP supports mocked GLBs and compatible Hunyuan/TRELLIS API providers', async () => {
   const source = await readFile(
     new URL('../src/server/mcp/new-pipeline-components-3d-server.ts', import.meta.url),
     'utf8',
@@ -905,19 +990,46 @@ test('components-3d MCP uses local demo GLB outputs instead of calling Hunyuan',
   assert.match(source, /process\.env\.VISIONARY_COMPONENTS_3D_DEMO_GLB_DIR \|\| DEFAULT_COMPONENTS_3D_DEMO_GLB_DIR/);
   assert.match(source, /const COMPONENTS_3D_DEMO_ASSET_COUNT = 9;/);
   assert.match(source, /async function collectDemoGlbFiles\(\)/);
-  assert.match(source, /const targetCount = COMPONENTS_3D_DEMO_ASSET_COUNT;/);
+  assert.match(source, /const components3DConfig = normalizeComponents3DGenerationConfig\(/);
+  assert.match(source, /input\.components3DConfig \?\? resolveComponents3DGenerationConfigFromEnv\(\)/);
+  assert.match(source, /const provider = components3DConfig\.provider;/);
+  assert.match(source, /const targetCount = provider === 'mocked'[\s\S]*\? COMPONENTS_3D_DEMO_ASSET_COUNT[\s\S]*: layoutAnnotations\.length;/);
   assert.match(source, /for \(let index = 0; index < COMPONENTS_3D_DEMO_ASSET_COUNT; index \+= 1\)/);
   assert.match(source, /demoGlbPaths\[index % demoGlbPaths\.length\]/);
-  assert.doesNotMatch(source, /await ensureObjectListAndSingleObjects\(\{/);
-  assert.match(source, /'extract_single_object\.py'/);
+  assert.doesNotMatch(source, /'extract_single_object\.py'/);
   assert.match(source, /placement_mode: input\.embeddedPlacement \? 'glb_embedded_transform' : 'layout_bbox'/);
   assert.match(source, /Using embedded transforms from \$\{COMPONENTS_3D_DEMO_GLB_DIR\}; layout placement is skipped\./);
   assert.doesNotMatch(source, /VISIONARY_COMPONENTS_3D_REAL_VLM/);
-  assert.match(source, /await writeMockHunyuanOutputs\(\{/);
+  assert.match(source, /if \(provider === 'mocked'\) \{[\s\S]*await writeMockHunyuanOutputs\(\{[\s\S]*annotations: layoutAnnotations,[\s\S]*\}\);[\s\S]*\} else \{/);
+  assert.match(source, /await writeCompatibleApiHunyuanOutputs\(\{/);
   assert.match(source, /annotations: layoutAnnotations,/);
   assert.match(source, /await rm\(hunyuanDir, \{ recursive: true, force: true \}\);/);
   assert.match(source, /const demoGlbPaths = await collectDemoGlbFiles\(\);/);
   assert.match(source, /await copyFile\(demoGlbPath, modelPath\);/);
+  assert.match(source, /async function writeCompatibleApiHunyuanOutputs\(input: \{/);
+  assert.match(source, /provider: Exclude<Components3DGenerationConfig\['provider'\], 'mocked'>;/);
+  assert.match(source, /function resolveHunyuanTencentCloudBaseUrl\(config: Components3DEndpointConfig\): string/);
+  assert.match(source, /async function postHunyuanTencentCloudProvider\(input: \{/);
+  assert.match(source, /TC3-HMAC-SHA256/);
+  assert.match(source, /Hunyuan Tencent Cloud SecretId and SecretKey are required/);
+  assert.match(source, /if \(input\.provider === 'hunyuan'\) \{[\s\S]*return postHunyuanTencentCloudProvider\(/);
+  assert.match(source, /input\.provider === 'hunyuan'[\s\S]*resolveHunyuanTencentCloudBaseUrl\(input\.config\)[\s\S]*components3DEndpointBaseUrl\(input\.config\)/);
+  assert.match(source, /await resolveObjectImagePaths\(\{/);
+  assert.match(source, /objectImagePaths: input\.objectImagePaths/);
+  assert.match(source, /objectImagesDir: input\.objectImagesDir/);
+  assert.match(source, /action: 'SubmitHunyuanTo3DProJob'/);
+  assert.match(source, /Model: input\.config\.model/);
+  assert.match(source, /ImageBase64: imageBase64/);
+  assert.match(source, /action: 'QueryHunyuanTo3DProJob'/);
+  assert.match(source, /ResultFile3Ds/);
+  assert.match(source, /input\.provider === 'trellis\.2'[\s\S]*replaceUrlBase\(firstGlbUrl, baseUrl\)/);
+  assert.match(source, /replaceUrlBase\(firstGlbUrl, input\.config\.downloadBaseUrl\)/);
+  assert.match(source, /modelName: buildComponents3DObjectName\(\{[\s\S]*label: layoutLabel,[\s\S]*provider: input\.provider,[\s\S]*model: input\.config\.model,/);
+  assert.match(source, /const modelName = progressItems\[index\]\.modelName;/);
+  assert.match(source, /const modelPath = path\.join\(hunyuanDir, `\$\{modelName\}\.glb`\);/);
+  assert.match(source, /layout_label: layoutLabel,[\s\S]*model_name: modelName,/);
+  assert.match(source, /placement_mode: 'layout_bbox'/);
+  assert.match(source, /embeddedPlacement: provider === 'mocked'/);
   assert.doesNotMatch(source, /'hunyuan3d\.py'/);
   assert.doesNotMatch(source, /isHunyuanDisabledError/);
   assert.match(source, /function selectedCandidateImage\(item: JsonRecord\)/);
@@ -941,6 +1053,8 @@ test('components-3d MCP uses local demo GLB outputs instead of calling Hunyuan',
   assert.match(source, /frontRenderTarget = path\.join\(frontRendersDir, `\$\{itemSlug\}-front\.svg`\);/);
   assert.match(source, /input\.onProgress\?\.\(assets, index \+ 1, input\.items\.length\);/);
   assert.match(source, /images: completedImages/);
+  assert.match(source, /onAssetDownloaded: provider === 'trellis\.2'/);
+  assert.match(source, /sourceOrdinal: ordinal/);
   assert.match(source, /const existingRelativePath = async \(filePath: string \| undefined\): Promise<string> => \{/);
   assert.match(source, /const sourceGlbPaths = \(await Promise\.all\([\s\S]*existingRelativePath\(modelPath\)/);
   assert.match(source, /metadata[\s\S]*glbPaths: copiedModelPaths/);
@@ -956,7 +1070,7 @@ test('components-3d MCP uses local demo GLB outputs instead of calling Hunyuan',
   assert.match(source, /const previewPath = frontRenderPath \|\| objectPreviewPath \|\| candidateSheetPath;/);
 });
 
-test('scene step retry replaces the current stage gallery instead of appending', async () => {
+test('scene step runtime returns one candidate payload while editor owns retry history', async () => {
   const source = await readFile(
     new URL('../src/server/codex-agent-runtime.ts', import.meta.url),
     'utf8',
@@ -964,6 +1078,11 @@ test('scene step retry replaces the current stage gallery instead of appending',
 
   assert.match(source, /const images = nextImages;/);
   assert.doesNotMatch(source, /\[\.\.\.currentImages, \.\.\.nextImages\]/);
+  assert.match(source, /candidateResult: \{[\s\S]*images,[\s\S]*selectedImageIndex: stepState\.selectedIndex/);
+  assert.match(source, /const activeContextSourceImages = sourceImagesFromActiveContext\(input\.activeContext\);/);
+  assert.match(source, /const rawSourceImages = activeContextSourceImages\.length > 0[\s\S]*activeContextSourceImages[\s\S]*input\.sourceImages/);
+  assert.match(source, /candidateResult: \{[\s\S]*structuredData: result,[\s\S]*result\.dependencyTree/);
+  assert.match(source, /images: event\.provider === 'trellis\.2' && Array\.isArray\(event\.images\)[\s\S]*normalizeCodexGeneratedImage\(image\)/);
 });
 
 test('codex insert-scene retry requires an applied components-3d source', async () => {
@@ -1037,6 +1156,14 @@ test('insert-scene MCP returns a Visionary scene insert plan without creating a 
       }),
       'utf8',
     );
+    await writeFile(
+      path.join(hunyuanDir, 'model_index.json'),
+      JSON.stringify({
+        provider: 'trellis.2',
+        model: 'TRELLIS.2-1024',
+      }),
+      'utf8',
+    );
 
     const result = await generateInsertScene({
       projectRoot,
@@ -1053,7 +1180,7 @@ test('insert-scene MCP returns a Visionary scene insert plan without creating a 
     assert.equal(plan.schema, 'visionary.scene_insert_plan');
     assert.equal(items.length, 1);
     assert.equal(items[0].path, 'agent_history/assets/new_pipeline/project/run/main_images/pipeline_output/hunyuan_outputs/image_001/object_01_workbench_model.glb');
-    assert.match(String(items[0].name), /\.glb$/);
+    assert.equal(items[0].name, '01-workbench-t1024.glb');
     assert.equal((items[0].orientation as Record<string, unknown>).finalYawDeg, 90);
     assert.equal(plan.coordinateSystem, 'visionary_y_up_xz_ground');
     assert.deepEqual((items[0].transform as Record<string, unknown>).position, [-3, 0, 1.5]);
@@ -1239,15 +1366,21 @@ test('scene-build MCP task payloads carry explicit simple status ids', async () 
     '../src/server/mcp/new-pipeline-main-image-server.ts',
     '../src/server/mcp/new-pipeline-top-view-server.ts',
     '../src/server/mcp/new-pipeline-layout-server.ts',
+    '../src/server/mcp/new-pipeline-object-images-server.ts',
     '../src/server/mcp/new-pipeline-components-3d-server.ts',
     '../src/server/mcp/new-pipeline-insert-scene-server.ts',
   ];
 
   for (const serverPath of serverPaths) {
     const source = await readFile(new URL(serverPath, import.meta.url), 'utf8');
-    assert.match(source, /const statusId = progress >= 1 \? 'done' : 'running';/);
-    assert.match(source, /payload: \{[\s\S]*title,[\s\S]*message,[\s\S]*progress,[\s\S]*statusId,/);
-    assert.match(source, /visionaryTask: \{[\s\S]*progress: 1,[\s\S]*statusId: 'done'/);
+    assert.match(source, /(?:payload: \{[\s\S]*title,[\s\S]*message,[\s\S]*progress,[\s\S]*statusId,|const taskPayload = \{[\s\S]*title,[\s\S]*message,[\s\S]*progress,[\s\S]*statusId,[\s\S]*payload: taskPayload,)/);
+    if (serverPath.includes('object-images')) {
+      assert.match(source, /const statusId = progress >= 1 \? terminalStatusId : 'running';/);
+      assert.match(source, /visionaryTask: \{[\s\S]*progress: 1,[\s\S]*statusId: incomplete \? 'failed' : 'done'/);
+    } else {
+      assert.match(source, /const statusId = progress >= 1 \? 'done' : 'running';/);
+      assert.match(source, /visionaryTask: \{[\s\S]*progress: 1,[\s\S]*statusId: 'done'/);
+    }
     assert.match(source, /visionaryTask: \{[\s\S]*message,[\s\S]*progress: 1,[\s\S]*statusId: 'failed'/);
     assert.doesNotMatch(source, /statusId: 'rendering'/);
     assert.doesNotMatch(source, /statusId: 'skipped'/);
@@ -1448,6 +1581,93 @@ test('scene-skill direct main-image loads apiyi config from new_pipeline config 
       } else {
         process.env[name] = value;
       }
+    }
+    await cleanup();
+  }
+});
+
+test('scene-skill direct main-image prefers saved user apiyi config', async () => {
+  const { rootDir, storage, cleanup } = await createTempStorage();
+  const previousRoot = process.env.VISIONARY_NEW_PIPELINE_ROOT;
+  const previousFetch = globalThis.fetch;
+  const requests: Array<{ url: string; auth: string; body: Record<string, unknown> }> = [];
+  try {
+    const newPipelineRoot = path.join(rootDir, 'third-party', 'new_pipeline');
+    await mkdir(newPipelineRoot, { recursive: true });
+    await writeFile(
+      path.join(newPipelineRoot, 'config.py'),
+      [
+        'GEMINI_IMAGE_URL = "https://example.config/v1beta/models/config-image:generateContent"',
+        'GEMINI_API_KEY = "config-image-key"',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    process.env.VISIONARY_NEW_PIPELINE_ROOT = newPipelineRoot;
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+      const [url, init] = args;
+      requests.push({
+        url: String(url),
+        auth: String(new Headers(init?.headers).get('authorization') || ''),
+        body: JSON.parse(String(init?.body || '{}')) as Record<string, unknown>,
+      });
+      return new Response(JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: 'image/png',
+                    data: Buffer.from('user-apiyi-png').toString('base64'),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    const project = await storage.createProject({
+      user: 'Demo User',
+      name: 'Scene Skill User APIyi',
+    });
+    await storage.saveUserApiConfig({
+      user: 'Demo User',
+      config: {
+        pipelineApi: {
+          apiKey: 'sk-user-apiyi-direct',
+          apiBase: 'https://api.user.test',
+          apiProvider: 'gemini',
+          modelName: 'gemini-user-pro',
+          imageUrl: 'https://image.user.test/v1beta/models/user-image:generateContent',
+          imageModel: 'user-image',
+          imageTimeoutMs: 234000,
+        },
+      },
+    });
+    const runtime = new CodexAgentRuntime(storage);
+    const result = await runtime.sendMessageStream({
+      user: 'Demo User',
+      projectId: project.id,
+      prompt: '$scene-skill build a compact workshop scene',
+    });
+
+    assert.equal(result.task.statusId, 'done');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.url, 'https://image.user.test/v1beta/models/user-image:generateContent');
+    assert.equal(requests[0]?.auth, 'Bearer sk-user-apiyi-direct');
+    assert.match(JSON.stringify(requests[0]?.body), /compact workshop scene/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousRoot === undefined) {
+      delete process.env.VISIONARY_NEW_PIPELINE_ROOT;
+    } else {
+      process.env.VISIONARY_NEW_PIPELINE_ROOT = previousRoot;
     }
     await cleanup();
   }
@@ -1942,6 +2162,10 @@ test('codex step apply action locks the selected main image without regenerating
       user: 'Demo User',
       projectId: project.id,
       sessionId: 'agent-session-1',
+      attemptId: 'attempt-1',
+      executionId: 'execution-1',
+      branchRevision: 4,
+      parentCandidateIds: [],
       stepKey: 'main-image',
       action: 'apply',
       selectedIndex: 1,
@@ -1962,6 +2186,10 @@ test('codex step apply action locks the selected main image without regenerating
     });
 
     assert.equal(result.sessionId, 'agent-session-1');
+    assert.equal(result.attemptId, 'attempt-1');
+    assert.equal(result.executionId, 'execution-1');
+    assert.equal(result.baseRevision, 4);
+    assert.deepEqual(result.parentCandidateIds, []);
     assert.equal(result.stepKey, 'main-image');
     assert.equal(result.action, 'apply');
     assert.equal(result.blockPatch.applied, true);
@@ -1979,6 +2207,45 @@ test('codex step apply action locks the selected main image without regenerating
       applied: true,
       actions: [],
     });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('codex step apply rejects incomplete object-image candidates', async () => {
+  const { storage, cleanup } = await createTempStorage();
+  try {
+    const project = await storage.createProject({
+      user: 'Demo User',
+      name: 'Incomplete Object Images Project',
+    });
+    const runtime = new CodexAgentRuntime(storage);
+
+    await assert.rejects(
+      () => runtime.handleStepAction({
+        user: 'Demo User',
+        projectId: project.id,
+        sessionId: 'agent-session-1',
+        stepKey: 'object-images',
+        action: 'apply',
+        selectedIndex: 0,
+        images: [
+          {
+            id: 'object_image_001',
+            relativePath: 'agent_history/assets/new_pipeline/object-images/object-1.png',
+            mimeType: 'image/png',
+            bytes: 1,
+            metadata: {
+              kind: 'object_image',
+              objectImageIncomplete: true,
+              objectImageExpectedCount: 2,
+              objectImageCount: 1,
+            },
+          },
+        ],
+      }),
+      /complete object-images are required before apply/,
+    );
   } finally {
     await cleanup();
   }

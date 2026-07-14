@@ -33,6 +33,7 @@ public/ort/
 dist/
 docs/*
 !docs/index.md
+!docs/trellis-parallel-generation-progress-design.zh.md
 !docs/guide/
 !docs/guide/**
 !docs/zh/

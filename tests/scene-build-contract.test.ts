@@ -6,6 +6,7 @@ import {
   isCanonicalAssetPath,
   normalizeSceneBuildAssetReference,
   normalizeSceneBuildStagePayload,
+  normalizeSceneBuildStepKey,
   normalizeSceneBuildStatusId,
   SCENE_BUILD_STEP_KEYS,
 } from '../src/server/scene-build-contract.ts';
@@ -13,11 +14,12 @@ import {
 const HASH_A = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 const HASH_B = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
 
-test('scene-build contract owns the five stage keys', () => {
+test('scene-build contract owns the staged scene keys', () => {
   assert.deepEqual([...SCENE_BUILD_STEP_KEYS], [
     'main-image',
     'top-view',
     'layout',
+    'object-images',
     'components-3d',
     'insert-scene',
   ]);
@@ -26,6 +28,9 @@ test('scene-build contract owns the five stage keys', () => {
 test('scene-build status normalization excludes camera-only statuses', () => {
   assert.equal(normalizeSceneBuildStatusId('pending'), 'pending');
   assert.equal(normalizeSceneBuildStatusId('running'), 'running');
+  assert.equal(normalizeSceneBuildStatusId('queuing'), 'queuing');
+  assert.equal(normalizeSceneBuildStatusId('TLE'), 'TLE');
+  assert.equal(normalizeSceneBuildStatusId('tle'), 'TLE');
   assert.equal(normalizeSceneBuildStatusId('complete'), 'done');
   assert.equal(normalizeSceneBuildStatusId('cancelled'), 'canceled');
   assert.equal(normalizeSceneBuildStatusId('error'), 'failed');
@@ -147,6 +152,14 @@ test('stage payload normalization accepts underscore MCP stage aliases', () => {
 
   assert.equal(payload?.stepKey, 'insert-scene');
   assert.equal(payload?.statusId, 'done');
+});
+
+test('scene-build step key normalization accepts persisted UI aliases', () => {
+  assert.equal(normalizeSceneBuildStepKey('objectImages'), 'object-images');
+  assert.equal(normalizeSceneBuildStepKey('object_images'), 'object-images');
+  assert.equal(normalizeSceneBuildStepKey('object-image'), 'object-images');
+  assert.equal(normalizeSceneBuildStepKey('components3D'), 'components-3d');
+  assert.equal(normalizeSceneBuildStepKey('insertScene'), 'insert-scene');
 });
 
 test('stage payload normalization rejects unknown stage keys and other workflows', () => {

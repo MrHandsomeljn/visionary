@@ -4,6 +4,7 @@ export const SCENE_BUILD_STEP_KEYS = [
   'main-image',
   'top-view',
   'layout',
+  'object-images',
   'components-3d',
   'insert-scene',
 ] as const;
@@ -11,8 +12,10 @@ export const SCENE_BUILD_STEP_KEYS = [
 export const SCENE_BUILD_STATUS_IDS = [
   'pending',
   'running',
+  'queuing',
   'done',
   'failed',
+  'TLE',
   'canceled',
 ] as const;
 
@@ -25,6 +28,31 @@ export const SCENE_BUILD_ACTION_IDS = [
 export type SceneBuildStepKey = typeof SCENE_BUILD_STEP_KEYS[number];
 export type SceneBuildStatusId = typeof SCENE_BUILD_STATUS_IDS[number];
 export type SceneBuildActionId = typeof SCENE_BUILD_ACTION_IDS[number];
+
+const SCENE_BUILD_STEP_KEY_ALIASES: Record<string, SceneBuildStepKey> = {
+  mainimage: 'main-image',
+  'main-image': 'main-image',
+  main_image: 'main-image',
+  topview: 'top-view',
+  'top-view': 'top-view',
+  top_view: 'top-view',
+  layout: 'layout',
+  objectimage: 'object-images',
+  objectimages: 'object-images',
+  'object-image': 'object-images',
+  'object-images': 'object-images',
+  object_image: 'object-images',
+  object_images: 'object-images',
+  component3d: 'components-3d',
+  components3d: 'components-3d',
+  'component-3d': 'components-3d',
+  'components-3d': 'components-3d',
+  component_3d: 'components-3d',
+  components_3d: 'components-3d',
+  insertscene: 'insert-scene',
+  'insert-scene': 'insert-scene',
+  insert_scene: 'insert-scene',
+};
 
 export interface SceneBuildAssetReference {
   assetId: string;
@@ -83,12 +111,17 @@ export function isSceneBuildStepKey(value: unknown): value is SceneBuildStepKey 
 }
 
 export function normalizeSceneBuildStepKey(value: unknown): SceneBuildStepKey | '' {
-  const normalized = normalizeNonEmptyString(value).replace(/_/g, '-');
-  return isSceneBuildStepKey(normalized) ? normalized : '';
+  const raw = normalizeNonEmptyString(value);
+  if (!raw) return '';
+  const normalized = raw.replace(/\s+/g, '-').replace(/_/g, '-').toLowerCase();
+  const compact = raw.replace(/[\s_-]+/g, '').toLowerCase();
+  return SCENE_BUILD_STEP_KEY_ALIASES[normalized] ?? SCENE_BUILD_STEP_KEY_ALIASES[compact] ?? '';
 }
 
 export function normalizeSceneBuildStatusId(value: unknown): SceneBuildStatusId | '' {
-  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  const raw = normalizeNonEmptyString(value);
+  if (raw.toUpperCase() === 'TLE') return 'TLE';
+  const normalized = raw.toLowerCase();
   if (SCENE_BUILD_STATUS_IDS.includes(normalized as SceneBuildStatusId)) {
     return normalized as SceneBuildStatusId;
   }

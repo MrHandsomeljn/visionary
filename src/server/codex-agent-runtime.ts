@@ -5,12 +5,21 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProjectStorage, ProjectStorageError } from './project-storage.ts';
+import {
+  components3DGenerationConfigToEnv,
+  type Components3DGenerationConfig,
+  type PipelineApiConfig,
+} from './components-3d-config.ts';
 import { generateMainImage, type MainImageApiConfigInput } from './mcp/new-pipeline-main-image-server.ts';
 import { generateTopView } from './mcp/new-pipeline-top-view-server.ts';
 import { generateLayout } from './mcp/new-pipeline-layout-server.ts';
-import { generateComponents3D } from './mcp/new-pipeline-components-3d-server.ts';
+import { generateObjectImages } from './mcp/new-pipeline-object-images-server.ts';
+import {
+  generateComponents3D,
+  type Components3DProgressEvent,
+} from './mcp/new-pipeline-components-3d-server.ts';
 import { generateInsertScene } from './mcp/new-pipeline-insert-scene-server.ts';
-import { SCENE_BUILD_STEP_KEYS, type SceneBuildStepKey } from './scene-build-contract.ts';
+import { SCENE_BUILD_STEP_KEYS, normalizeSceneBuildStepKey, type SceneBuildStepKey } from './scene-build-contract.ts';
 
 export interface CodexAgentMessageInput {
   user: string;
@@ -19,24 +28,37 @@ export interface CodexAgentMessageInput {
   threadId?: string;
   prompt: string;
   workflow?: string;
+  signal?: AbortSignal;
 }
 
 export interface CodexAgentStepActionInput {
   user: string;
   projectId: string;
   sessionId: string;
+  attemptId?: string;
+  executionId?: string;
   stepKey: string;
   action: string;
   prompt?: string;
   selectedIndex?: number;
   images?: unknown[];
   sourceImages?: unknown[];
+  branchRevision?: number;
+  parentCandidateIds?: unknown[];
+  activeContext?: unknown;
+  assetId?: string;
+  signal?: AbortSignal;
 }
 
 export interface CodexAgentStepActionResult {
   sessionId: string;
+  attemptId?: string;
+  executionId?: string;
   stepKey: string;
   action: string;
+  baseRevision?: number;
+  parentCandidateIds?: string[];
+  candidateResult?: Record<string, unknown>;
   blockPatch: {
     images: CodexGeneratedImage[];
     selectedIndex: number;
@@ -74,6 +96,7 @@ export interface CodexAgentMessageResult {
   events: CodexAgentEvent[];
   task: CodexAgentTaskState;
   images?: CodexGeneratedImage[];
+  candidateResult?: Record<string, unknown>;
 }
 
 export interface CodexGeneratedImage {
@@ -110,10 +133,16 @@ export interface CodexAgentTaskState {
   needsRender?: boolean;
   needsEvalRender?: boolean;
   renderStage?: string;
+  provider?: string;
+  assetProgress?: unknown;
 }
 
 export interface CodexAgentMessageStreamCallbacks {
   onEvent?: (event: CodexAgentEvent) => void | Promise<void>;
+  onTask?: (task: CodexAgentTaskState) => void | Promise<void>;
+}
+
+export interface CodexAgentStepActionStreamCallbacks {
   onTask?: (task: CodexAgentTaskState) => void | Promise<void>;
 }
 
@@ -132,6 +161,8 @@ interface CodexProjectEnvironment {
   codexHome: string;
   sessionIndexPath: string;
   childEnv: Record<string, string>;
+  components3DConfig: Components3DGenerationConfig;
+  pipelineApiConfig: PipelineApiConfig;
 }
 
 const CODEX_SESSION_INDEX_FILE = 'visionary_codex_sessions.json';
@@ -141,6 +172,7 @@ const DEFAULT_CODEX_TIMEOUT_MS = 10 * 60 * 1000;
 const NEW_PIPELINE_MAIN_IMAGE_MCP_NAME = 'visionary_new_pipeline_main_image';
 const NEW_PIPELINE_TOP_VIEW_MCP_NAME = 'visionary_new_pipeline_top_view';
 const NEW_PIPELINE_LAYOUT_MCP_NAME = 'visionary_new_pipeline_layout';
+const NEW_PIPELINE_OBJECT_IMAGES_MCP_NAME = 'visionary_new_pipeline_object_images';
 const NEW_PIPELINE_COMPONENTS_3D_MCP_NAME = 'visionary_new_pipeline_components_3d';
 const NEW_PIPELINE_INSERT_SCENE_MCP_NAME = 'visionary_new_pipeline_insert_scene';
 const NEW_PIPELINE_CAMERA_TRAJECTORY_MCP_NAME = 'visionary_new_pipeline_camera_trajectory';
@@ -151,6 +183,7 @@ const SUPPORTED_STEP_KEYS = SCENE_BUILD_STEP_KEYS;
 function codexStepLabel(stepKey: string): string {
   if (stepKey === 'top-view') return '俯视图';
   if (stepKey === 'layout') return 'layout';
+  if (stepKey === 'object-images') return '物体图片';
   if (stepKey === 'components-3d') return '组件 3D 资产';
   if (stepKey === 'insert-scene') return '最终场景';
   return '主图';
@@ -313,8 +346,70 @@ function mainImageApiConfigToEnv(config: MainImageApiConfigInput): Record<string
   return result;
 }
 
-function resolveMainImageApiConfig(): MainImageApiConfigInput {
-  return readMainImageApiConfig({ newPipelineRoot: resolveNewPipelineRoot() });
+function pipelineApiBaseForGemini(apiBase: string): string {
+  const base = String(apiBase || '').trim().replace(/\/+$/, '');
+  if (!base) return '';
+  return /\/v1$/i.test(base) ? base : `${base}/v1`;
+}
+
+function pipelineApiConfigToMainImageApiConfig(config?: PipelineApiConfig): MainImageApiConfigInput {
+  const result: MainImageApiConfigInput = {};
+  if (!config?.apiKey) return result;
+  if (config.imageUrl) result.url = config.imageUrl;
+  if (config.apiKey) result.apiKey = config.apiKey;
+  if (config.imageModel) result.model = config.imageModel;
+  if (config.imageTimeoutMs) result.timeoutMs = config.imageTimeoutMs;
+  return result;
+}
+
+function pipelineApiConfigToCameraLlmEnv(config?: PipelineApiConfig): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!config?.apiKey) return result;
+  if (config.apiKey) result.GENAI_API_KEY = config.apiKey;
+  if (config.apiBase) result.GENAI_API_BASE = config.apiBase;
+  if (config.apiProvider) result.LLM_API_PROVIDER = config.apiProvider;
+  if (config.modelName) result.LLM_MODEL_NAME = config.modelName;
+  return result;
+}
+
+function pipelineApiConfigToNewPipelineScriptEnv(config?: PipelineApiConfig): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!config?.apiKey) return result;
+  const geminiBaseUrl = pipelineApiBaseForGemini(config.apiBase);
+  if (config.apiKey) {
+    result.GENAI_API_KEY = config.apiKey;
+    result.GEMINI_API_KEY = config.apiKey;
+    result.GOOGLE_API_KEY = config.apiKey;
+  }
+  if (config.apiBase) result.GENAI_API_BASE = config.apiBase;
+  if (geminiBaseUrl) result.GEMINI_BASE_URL = geminiBaseUrl;
+  if (config.modelName) {
+    result.LLM_MODEL_NAME = config.modelName;
+    result.GEMINI_MODEL = config.modelName;
+  }
+  if (config.imageUrl) result.GEMINI_IMAGE_URL = config.imageUrl;
+  if (config.imageModel) result.GEMINI_IMAGE_MODEL = config.imageModel;
+  if (config.imageTimeoutMs) {
+    result.VISIONARY_IMAGE_GEN_TIMEOUT_MS = String(config.imageTimeoutMs);
+    result.IMAGE_GEN_TIMEOUT_MS = String(config.imageTimeoutMs);
+  }
+  const overrides: Record<string, string | number> = {};
+  if (config.apiKey) overrides.GEMINI_API_KEY = config.apiKey;
+  if (geminiBaseUrl) overrides.GEMINI_BASE_URL = geminiBaseUrl;
+  if (config.modelName) overrides.GEMINI_MODEL = config.modelName;
+  if (config.imageUrl) overrides.GEMINI_IMAGE_URL = config.imageUrl;
+  if (config.imageTimeoutMs) overrides.IMAGE_GEN_TIMEOUT = Math.max(1, Math.ceil(config.imageTimeoutMs / 1000));
+  if (Object.keys(overrides).length > 0) {
+    result.VISIONARY_NEW_PIPELINE_CONFIG_OVERRIDES = JSON.stringify(overrides);
+  }
+  return result;
+}
+
+function resolveMainImageApiConfig(pipelineApiConfig?: PipelineApiConfig): MainImageApiConfigInput {
+  return {
+    ...readMainImageApiConfig({ newPipelineRoot: resolveNewPipelineRoot() }),
+    ...pipelineApiConfigToMainImageApiConfig(pipelineApiConfig),
+  };
 }
 
 function buildNewPipelineMcpServerConfig(input: {
@@ -322,15 +417,29 @@ function buildNewPipelineMcpServerConfig(input: {
   serverPath: string;
   projectId: string;
   projectDir: string;
+  components3DConfig?: Components3DGenerationConfig;
+  pipelineApiConfig?: PipelineApiConfig;
 }): string {
   const rootDir = projectRootDir();
   const newPipelineRoot = resolveNewPipelineRoot();
   const trajectoryGenRoot = resolveTrajectoryGenRoot();
   const cameraLlmEnv = input.serverName === NEW_PIPELINE_CAMERA_TRAJECTORY_MCP_NAME
-    ? readCameraTrajectoryLlmConfig({ newPipelineRoot, trajectoryGenRoot })
+    ? {
+      ...readCameraTrajectoryLlmConfig({ newPipelineRoot, trajectoryGenRoot }),
+      ...pipelineApiConfigToCameraLlmEnv(input.pipelineApiConfig),
+    }
     : {};
   const mainImageEnv = input.serverName === NEW_PIPELINE_MAIN_IMAGE_MCP_NAME
-    ? mainImageApiConfigToEnv(readMainImageApiConfig({ newPipelineRoot }))
+    ? mainImageApiConfigToEnv(resolveMainImageApiConfig(input.pipelineApiConfig))
+    : {};
+  const newPipelineScriptEnv = (
+    input.serverName === NEW_PIPELINE_TOP_VIEW_MCP_NAME
+    || input.serverName === NEW_PIPELINE_LAYOUT_MCP_NAME
+  )
+    ? pipelineApiConfigToNewPipelineScriptEnv(input.pipelineApiConfig)
+    : {};
+  const components3DEnv = input.serverName === NEW_PIPELINE_COMPONENTS_3D_MCP_NAME && input.components3DConfig
+    ? components3DGenerationConfigToEnv(input.components3DConfig)
     : {};
   return [
     `[mcp_servers.${input.serverName}]`,
@@ -348,6 +457,8 @@ function buildNewPipelineMcpServerConfig(input: {
     `VISIONARY_NEW_PIPELINE_PYTHON = "${escapeTomlBasicString(path.join(newPipelineRoot, '.venv', 'bin', 'python'))}"`,
     `VISIONARY_TRAJECTORY_GEN_ROOT = "${escapeTomlBasicString(trajectoryGenRoot)}"`,
     ...Object.entries(mainImageEnv).map(([key, value]) => `${key} = "${escapeTomlBasicString(value)}"`),
+    ...Object.entries(newPipelineScriptEnv).map(([key, value]) => `${key} = "${escapeTomlBasicString(value)}"`),
+    ...Object.entries(components3DEnv).map(([key, value]) => `${key} = "${escapeTomlBasicString(value)}"`),
     ...Object.entries(cameraLlmEnv).map(([key, value]) => `${key} = "${escapeTomlBasicString(value)}"`),
     '',
   ].join('\n');
@@ -367,6 +478,10 @@ function newPipelineMcpServers(): Array<{ name: string; serverPath: string }> {
     {
       name: NEW_PIPELINE_LAYOUT_MCP_NAME,
       serverPath: path.join(rootDir, 'src', 'server', 'mcp', 'new-pipeline-layout-server.ts'),
+    },
+    {
+      name: NEW_PIPELINE_OBJECT_IMAGES_MCP_NAME,
+      serverPath: path.join(rootDir, 'src', 'server', 'mcp', 'new-pipeline-object-images-server.ts'),
     },
     {
       name: NEW_PIPELINE_COMPONENTS_3D_MCP_NAME,
@@ -459,6 +574,8 @@ async function appendVisionaryMcpServers(input: {
   codexHome: string;
   projectId: string;
   projectDir: string;
+  components3DConfig?: Components3DGenerationConfig;
+  pipelineApiConfig?: PipelineApiConfig;
 }): Promise<void> {
   if (process.env.VISIONARY_NEW_PIPELINE_MCP_ENABLED === '0') {
     return;
@@ -472,6 +589,8 @@ async function appendVisionaryMcpServers(input: {
       serverPath: server.serverPath,
       projectId: input.projectId,
       projectDir: input.projectDir,
+      components3DConfig: input.components3DConfig,
+      pipelineApiConfig: input.pipelineApiConfig,
     });
     if (next.includes(`[mcp_servers.${server.name}]`)) {
       next = ensureNewPipelineMcpApprovalMode(next, server.name);
@@ -494,7 +613,7 @@ function buildVisionarySceneSkillMarkdown(): string {
     '',
     '# Visionary Scene Build',
     '',
-    'Use this skill to start Visionary\'s project-scoped staged scene pipeline: main-image -> top-view -> layout -> components-3d -> insert-scene.',
+    'Use this skill to start Visionary\'s project-scoped staged scene pipeline: main-image -> top-view -> layout -> object-images -> components-3d -> insert-scene.',
     '',
     '## Workflow',
     '',
@@ -676,10 +795,13 @@ export async function resolveCodexProjectEnvironment(
   const codexHome = path.join(projectDir, 'codex_home');
   await mkdir(codexHome, { recursive: true });
   const childEnv = await prepareCodexHomeFromSource({ codexHome });
+  const userApiConfig = await storage.getUserApiConfig(user);
   await appendVisionaryMcpServers({
     codexHome,
     projectId: project.id,
     projectDir,
+    components3DConfig: userApiConfig.components3D,
+    pipelineApiConfig: userApiConfig.pipelineApi,
   });
   await syncVisionaryProjectSkills({ codexHome });
   return {
@@ -687,6 +809,8 @@ export async function resolveCodexProjectEnvironment(
     codexHome,
     sessionIndexPath: path.join(codexHome, CODEX_SESSION_INDEX_FILE),
     childEnv,
+    components3DConfig: userApiConfig.components3D,
+    pipelineApiConfig: userApiConfig.pipelineApi,
   };
 }
 
@@ -773,12 +897,47 @@ function findSourceImageByStep(sourceImages: unknown[], stepKey: string): CodexG
   return null;
 }
 
+function sourceImagesFromActiveContext(value: unknown): unknown[] {
+  const activeContext = readRecord(value);
+  const candidatesByStep = readRecord(activeContext.candidatesByStep);
+  const sourceImages: unknown[] = [];
+  for (const [stepKey, candidateValue] of Object.entries(candidatesByStep)) {
+    const candidate = readRecord(candidateValue);
+    const images = Array.isArray(candidate.images) ? candidate.images : [];
+    if (images.length <= 0) continue;
+    const selectedIndex = Math.max(0, Math.min(images.length - 1, Number(candidate.selectedImageIndex) || 0));
+    const selectedImage = readRecord(images[selectedIndex] || images[0]);
+    sourceImages.push({ ...selectedImage, sourceStepKey: stepKey });
+  }
+  return sourceImages;
+}
+
 function layoutBboxJsonPathFromImage(image: CodexGeneratedImage): string {
   const bboxJsonPath = typeof image.metadata?.bboxJsonPath === 'string' ? image.metadata.bboxJsonPath.trim() : '';
   if (!bboxJsonPath) {
-    throw new ProjectStorageError('BAD_REQUEST', 'layout bbox json is required for components-3d');
+    throw new ProjectStorageError('BAD_REQUEST', 'layout bbox json is required for object-images/components-3d');
   }
   return bboxJsonPath;
+}
+
+function objectImagePathsFromImage(image: CodexGeneratedImage): string[] {
+  const references = Array.isArray(image.metadata?.objectImageReferences)
+    ? image.metadata.objectImageReferences
+    : [];
+  const paths = references
+    .map((value) => {
+      const record = readRecord(value);
+      return typeof record.path === 'string' ? record.path.trim() : '';
+    })
+    .filter(Boolean);
+  const directPath = typeof image.relativePath === 'string' ? image.relativePath.trim() : '';
+  return Array.from(new Set([...paths, directPath].filter(Boolean)));
+}
+
+function objectImagesDirFromImage(image: CodexGeneratedImage): string {
+  return typeof image.metadata?.objectImagesOutputDir === 'string' && image.metadata.objectImagesOutputDir.trim()
+    ? image.metadata.objectImagesOutputDir.trim()
+    : (typeof image.metadata?.objectImagesDir === 'string' ? image.metadata.objectImagesDir.trim() : '');
 }
 
 function frontOrientationPathFromComponents3D(image: CodexGeneratedImage): string {
@@ -988,7 +1147,8 @@ function getTaskSignalPayload(event: CodexAgentEvent): Record<string, unknown> {
 function normalizeTaskStatusId(value: unknown): string {
   const statusId = String(value || '').trim();
   if (!statusId) return '';
-  if (['running', 'rendering', 'done', 'skipped', 'canceled', 'pending', 'failed'].includes(statusId)) return statusId;
+  if (statusId === 'TLE') return 'TLE';
+  if (['running', 'rendering', 'queuing', 'done', 'skipped', 'canceled', 'pending', 'failed'].includes(statusId)) return statusId;
   if (statusId === 'complete') return 'done';
   if (statusId === 'cancelled' || statusId === 'cancel') return 'canceled';
   if (statusId === 'fail' || statusId === 'error') return 'failed';
@@ -1257,6 +1417,7 @@ function runCodexExec(input: {
   sandbox: string;
   timeoutMs?: number;
   onEvent?: (event: CodexAgentEvent) => void;
+  signal?: AbortSignal;
 }): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const args = buildCodexExecArgs({
@@ -1278,12 +1439,27 @@ function runCodexExec(input: {
     let stderr = '';
     let pendingStdoutLine = '';
     let settled = false;
+    const handleAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.kill('SIGTERM');
+      const error = new Error('Codex execution aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
+      input.signal?.removeEventListener('abort', handleAbort);
       child.kill('SIGTERM');
       reject(new ProjectStorageError('BAD_REQUEST', 'Codex timed out'));
     }, input.timeoutMs ?? DEFAULT_CODEX_TIMEOUT_MS);
+    if (input.signal?.aborted) {
+      handleAbort();
+      return;
+    }
+    input.signal?.addEventListener('abort', handleAbort, { once: true });
 
     const emitStdoutEvents = (text: string, flush = false) => {
       pendingStdoutLine += text;
@@ -1315,12 +1491,14 @@ function runCodexExec(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      input.signal?.removeEventListener('abort', handleAbort);
       reject(new ProjectStorageError('BAD_REQUEST', `Failed to start Codex CLI: ${error.message}`));
     });
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      input.signal?.removeEventListener('abort', handleAbort);
       if (input.onEvent && pendingStdoutLine.trim()) {
         emitStdoutEvents('\n', true);
       }
@@ -1342,28 +1520,52 @@ export class CodexAgentRuntime {
     this.storage = storage;
   }
 
-  async handleStepAction(input: CodexAgentStepActionInput): Promise<CodexAgentStepActionResult> {
-    const stepKey = String(input.stepKey || '').trim();
+  async handleStepAction(
+    input: CodexAgentStepActionInput,
+    callbacks: CodexAgentStepActionStreamCallbacks = {},
+  ): Promise<CodexAgentStepActionResult> {
+    const rawStepKey = String(input.stepKey || '').trim();
+    const stepKey = normalizeSceneBuildStepKey(rawStepKey);
     const action = String(input.action || '').trim();
-    if (!SUPPORTED_STEP_KEYS.includes(stepKey as SceneBuildStepKey)) {
-      throw new ProjectStorageError('BAD_REQUEST', 'unsupported step key');
+    if (!stepKey || !SUPPORTED_STEP_KEYS.includes(stepKey as SceneBuildStepKey)) {
+      throw new ProjectStorageError('BAD_REQUEST', `unsupported step key: ${rawStepKey || '(empty)'}`);
     }
-    if (!['retry', 'apply', 'cancel'].includes(action)) {
+    if (!['retry', 'retry-asset', 'apply', 'cancel'].includes(action)) {
       throw new ProjectStorageError('BAD_REQUEST', 'unsupported step action');
+    }
+    if (action === 'retry-asset' && (stepKey !== 'components-3d' || !String(input.assetId || '').trim())) {
+      throw new ProjectStorageError('BAD_REQUEST', 'components-3d assetId is required for asset retry');
     }
 
     const env = await resolveCodexProjectEnvironment(this.storage, input.user, input.projectId);
     const currentImages = Array.isArray(input.images)
       ? input.images.map((image) => normalizeCodexGeneratedImage(image)).filter((image): image is CodexGeneratedImage => Boolean(image))
       : [];
-    const rawSourceImages = Array.isArray(input.sourceImages) ? input.sourceImages : [];
+    const activeContextSourceImages = sourceImagesFromActiveContext(input.activeContext);
+    const rawSourceImages = activeContextSourceImages.length > 0
+      ? activeContextSourceImages
+      : Array.isArray(input.sourceImages) ? input.sourceImages : [];
     const sourceImages = rawSourceImages
       .map((image) => normalizeCodexGeneratedImage(image))
       .filter((image): image is CodexGeneratedImage => Boolean(image));
     const selectedIndex = Math.max(0, Math.min(currentImages.length - 1, Number(input.selectedIndex) || 0));
     const stepLabel = codexStepLabel(stepKey);
+    const executionEnvelope = {
+      ...(input.attemptId ? { attemptId: input.attemptId } : {}),
+      ...(input.executionId ? { executionId: input.executionId } : {}),
+      ...(Number.isFinite(Number(input.branchRevision)) ? { baseRevision: Number(input.branchRevision) } : {}),
+      parentCandidateIds: Array.isArray(input.parentCandidateIds)
+        ? input.parentCandidateIds.map((value) => String(value || '')).filter(Boolean)
+        : [],
+    };
 
     if (action === 'apply') {
+      if (stepKey === 'object-images' && (
+        currentImages.length <= 0
+        || currentImages.some((image) => image.metadata?.objectImageIncomplete === true)
+      )) {
+        throw new ProjectStorageError('BAD_REQUEST', 'complete object-images are required before apply');
+      }
       const stepState = createCodexAgentStepState({
         sessionId: input.sessionId,
         stepKey,
@@ -1374,6 +1576,7 @@ export class CodexAgentRuntime {
       });
       return {
         sessionId: input.sessionId,
+        ...executionEnvelope,
         stepKey,
         action,
         blockPatch: {
@@ -1402,6 +1605,7 @@ export class CodexAgentRuntime {
       });
       return {
         sessionId: input.sessionId,
+        ...executionEnvelope,
         stepKey,
         action,
         blockPatch: {
@@ -1435,22 +1639,60 @@ export class CodexAgentRuntime {
         components3DModelPaths: components3DModelPathReferencesFromImage(components3DImage),
         runLabel: sceneRunLabel(prompt),
       });
-    } else if (stepKey === 'top-view' || stepKey === 'layout' || stepKey === 'components-3d') {
+    } else if (stepKey === 'top-view' || stepKey === 'layout' || stepKey === 'object-images' || stepKey === 'components-3d') {
       const sourceImage = findSourceImageByStep(rawSourceImages, 'main-image') || sourceImages[0];
       if (!sourceImage) {
         throw new ProjectStorageError('BAD_REQUEST', `main image is required for ${stepKey}`);
       }
       if (stepKey === 'components-3d') {
-        const layoutImage = findSourceImageByStep(rawSourceImages, 'layout');
-        if (!layoutImage) {
-          throw new ProjectStorageError('BAD_REQUEST', 'layout is required for components-3d');
+        const objectImagesImage = findSourceImageByStep(rawSourceImages, 'object-images');
+        if (!objectImagesImage) {
+          throw new ProjectStorageError('BAD_REQUEST', 'object-images is required for components-3d');
         }
         result = await generateComponents3D({
           projectRoot: env.projectDir,
           projectId: input.projectId,
           mainImagePath: sourceImage.relativePath,
+          layoutBboxJsonPath: layoutBboxJsonPathFromImage(objectImagesImage),
+          objectImagePaths: objectImagePathsFromImage(objectImagesImage),
+          objectImagesDir: objectImagesDirFromImage(objectImagesImage),
+          runLabel: sceneRunLabel(prompt),
+          components3DConfig: env.components3DConfig,
+          signal: input.signal,
+          user: input.user,
+          attemptId: String(input.attemptId || ''),
+          stepExecutionId: String(input.executionId || ''),
+          targetAssetId: action === 'retry-asset' ? String(input.assetId || '') : undefined,
+          onProgress: (event: Components3DProgressEvent) => callbacks.onTask?.({
+            started: true,
+            title: event.title,
+            progress: event.progress,
+            statusText: event.message,
+            statusId: normalizeTaskStatusId(event.statusId) || (event.progress >= 1 ? 'done' : 'running'),
+            stage: 'components-3d',
+            provider: event.provider,
+            assetProgress: event.assetProgress,
+            images: event.provider === 'trellis.2' && Array.isArray(event.images)
+              ? event.images
+                .map((image) => normalizeCodexGeneratedImage(image))
+                .filter((image): image is CodexGeneratedImage => Boolean(image))
+              : undefined,
+            events: [],
+          }),
+        });
+      } else if (stepKey === 'object-images') {
+        const layoutImage = findSourceImageByStep(rawSourceImages, 'layout');
+        if (!layoutImage) {
+          throw new ProjectStorageError('BAD_REQUEST', 'layout is required for object-images');
+        }
+        result = await generateObjectImages({
+          projectRoot: env.projectDir,
+          projectId: input.projectId,
+          mainImagePath: sourceImage.relativePath,
           layoutBboxJsonPath: layoutBboxJsonPathFromImage(layoutImage),
           runLabel: sceneRunLabel(prompt),
+          env: pipelineApiConfigToNewPipelineScriptEnv(env.pipelineApiConfig),
+          forceRegenerate: action === 'retry',
         });
       } else if (stepKey === 'layout') {
         const topViewImage = findSourceImageByStep(rawSourceImages, 'top-view');
@@ -1463,6 +1705,7 @@ export class CodexAgentRuntime {
           mainImagePath: sourceImage.relativePath,
           topViewPath: topViewImage.relativePath,
           runLabel: sceneRunLabel(prompt),
+          env: pipelineApiConfigToNewPipelineScriptEnv(env.pipelineApiConfig),
         });
       } else if (stepKey === 'top-view') {
         result = await generateTopView({
@@ -1470,6 +1713,7 @@ export class CodexAgentRuntime {
           projectId: input.projectId,
           mainImagePath: sourceImage.relativePath,
           runLabel: sceneRunLabel(prompt),
+          env: pipelineApiConfigToNewPipelineScriptEnv(env.pipelineApiConfig),
         });
       } else {
         throw new ProjectStorageError('BAD_REQUEST', `unsupported step: ${stepKey}`);
@@ -1481,7 +1725,8 @@ export class CodexAgentRuntime {
         prompt,
         draws: 1,
         runLabel: sceneRunLabel(prompt),
-        apiConfig: resolveMainImageApiConfig(),
+        apiConfig: resolveMainImageApiConfig(env.pipelineApiConfig),
+        signal: input.signal,
       });
     }
     const nextImages = Array.isArray(result.images)
@@ -1495,24 +1740,29 @@ export class CodexAgentRuntime {
       ? taskPayload.message.trim()
       : '';
     const taskStatusId = normalizeTaskStatusId(taskPayload.statusId || taskPayload.statusKey || taskPayload.state);
-    if (taskStatusId === 'failed') {
+    const hasStructuredIncompleteResult = stepKey === 'object-images'
+      && taskStatusId === 'failed'
+      && result.incomplete === true;
+    if (taskStatusId === 'failed' && !hasStructuredIncompleteResult) {
       throw new ProjectStorageError('BAD_REQUEST', taskStatusText || `${stepLabel}生成失败`);
     }
-    if (stepKey !== 'insert-scene' && images.length <= 0) {
+    if (stepKey !== 'insert-scene' && images.length <= 0 && !hasStructuredIncompleteResult) {
       throw new ProjectStorageError('BAD_REQUEST', taskStatusText
         ? `${stepLabel}生成未返回可展示结果：${taskStatusText}`
         : `${stepLabel}生成未返回可展示结果`);
     }
+    const actions = hasStructuredIncompleteResult ? ['cancel', 'retry'] : ['cancel', 'retry', 'apply'];
     const stepState = createCodexAgentStepState({
       sessionId: input.sessionId,
       stepKey,
       images,
       selectedIndex: Math.max(0, images.length - 1),
       applied: false,
-      actions: ['cancel', 'retry', 'apply'],
+      actions,
     });
     return {
       sessionId: input.sessionId,
+      ...executionEnvelope,
       stepKey,
       action,
       blockPatch: {
@@ -1527,10 +1777,17 @@ export class CodexAgentRuntime {
             : nextImages.length > 0
             ? `已生成 ${nextImages.length} 张${stepLabel}`
             : '重试完成，未返回新图片',
-        statusId: 'done',
+        statusId: hasStructuredIncompleteResult ? 'failed' : 'done',
         value: 1,
         indeterminate: false,
         ...(hasSceneInsertPlan ? { sceneInsertPlan } : {}),
+      },
+      candidateResult: {
+        images,
+        selectedImageIndex: stepState.selectedIndex,
+        ...(hasSceneInsertPlan ? { sceneInsertPlan } : {}),
+        ...(Object.keys(taskPayload).length > 0 ? { structuredData: taskPayload } : {}),
+        ...(result.dependencyTree ? { dependencyTree: result.dependencyTree } : {}),
       },
       stepState,
     };
@@ -1561,7 +1818,8 @@ export class CodexAgentRuntime {
           prompt: imagePrompt,
           draws: 1,
           runLabel: sceneRunLabel(scenePrompt),
-          apiConfig: resolveMainImageApiConfig(),
+          apiConfig: resolveMainImageApiConfig(env.pipelineApiConfig),
+          signal: input.signal,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1581,6 +1839,7 @@ export class CodexAgentRuntime {
           events: [],
           task,
           images: [],
+          candidateResult: {},
         };
       }
       const images = Array.isArray(result.images)
@@ -1617,6 +1876,12 @@ export class CodexAgentRuntime {
         events: [],
         task,
         images,
+        candidateResult: {
+          images,
+          selectedImageIndex: 0,
+          structuredData: result,
+          ...(result.dependencyTree ? { dependencyTree: result.dependencyTree } : {}),
+        },
       };
     }
     const index = await readSessionIndex(env.sessionIndexPath);
@@ -1644,6 +1909,7 @@ export class CodexAgentRuntime {
           void callbacks.onTask?.(task);
         }
       },
+      signal: input.signal,
     });
     const parsed = parseCodexExecJsonl(stdout);
     const task = extractCodexTaskState(parsed.events);

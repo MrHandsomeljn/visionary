@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { buildComponents3DObjectName } from '../components-3d-model-naming.ts';
+import type { Components3DGenerationProvider } from '../components-3d-config.ts';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -179,6 +181,27 @@ function usesEmbeddedGlbPlacement(frontOrientation: JsonRecord): boolean {
   if (String(frontOrientation.placement_mode || '') === 'glb_embedded_transform') return true;
   const items = Array.isArray(frontOrientation.items) ? frontOrientation.items.map(readRecord) : [];
   return items.some((item) => String(item.placement_mode || '') === 'glb_embedded_transform');
+}
+
+function components3DProvider(value: unknown): Components3DGenerationProvider {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'hunyuan') return 'hunyuan';
+  if (normalized === 'trellis.2' || normalized === 'trellis2' || normalized === 'trellis-2') return 'trellis.2';
+  return 'mocked';
+}
+
+async function loadComponents3DGenerationIdentity(
+  hunyuanDir: string,
+  frontOrientation: JsonRecord,
+): Promise<{ provider: Components3DGenerationProvider; model: string }> {
+  const modelIndexPath = path.join(hunyuanDir, 'model_index.json');
+  const modelIndex = await pathExists(modelIndexPath)
+    ? readRecord(await readJsonFile(modelIndexPath))
+    : {};
+  return {
+    provider: components3DProvider(frontOrientation.provider || modelIndex.provider),
+    model: String(frontOrientation.model || modelIndex.model || ''),
+  };
 }
 
 function parseImageDirIndex(filePath: string): number {
@@ -549,6 +572,7 @@ export async function generateInsertScene(input: {
 
   emitProgress(title, '读取组件 3D 资产位姿', 0.35);
   const rawFrontOrientation = readRecord(await readJsonFile(frontOrientationPath));
+  const generationIdentity = await loadComponents3DGenerationIdentity(hunyuanDir, rawFrontOrientation);
   const warnings: string[] = [];
   const items = [];
   let imageSize: ImageSize = { width: 1000, height: 1000 };
@@ -627,7 +651,12 @@ export async function generateInsertScene(input: {
       });
       const relativeModelPath = modelPath.path;
       const modelExtension = path.extname(match.glbPath) || '.glb';
-      const name = `${String(index + 1).padStart(2, '0')}-${safeSegment(match.layoutObject.label, path.basename(match.glbPath, modelExtension))}${modelExtension}`;
+      const name = `${buildComponents3DObjectName({
+        ordinal: index + 1,
+        label: match.layoutObject.label,
+        provider: generationIdentity.provider,
+        model: generationIdentity.model,
+      })}${modelExtension}`;
       items.push({
         id: `scene_object_${String(index + 1).padStart(3, '0')}`,
         type: 'glb',

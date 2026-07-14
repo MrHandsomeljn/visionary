@@ -322,11 +322,15 @@ async function writeGeneratedImages(input: {
   batchOutputDir: string;
   draws: number;
   config: ReturnType<typeof resolveImageApiConfig>;
+  signal?: AbortSignal;
 }): Promise<GeneratedAsset[]> {
   const assets: GeneratedAsset[] = [];
   const pairs: Array<{ index: number; image: string; prompt: string; mimeType: string; canonicalAssetPath: string }> = [];
   for (let index = 1; index <= input.draws; index += 1) {
     const controller = new AbortController();
+    const abortFromParent = () => controller.abort();
+    if (input.signal?.aborted) controller.abort();
+    input.signal?.addEventListener('abort', abortFromParent, { once: true });
     const timer = setTimeout(() => controller.abort(), input.config.timeoutMs);
     try {
       const image = await requestGeminiImage({
@@ -360,6 +364,7 @@ async function writeGeneratedImages(input: {
         canonicalAssetPath: canonicalAssetReference.path,
       });
     } finally {
+      input.signal?.removeEventListener('abort', abortFromParent);
       clearTimeout(timer);
     }
   }
@@ -379,6 +384,7 @@ export async function generateMainImage(input: {
   draws: number;
   runLabel: string;
   apiConfig?: MainImageApiConfigInput;
+  signal?: AbortSignal;
 }): Promise<JsonRecord> {
   const title = '主图生成';
   const runId = nowRunId();
@@ -399,6 +405,7 @@ export async function generateMainImage(input: {
     batchOutputDir,
     draws: input.draws,
     config,
+    signal: input.signal,
   });
 
   emitProgress(title, '记录输出依赖树', 0.9);

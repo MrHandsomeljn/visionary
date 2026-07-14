@@ -121,6 +121,20 @@ export class ProjectApiClient {
         return parseApiResponse(response);
     }
 
+    async validateProjectName({ user, name }) {
+        const response = await fetch(`${this.baseUrl}/validate-name`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                name,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
     async getProject(user, projectId) {
         const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}${buildQuery({ user })}`);
         return parseApiResponse(response);
@@ -314,6 +328,7 @@ export class ProjectApiClient {
         onEvent,
         onTask,
         onMessage,
+        signal,
     }) {
         const response = await fetch('/api/codex-agent/messages/stream', {
             method: 'POST',
@@ -329,6 +344,7 @@ export class ProjectApiClient {
                 prompt,
                 workflow,
             }),
+            signal,
         });
         return parseSseResponse(response, { onEvent, onTask, onMessage });
     }
@@ -337,12 +353,19 @@ export class ProjectApiClient {
         user,
         projectId,
         sessionId,
+        attemptId,
+        executionId,
         stepKey,
         action,
         prompt,
         selectedIndex,
         images,
         sourceImages,
+        branchRevision,
+        parentCandidateIds,
+        activeContext,
+        assetId,
+        signal,
     }) {
         const response = await fetch('/api/agent/step-action', {
             method: 'POST',
@@ -353,12 +376,92 @@ export class ProjectApiClient {
                 user,
                 projectId,
                 sessionId,
+                attemptId,
+                executionId,
                 stepKey,
                 action,
                 prompt,
                 selectedIndex,
                 images,
                 sourceImages,
+                branchRevision,
+                parentCandidateIds,
+                activeContext,
+                assetId,
+            }),
+            signal,
+        });
+        return parseApiResponse(response);
+    }
+
+    async sendCodexAgentStepActionStream({
+        user,
+        projectId,
+        sessionId,
+        attemptId,
+        executionId,
+        stepKey,
+        action,
+        prompt,
+        selectedIndex,
+        images,
+        sourceImages,
+        branchRevision,
+        parentCandidateIds,
+        activeContext,
+        assetId,
+        onTask,
+        onMessage,
+        signal,
+    }) {
+        const response = await fetch('/api/agent/step-action/stream', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                accept: 'text/event-stream',
+            },
+            body: JSON.stringify({
+                user,
+                projectId,
+                sessionId,
+                attemptId,
+                executionId,
+                stepKey,
+                action,
+                prompt,
+                selectedIndex,
+                images,
+                sourceImages,
+                branchRevision,
+                parentCandidateIds,
+                activeContext,
+                assetId,
+            }),
+            signal,
+        });
+        return parseSseResponse(response, { onTask, onMessage });
+    }
+
+    async cancelAgentExecution({
+        user,
+        projectId,
+        kind,
+        attemptId,
+        stepExecutionId,
+        assetExecutionId,
+    }) {
+        const response = await fetch('/api/agent/cancel', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                projectId,
+                kind,
+                attemptId,
+                stepExecutionId,
+                assetExecutionId,
             }),
         });
         return parseApiResponse(response);
@@ -378,6 +481,25 @@ export class ProjectApiClient {
             body: JSON.stringify({
                 user,
                 apiKey,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async getUserApiConfig(user) {
+        const response = await fetch(`/api/user-api-config${buildQuery({ user })}`);
+        return parseApiResponse(response);
+    }
+
+    async saveUserApiConfig({ user, config }) {
+        const response = await fetch('/api/user-api-config', {
+            method: 'PUT',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                config,
             }),
         });
         return parseApiResponse(response);

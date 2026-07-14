@@ -39,6 +39,33 @@ const VISIONARY_ROOT = path.resolve(__dirname, '../../..');
 const REPO_ROOT = path.resolve(VISIONARY_ROOT, '..');
 const NEW_PIPELINE_ROOT = path.resolve(process.env.VISIONARY_NEW_PIPELINE_ROOT || path.join(REPO_ROOT, 'third-party', 'new_pipeline'));
 const PYTHON_BIN = path.join(NEW_PIPELINE_ROOT, '.venv', 'bin', 'python');
+const CONFIG_OVERRIDE_BOOTSTRAP = `
+import importlib.util
+import json
+import os
+import pathlib
+import runpy
+import sys
+import types
+
+script_arg = sys.argv[1]
+script_path = pathlib.Path(script_arg)
+if not script_path.is_absolute():
+    script_path = pathlib.Path.cwd() / script_path
+sys.argv = [str(script_path)] + sys.argv[2:]
+module = types.ModuleType("config")
+config_path = pathlib.Path.cwd() / "config.py"
+if config_path.exists():
+    spec = importlib.util.spec_from_file_location("config", config_path)
+    if spec and spec.loader:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+overrides = json.loads(os.environ.get("VISIONARY_NEW_PIPELINE_CONFIG_OVERRIDES", "{}") or "{}")
+for key, value in overrides.items():
+    setattr(module, key, value)
+sys.modules["config"] = module
+runpy.run_path(str(script_path), run_name="__main__")
+`;
 
 function nowRunId(): string {
   return new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '_');
@@ -105,11 +132,22 @@ function emitProgress(title: string, message: string, progress: number): void {
   process.stderr.write(`${JSON.stringify(payload)}\n`);
 }
 
-async function runPythonScript(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+async function runPythonScript(
+  args: string[],
+  cwd: string,
+  extraEnv: Record<string, string | undefined> = {},
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(PYTHON_BIN, args, {
+    const env = {
+      ...process.env,
+      ...extraEnv,
+    };
+    const pythonArgs = env.VISIONARY_NEW_PIPELINE_CONFIG_OVERRIDES
+      ? ['-c', CONFIG_OVERRIDE_BOOTSTRAP, ...args]
+      : args;
+    const child = spawn(PYTHON_BIN, pythonArgs, {
       cwd,
-      env: process.env,
+      env,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -274,6 +312,7 @@ export async function generateTopView(input: {
   projectId: string;
   mainImagePath: string;
   runLabel: string;
+  env?: Record<string, string | undefined>;
 }): Promise<JsonRecord> {
   const title = '俯视图生成';
   const root = path.resolve(input.projectRoot);
@@ -300,7 +339,7 @@ export async function generateTopView(input: {
     '--workers',
     '1',
     '--force-regenerate',
-  ], NEW_PIPELINE_ROOT);
+  ], NEW_PIPELINE_ROOT, input.env);
 
   emitProgress(title, '记录输出依赖树', 0.9);
   const topViewIndex = await readTopViewIndex(topViewsDir);
