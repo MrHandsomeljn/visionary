@@ -54,4 +54,8 @@ certs/*.key
 agent_history/
 
 # models/
+# User-local API credentials/config
+api_config.json
+codex_auth.json
+
 模型/
