@@ -10,6 +10,11 @@ import {
   resolvePythonCommand,
   shouldEnableRouterLink,
 } from './scripts/router-dev-link-utils.mjs';
+import {
+  DEV_BOOT_PROGRESS_EVENT,
+  normalizeDevBootProgressDetail,
+} from './src/editor/dev-boot-progress.ts';
+import { createClientModuleLoadErrorPlugin } from './src/server/client-module-load-error.ts';
 import { createProjectApiPlugin } from './src/server/project-api.ts';
 
 const srcDir = path.resolve(__dirname, 'src').replace(/\\/g, '/');
@@ -96,6 +101,19 @@ const routerDevLinkPlugin = (env: Record<string, string>): PluginOption => ({
     if (server.httpServer) {
       server.httpServer.once('listening', printOnce);
     }
+  },
+});
+
+const devBootProgressPlugin = (): PluginOption => ({
+  name: 'visionary-dev-boot-progress',
+  apply: 'serve',
+  configureServer(server) {
+    server.ws.on(DEV_BOOT_PROGRESS_EVENT, (payload) => {
+      const detail = normalizeDevBootProgressDetail(payload?.detail);
+      if (!detail) return;
+
+      server.config.logger.info(`[visionary] ${detail}`, { timestamp: true });
+    });
   },
 });
 
@@ -237,7 +255,14 @@ export default defineConfig(({ mode }) => {
       ]
     }
   },
-    plugins: [enforceChunkSizeLimit(), basicSsl(), routerDevLinkPlugin(env), createProjectApiPlugin()],
+    plugins: [
+      enforceChunkSizeLimit(),
+      basicSsl(),
+      routerDevLinkPlugin(env),
+      devBootProgressPlugin(),
+      createClientModuleLoadErrorPlugin(),
+      createProjectApiPlugin(),
+    ],
     publicDir: 'public',
     resolve: {
       alias: {

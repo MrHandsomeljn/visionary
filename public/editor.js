@@ -73,6 +73,7 @@ const dom = {
     btnUserSession: document.getElementById('btnUserSession'),
     btnCollapsedUserSession: document.getElementById('btnCollapsedUserSession'),
     agentContextSummary: document.getElementById('agentContextSummary'),
+import { reportDevBootProgress } from '../src/editor/dev-boot-progress.ts';
     btnAgentClearConversation: document.getElementById('btnAgentClearConversation'),
     agentMessageScroll: document.querySelector('.agent-message-scroll'),
     agentMessageList: document.getElementById('agentMessageList'),
@@ -860,6 +861,7 @@ const UI_TEXT = {
             switchToChinese: '切换到中文',
             toggle: '切换语言',
         },
+            bootReady: '编辑器已就绪。',
         canvas: {
             loading: '加载中...',
             noWebgpuTitle: '不支持 WebGPU',
@@ -1552,6 +1554,7 @@ const UI_TEXT = {
                     characterConceptAlt: 'Character concept preview',
                     characterPreview: 'Character model preview',
                 },
+            bootReady: 'Editor ready.',
                 'camera-direct': {
                     title: 'Camera Direct',
                     short: 'Camera',
@@ -13792,6 +13795,7 @@ async function uploadServerProjectAssets({ user, projectId, assetInputs = [], ex
             continue;
         }
         console.debug('[ProjectSync] uploadServerProjectAssets:file:start', {
+    reportDevBootProgress(detail);
             user,
             projectId,
             sourcePath: asset?.sourcePath || '',
@@ -17798,3 +17802,4 @@ async function init() {
 
 // 启动应用
 document.addEventListener('DOMContentLoaded', init);
+    setBootLoadingStatus(t('loading.bootReady'));
