@@ -171,6 +171,28 @@ export function appendAgentSessionRetryAttempt(session, attempt) {
     };
 }
 
+export function appendAgentSessionWholeTaskRetryAttempt(session, attempt) {
+    if (!session || session.kind !== 'session' || !attempt) return session;
+    const activeIndex = Math.min(
+        Math.max(0, Number(session.activeAttemptIndex) || 0),
+        Math.max(0, (session.attempts || []).length - 1)
+    );
+    const attempts = (session.attempts || []).map((item, index) => (
+        index === activeIndex
+            ? { ...item, status: INTERRUPTED_ATTEMPT_STATUS, updatedAt: new Date().toISOString() }
+            : item
+    ));
+    attempts.push({ ...attempt });
+    return {
+        ...session,
+        attempts,
+        activeAttemptIndex: attempts.length - 1,
+        archiveState: DEFAULT_ARCHIVE_STATE,
+        collapsed: false,
+        updatedAt: new Date().toISOString(),
+    };
+}
+
 export function patchAgentSessionAttemptBlock(session, {
     attemptId,
     blockId,
@@ -331,6 +353,7 @@ export function resolveAgentSessionPagerItems({
 }
 
 export function resolveAgentSessionActionAvailability({
+    workflow = '',
     archiveState = DEFAULT_ARCHIVE_STATE,
     attemptStatus = 'running',
 } = {}) {
@@ -349,8 +372,8 @@ export function resolveAgentSessionActionAvailability({
 
     return {
         canCancel: true,
-        canRetry: !isRunning,
-        canApply: isComplete && !isFailed && !isInterrupted,
+        canRetry: workflow === 'scene-build' || !isRunning,
+        canApply: workflow !== 'scene-build' && isComplete && !isFailed && !isInterrupted,
     };
 }
 

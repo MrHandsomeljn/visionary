@@ -248,6 +248,9 @@ function collectCanonicalAssetReferences(value, output = new Map(), seen = new W
         'attempts',
         'workflows',
         'sceneInsertPlan',
+        'sceneBranch',
+        'candidatesById',
+        'context',
     ].forEach((key) => {
         collectCanonicalAssetReferences(record[key], output, seen);
     });
@@ -699,6 +702,9 @@ export class AgentSessionStore {
                     status: block.status || '',
                     status_text: block.statusText || '',
                     value: Number(block.value || 0),
+                    ...(block.assetProgress && typeof block.assetProgress === 'object'
+                        ? { asset_progress: block.assetProgress }
+                        : {}),
                 });
                 for (const [index, image] of cloneArray(block.images).entries()) {
                     content.push({

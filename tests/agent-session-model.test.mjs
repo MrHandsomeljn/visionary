@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
     appendAgentSessionRetryAttempt,
+    appendAgentSessionWholeTaskRetryAttempt,
     buildAgentAssetPath,
     createAgentGenerationAttempt,
     createAgentSession,
@@ -106,6 +107,28 @@ test('retry replaces an interrupted active attempt instead of appending a new ve
     assert.equal(retried.activeAttemptIndex, 0);
     assert.equal(getAgentSessionActiveAttempt(retried).id, 'attempt-retry');
     assert.equal(getAgentSessionActiveAttempt(retried).text, '重新生成');
+});
+
+test('whole task retry preserves the interrupted attempt and appends a new version', () => {
+    const session = createAgentSession({
+        workflow: 'scene-build',
+        prompt: '生成场景',
+        attempt: createAgentGenerationAttempt({
+            id: 'attempt-running',
+            workflow: 'scene-build',
+            status: 'running',
+        }),
+    });
+    const retried = appendAgentSessionWholeTaskRetryAttempt(session, createAgentGenerationAttempt({
+        id: 'attempt-retry',
+        workflow: 'scene-build',
+        status: 'running',
+    }));
+
+    assert.equal(retried.attempts.length, 2);
+    assert.equal(retried.attempts[0].status, 'interrupted');
+    assert.equal(retried.activeAttemptIndex, 1);
+    assert.equal(retried.attempts[1].id, 'attempt-retry');
 });
 
 test('cancel/apply archive state collapses the session into a compact tag model', () => {
@@ -227,6 +250,21 @@ test('running attempts disable retry and apply while keeping cancel available', 
         {
             canCancel: true,
             canRetry: false,
+            canApply: false,
+        }
+    );
+});
+
+test('scene tasks allow whole-task retry while running and never expose task apply', () => {
+    assert.deepEqual(
+        resolveAgentSessionActionAvailability({
+            workflow: 'scene-build',
+            archiveState: 'active',
+            attemptStatus: 'running',
+        }),
+        {
+            canCancel: true,
+            canRetry: true,
             canApply: false,
         }
     );

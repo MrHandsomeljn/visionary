@@ -187,6 +187,22 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
                                 status: 'complete',
                                 createdAt: '2026-04-12T00:00:02.000Z',
                                 updatedAt: '2026-04-12T00:00:03.000Z',
+                                sceneBranch: {
+                                    version: 1,
+                                    revision: 1,
+                                    candidatesById: {
+                                        'candidate-main': {
+                                            id: 'candidate-main',
+                                            stepKey: 'main-image',
+                                            parentCandidateIds: [],
+                                            context: {
+                                                canonicalAssetReferences: [CANONICAL_IMAGE_REF],
+                                            },
+                                        },
+                                    },
+                                    candidateIdsByStep: { 'main-image': ['candidate-main'] },
+                                    activeCandidateByStep: { 'main-image': 'candidate-main' },
+                                },
                                 blocks: [
                                     {
                                         id: 'progress-1',
@@ -266,6 +282,8 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
     assert.equal(Array.isArray(persisted.references?.links), true);
     assert.equal(persisted.workflows.length, 1);
     assert.equal(persisted.workflows[0].workflow, 'scene-build');
+    assert.equal(persisted.workflows[0].items[1].attempts[0].sceneBranch.version, 1);
+    assert.ok(persisted.asset_index.some((item) => item.assetId === CANONICAL_IMAGE_REF.assetId));
     assert.equal(persisted.workflows[0].label, '场景');
     const persistedSteps = persisted.workflows[0].items[1].attempts[0].steps;
     assert.equal(persistedSteps.length, 1);
