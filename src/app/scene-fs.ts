@@ -76,6 +76,7 @@ export interface AssetEntry {
   name: string;
   type: SceneAssetType;
   path: string;                  // Root-relative path like "models/a/bunny.ply"
+  visible?: boolean;
   dynamic?: boolean;             // ONNX: true = per-frame updates
   transform?: {
     position?: [number, number, number];
@@ -136,6 +137,11 @@ export class SceneFS {
   attachWorkspace(handle: FileSystemDirectoryHandle, permission: 'read' | 'readwrite' = 'readwrite'): void {
     this.rootHandle = handle;
     this.permissions = permission;
+  }
+
+  clearWorkspace(): void {
+    this.rootHandle = null;
+    this.permissions = null;
   }
 
   /**
@@ -519,9 +525,11 @@ export class SceneFS {
     if (Array.isArray((raw as any).scenes)) {
       const scenes = (raw as any).scenes as Array<{ models: Array<any> }>;
       const assets: AssetEntry[] = [];
+      let sourceModelCount = 0;
 
       for (const scene of scenes) {
         const models = Array.isArray(scene?.models) ? scene.models : [];
+        sourceModelCount += models.length;
         for (const m of models) {
           const source = this.resolveModelSource(m);
           if (!source) {
@@ -549,6 +557,10 @@ export class SceneFS {
             entry.dynamic = !!m.dynamic;
           }
 
+          if (typeof m?.visible === 'boolean') {
+            entry.visible = m.visible;
+          }
+
           const trs = Array.isArray(m?.trs) ? m.trs : undefined;
           if (trs) {
             entry.transform = {
@@ -568,6 +580,8 @@ export class SceneFS {
                 Number(trs[2][2] ?? 1)
               ] as [number, number, number] : undefined
             };
+          } else if (m?.transform && typeof m.transform === 'object') {
+            entry.transform = m.transform;
           }
 
           if (m?.extras) {
@@ -581,7 +595,15 @@ export class SceneFS {
       }
 
       if (assets.length === 0) {
-        return null;
+        if (sourceModelCount > 0) {
+          return null;
+        }
+        return {
+          version: 1,
+          meta: raw.meta ?? { app: 'VisionaryEditor', createdAt: new Date().toISOString() },
+          env: raw.env ?? {},
+          assets: []
+        };
       }
 
       return {
@@ -622,6 +644,10 @@ export class SceneFS {
           entry.dynamic = !!asset.dynamic;
         }
 
+        if (typeof asset.visible === 'boolean') {
+          entry.visible = asset.visible;
+        }
+
         if (asset.transform) {
           entry.transform = asset.transform;
         }
@@ -636,7 +662,15 @@ export class SceneFS {
       }
 
       if (normalizedAssets.length === 0) {
-        return null;
+        if (raw.assets.length > 0) {
+          return null;
+        }
+        return {
+          version: 1,
+          meta: raw.meta ?? { app: 'VisionaryEditor', createdAt: new Date().toISOString() },
+          env: raw.env ?? {},
+          assets: []
+        };
       }
 
       return {
@@ -962,7 +996,7 @@ export class SceneFS {
     // Wait for all assets to load
     await Promise.allSettled(loadPromises);
     
-    // Find newly loaded models and apply transforms
+    // Find newly loaded models and apply persisted per-asset state.
     await this.applyTransforms(app, manifest.assets, modelsBefore);
 
     return {
@@ -973,7 +1007,7 @@ export class SceneFS {
   }
 
   /**
-   * Apply transforms to newly loaded models
+   * Apply persisted asset state to newly loaded models.
    */
   private async applyTransforms(app: App, assets: AssetEntry[], modelsBefore: Set<string>): Promise<void> {
     // Wait a bit for models to be fully registered
@@ -984,9 +1018,9 @@ export class SceneFS {
     
     console.log(`SceneFS: Applying transforms to ${newModels.length} newly loaded models`);
     
-    // Match models to assets by name and apply transforms
+    // Match models to assets by name and apply transforms / visibility.
     for (const asset of assets) {
-      if (!asset.transform) continue;
+      if (!asset.transform && typeof asset.visible !== 'boolean') continue;
       
       // Find matching model by name (prefer exact match, fallback to partial)
       let matchingModel = newModels.find(m => m.name === asset.name);
@@ -999,31 +1033,51 @@ export class SceneFS {
         continue;
       }
       
+      const appModelApi = app as any;
       const modelManager = app.getModelManager();
       const transform = asset.transform;
       
       // Apply position
-      if (transform.position) {
-        modelManager.setModelPosition(matchingModel.id, ...transform.position);
+      if (transform?.position) {
+        if (typeof appModelApi.setModelPosition === 'function') {
+          appModelApi.setModelPosition(matchingModel.id, ...transform.position);
+        } else {
+          modelManager.setModelPosition(matchingModel.id, ...transform.position);
+        }
       }
       
       // Apply rotation (convert from radians)
-      if (transform.rotationEulerRad) {
-        modelManager.setModelRotation(matchingModel.id, ...transform.rotationEulerRad);
+      if (transform?.rotationEulerRad) {
+        if (typeof appModelApi.setModelRotation === 'function') {
+          appModelApi.setModelRotation(matchingModel.id, ...transform.rotationEulerRad);
+        } else {
+          modelManager.setModelRotation(matchingModel.id, ...transform.rotationEulerRad);
+        }
       }
       
       // Apply scale
-      if (transform.scale) {
+      if (transform?.scale) {
         // Use uniform scale if all components are equal, otherwise use vector scale
         const [sx, sy, sz] = transform.scale;
-        if (sx === sy && sy === sz) {
+        const uniformScale = sx === sy && sy === sz ? sx : (sx + sy + sz) / 3;
+        if (typeof appModelApi.setModelScale === 'function') {
+          appModelApi.setModelScale(matchingModel.id, uniformScale);
+        } else if (sx === sy && sy === sz) {
           modelManager.setModelScale(matchingModel.id, sx);
         } else {
           modelManager.setModelScale(matchingModel.id, transform.scale);
         }
       }
+
+      if (typeof asset.visible === 'boolean') {
+        if (typeof appModelApi.setModelVisibility === 'function') {
+          appModelApi.setModelVisibility(matchingModel.id, asset.visible);
+        } else if (typeof modelManager.setModelVisibility === 'function') {
+          modelManager.setModelVisibility(matchingModel.id, asset.visible);
+        }
+      }
       
-      console.log(`SceneFS: Applied transforms to ${matchingModel.name}`);
+      console.log(`SceneFS: Applied persisted asset state to ${matchingModel.name}`);
     }
   }
 
@@ -1096,7 +1150,8 @@ export class SceneFS {
       const asset: AssetEntry = {
         name: unifiedName,
         type: model.modelType,
-        path: unifiedName // 按当前规范，模型文件与 scene.json 同目录
+        path: unifiedName, // 按当前规范，模型文件与 scene.json 同目录
+        visible: model.visible !== false,
       };
       
       // Add dynamic flag for ONNX models

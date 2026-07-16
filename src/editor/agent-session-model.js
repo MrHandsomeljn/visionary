@@ -1,4 +1,5 @@
 const DEFAULT_ARCHIVE_STATE = 'active';
+const INTERRUPTED_ATTEMPT_STATUS = 'interrupted';
 
 function createId(prefix = 'agent') {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -14,6 +15,10 @@ function cloneBlocks(blocks = []) {
     return Array.isArray(blocks)
         ? blocks.map((block) => ({ ...block }))
         : [];
+}
+
+function cloneSteps(steps = []) {
+    return cloneBlocks(steps);
 }
 
 function normalizeArchiveSummary(summary = {}, fallbackLabel = '') {
@@ -53,20 +58,31 @@ export function createAgentGenerationAttempt({
     workflow = 'scene-build',
     text = '',
     blocks = [],
+    steps = null,
     status = 'running',
     promptSuggestions = null,
     createdAt = new Date().toISOString(),
 } = {}) {
+    const normalizedBlocks = cloneBlocks(blocks);
+    const normalizedSteps = Array.isArray(steps) ? cloneSteps(steps) : null;
     return {
         id,
         workflow,
         text,
-        blocks: cloneBlocks(blocks),
+        blocks: normalizedBlocks,
+        ...(normalizedSteps ? { steps: normalizedSteps } : {}),
         status,
         promptSuggestions: Array.isArray(promptSuggestions) ? [...promptSuggestions] : null,
         createdAt,
         updatedAt: createdAt,
     };
+}
+
+export function getAgentAttemptStepBlocks(attempt) {
+    if (Array.isArray(attempt?.steps) && attempt.steps.length > 0) {
+        return attempt.steps;
+    }
+    return Array.isArray(attempt?.blocks) ? attempt.blocks : [];
 }
 
 export function createAgentSession({
@@ -126,7 +142,47 @@ export function replaceAgentSessionActiveAttempt(session, nextAttempt) {
 
 export function appendAgentSessionRetryAttempt(session, attempt) {
     if (!session || session.kind !== 'session' || !attempt) return session;
+    const activeIndex = Math.min(
+        Math.max(0, Number(session.activeAttemptIndex) || 0),
+        Math.max(0, (session.attempts || []).length - 1)
+    );
+    const activeAttempt = session.attempts?.[activeIndex] || null;
+    if (activeAttempt?.status === INTERRUPTED_ATTEMPT_STATUS) {
+        const attempts = (session.attempts || []).map((item, index) => (
+            index === activeIndex ? { ...attempt } : item
+        ));
+        return {
+            ...session,
+            attempts,
+            activeAttemptIndex: activeIndex,
+            archiveState: DEFAULT_ARCHIVE_STATE,
+            collapsed: false,
+            updatedAt: new Date().toISOString(),
+        };
+    }
     const attempts = [...(session.attempts || []), { ...attempt }];
+    return {
+        ...session,
+        attempts,
+        activeAttemptIndex: attempts.length - 1,
+        archiveState: DEFAULT_ARCHIVE_STATE,
+        collapsed: false,
+        updatedAt: new Date().toISOString(),
+    };
+}
+
+export function appendAgentSessionWholeTaskRetryAttempt(session, attempt) {
+    if (!session || session.kind !== 'session' || !attempt) return session;
+    const activeIndex = Math.min(
+        Math.max(0, Number(session.activeAttemptIndex) || 0),
+        Math.max(0, (session.attempts || []).length - 1)
+    );
+    const attempts = (session.attempts || []).map((item, index) => (
+        index === activeIndex
+            ? { ...item, status: INTERRUPTED_ATTEMPT_STATUS, updatedAt: new Date().toISOString() }
+            : item
+    ));
+    attempts.push({ ...attempt });
     return {
         ...session,
         attempts,
@@ -147,11 +203,15 @@ export function patchAgentSessionAttemptBlock(session, {
         ...session,
         attempts: (session.attempts || []).map((attempt) => {
             if (attempt.id !== attemptId) return attempt;
+            const patchBlockList = (blocks = []) => (
+                (blocks || []).map((block) => (
+                    block.id === blockId ? { ...block, ...patch } : block
+                ))
+            );
             return {
                 ...attempt,
-                blocks: (attempt.blocks || []).map((block) => (
-                    block.id === blockId ? { ...block, ...patch } : block
-                )),
+                blocks: patchBlockList(attempt.blocks || []),
+                ...(Array.isArray(attempt.steps) ? { steps: patchBlockList(attempt.steps) } : {}),
                 updatedAt: new Date().toISOString(),
             };
         }),
@@ -164,6 +224,7 @@ export function updateAgentSessionAttempt(session, {
     text,
     status,
     blocks,
+    steps,
     promptSuggestions,
 } = {}) {
     if (!session || session.kind !== 'session' || !attemptId) return session;
@@ -176,6 +237,7 @@ export function updateAgentSessionAttempt(session, {
                 ...(text !== undefined ? { text: String(text ?? '') } : {}),
                 ...(status !== undefined ? { status } : {}),
                 ...(blocks !== undefined ? { blocks: cloneBlocks(blocks) } : {}),
+                ...(steps !== undefined ? { steps: cloneSteps(steps) } : {}),
                 ...(promptSuggestions !== undefined
                     ? {
                         promptSuggestions: Array.isArray(promptSuggestions)
@@ -291,6 +353,7 @@ export function resolveAgentSessionPagerItems({
 }
 
 export function resolveAgentSessionActionAvailability({
+    workflow = '',
     archiveState = DEFAULT_ARCHIVE_STATE,
     attemptStatus = 'running',
 } = {}) {
@@ -303,14 +366,24 @@ export function resolveAgentSessionActionAvailability({
     }
 
     const isRunning = attemptStatus === 'running';
+    const isInterrupted = attemptStatus === INTERRUPTED_ATTEMPT_STATUS;
     const isComplete = attemptStatus === 'complete';
     const isFailed = attemptStatus === 'failed';
 
     return {
         canCancel: true,
-        canRetry: !isRunning,
-        canApply: isComplete && !isFailed,
+        canRetry: workflow === 'scene-build' || !isRunning,
+        canApply: workflow !== 'scene-build' && isComplete && !isFailed && !isInterrupted,
     };
+}
+
+export function normalizeAgentAttemptStatus(status = 'running') {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'interrupted') return INTERRUPTED_ATTEMPT_STATUS;
+    if (normalized === 'canceled' || normalized === 'cancelled') return 'canceled';
+    if (normalized === 'complete' || normalized === 'completed') return 'complete';
+    if (normalized === 'failed' || normalized === 'error') return 'failed';
+    return 'running';
 }
 
 function sanitizeExtension(value) {

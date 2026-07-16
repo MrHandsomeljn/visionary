@@ -12,9 +12,54 @@ export class EnvMapHelper {
      * @param url HDR 文件路径
      * @returns Promise<THREE.Texture> 加载的纹理对象
      */
-    public static async loadHDRTexture(url: string): Promise<THREE.Texture> {
+    public static async loadHDRTexture(url: string): Promise<THREE.Texture | null> {
+        if (!url) return null;
         const loader = new RGBELoader();
-        const texture = await loader.loadAsync(url);
+        let buffer: ArrayBuffer;
+        try {
+            const response = await fetch(url);
+            if (!response.ok) {
+                console.warn(`[EnvMapHelper] HDR 加载失败: ${url} (${response.status})`);
+                return null;
+            }
+            buffer = await response.arrayBuffer();
+        } catch (error) {
+            console.warn('[EnvMapHelper] HDR 请求失败:', error);
+            return null;
+        }
+
+        let texData: any;
+        try {
+            texData = loader.parse(buffer);
+        } catch (error) {
+            console.warn('[EnvMapHelper] HDR 解析失败:', error);
+            return null;
+        }
+        if (!texData) return null;
+
+        const texture = new THREE.DataTexture();
+        if (texData.image !== undefined) {
+            texture.image = texData.image;
+        } else if (texData.data !== undefined) {
+            texture.image.width = texData.width;
+            texture.image.height = texData.height;
+            texture.image.data = texData.data;
+        } else {
+            console.warn('[EnvMapHelper] HDR 数据无图像内容:', url);
+            return null;
+        }
+
+        texture.wrapS = texData.wrapS ?? THREE.ClampToEdgeWrapping;
+        texture.wrapT = texData.wrapT ?? THREE.ClampToEdgeWrapping;
+        texture.magFilter = texData.magFilter ?? THREE.LinearFilter;
+        texture.minFilter = texData.minFilter ?? THREE.LinearFilter;
+        texture.anisotropy = texData.anisotropy ?? 1;
+        texture.colorSpace = texData.colorSpace ?? THREE.LinearSRGBColorSpace;
+        texture.flipY = texData.flipY ?? true;
+        if (texData.format !== undefined) texture.format = texData.format;
+        if (texData.type !== undefined) texture.type = texData.type;
+        texture.generateMipmaps = texData.generateMipmaps ?? false;
+        texture.needsUpdate = true;
         texture.mapping = THREE.EquirectangularReflectionMapping;
         return texture;
     }
@@ -189,4 +234,3 @@ export class EnvMapHelper {
         }
     }
 }
-

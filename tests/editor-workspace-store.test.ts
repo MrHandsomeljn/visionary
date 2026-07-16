@@ -55,6 +55,27 @@ test('store starts clean without workspace handle', () => {
   assert.deepEqual(state, expected);
 });
 
+test('SceneFS can clear an attached workspace binding', () => {
+  const sceneFs = new SceneFS();
+  const workspaceHandle = { name: 'Draft Workspace' } as FileSystemDirectoryHandle;
+
+  sceneFs.attachWorkspace(workspaceHandle, 'readwrite');
+  assert.equal(sceneFs.getWorkspaceHandle(), workspaceHandle);
+  assert.deepEqual(sceneFs.getWorkspaceInfo(), {
+    name: 'Draft Workspace',
+    permission: 'readwrite',
+    writable: true,
+  });
+
+  sceneFs.clearWorkspace();
+  assert.equal(sceneFs.getWorkspaceHandle(), null);
+  assert.deepEqual(sceneFs.getWorkspaceInfo(), {
+    name: null,
+    permission: null,
+    writable: false,
+  });
+});
+
 test('markDirty queues one autosave and does not run concurrent saves', async () => {
   const firstSave = createDeferred<void>();
   const calls: Array<ReturnType<typeof createWorkspaceSnapshot>> = [];
@@ -270,6 +291,82 @@ function createSceneManifest(label: string): SceneManifest {
   };
 }
 
+function createEmptySceneLoadApp() {
+  return {
+    getModels: () => [],
+    getModelManager: () => ({
+      setModelPosition() {},
+      setModelRotation() {},
+      setModelScale() {},
+    }),
+  };
+}
+
+function createRecordingSceneLoadApp() {
+  const calls: Array<Array<unknown>> = [];
+  const models: Array<{
+    id: string;
+    name: string;
+    visible: boolean;
+    position?: { x: number; y: number; z: number };
+    rotation?: { x: number; y: number; z: number };
+    scale?: number;
+  }> = [];
+  const getModel = (id: string) => models.find((model) => model.id === id);
+
+  return {
+    calls,
+    models,
+    getModels: () => models,
+    getModelManager: () => ({
+      setModelPosition(id: string, x: number, y: number, z: number) {
+        calls.push(['manager.setModelPosition', id, x, y, z]);
+      },
+      setModelRotation(id: string, x: number, y: number, z: number) {
+        calls.push(['manager.setModelRotation', id, x, y, z]);
+      },
+      setModelScale(id: string, scale: number | [number, number, number]) {
+        calls.push(['manager.setModelScale', id, scale]);
+      },
+      setModelVisibility(id: string, visible: boolean) {
+        calls.push(['manager.setModelVisibility', id, visible]);
+      },
+    }),
+    async loadONNXModel(source: string, name: string, staticInference: boolean) {
+      calls.push(['loadONNXModel', source, name, staticInference]);
+      models.push({
+        id: `${name}-id`,
+        name,
+        visible: true,
+      });
+    },
+    setModelPosition(id: string, x: number, y: number, z: number) {
+      calls.push(['app.setModelPosition', id, x, y, z]);
+      const model = getModel(id);
+      if (model) model.position = { x, y, z };
+      return Boolean(model);
+    },
+    setModelRotation(id: string, x: number, y: number, z: number) {
+      calls.push(['app.setModelRotation', id, x, y, z]);
+      const model = getModel(id);
+      if (model) model.rotation = { x, y, z };
+      return Boolean(model);
+    },
+    setModelScale(id: string, scale: number) {
+      calls.push(['app.setModelScale', id, scale]);
+      const model = getModel(id);
+      if (model) model.scale = scale;
+      return Boolean(model);
+    },
+    setModelVisibility(id: string, visible: boolean) {
+      calls.push(['app.setModelVisibility', id, visible]);
+      const model = getModel(id);
+      if (model) model.visible = visible;
+      return Boolean(model);
+    },
+  };
+}
+
 test('workspace metadata reflects selected writable workspace', async () => {
   const directory = new MockDirectoryHandle('workspace-A');
   (globalThis as any).window = {
@@ -285,6 +382,99 @@ test('workspace metadata reflects selected writable workspace', async () => {
     permission: 'readwrite',
     writable: true,
   });
+});
+
+test('SceneFS accepts an initialized blank assets manifest', async () => {
+  const sceneFs = new SceneFS();
+  const result = await sceneFs.loadScene(createEmptySceneLoadApp() as any, {
+    sceneData: {
+      version: 2,
+      meta: {
+        app: 'VisionaryEditor',
+        createdAt: '2026-06-09T00:00:00.000Z',
+      },
+      assets: [],
+    },
+  });
+
+  assert.equal(result.loadedAssetCount, 0);
+  assert.equal(result.failedAssetCount, 0);
+  assert.equal(result.totalAssetCount, 0);
+  assert.deepEqual(result.manifest?.assets, []);
+});
+
+test('SceneFS accepts a blank unified scenes manifest', async () => {
+  const sceneFs = new SceneFS();
+  const result = await sceneFs.loadScene(createEmptySceneLoadApp() as any, {
+    sceneData: {
+      scenes: [
+        { models: [] },
+        { models: [] },
+      ],
+      meta: {
+        app: 'VisionaryEditor',
+        createdAt: '2026-06-09T00:00:00.000Z',
+      },
+    },
+  });
+
+  assert.equal(result.loadedAssetCount, 0);
+  assert.equal(result.failedAssetCount, 0);
+  assert.equal(result.totalAssetCount, 0);
+  assert.deepEqual(result.manifest?.assets, []);
+});
+
+test('SceneFS keeps server scene asset visibility and applies transform through app model setters', async () => {
+  const sceneFs = new SceneFS();
+  const app = createRecordingSceneLoadApp();
+  const result = await sceneFs.loadScene(app as any, {
+    sceneData: {
+      version: 2,
+      assets: [
+        {
+          name: 'Cloud Model.onnx',
+          type: 'onnx',
+          path: '/api/projects/project-id/files/assets/cloud-model.onnx',
+          visible: false,
+          transform: {
+            position: [1.25, -2.5, 3.75],
+            rotationEulerRad: [0.1, 0.2, 0.3],
+            scale: [2, 2, 2],
+          },
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.loadedAssetCount, 1);
+  assert.equal(result.manifest?.assets[0]?.visible, false);
+  assert.deepEqual(result.manifest?.assets[0]?.transform?.position, [1.25, -2.5, 3.75]);
+  assert.deepEqual(app.models[0], {
+    id: 'Cloud Model.onnx-id',
+    name: 'Cloud Model.onnx',
+    visible: false,
+    position: { x: 1.25, y: -2.5, z: 3.75 },
+    rotation: { x: 0.1, y: 0.2, z: 0.3 },
+    scale: 2,
+  });
+  assert.ok(app.calls.some((call) => call[0] === 'app.setModelPosition'));
+  assert.ok(app.calls.some((call) => call[0] === 'app.setModelVisibility' && call[2] === false));
+  assert.equal(app.calls.some((call) => String(call[0]).startsWith('manager.')), false);
+});
+
+test('SceneFS still rejects non-empty manifests with no loadable assets', async () => {
+  const sceneFs = new SceneFS();
+  await assert.rejects(
+    () => sceneFs.loadScene(createEmptySceneLoadApp() as any, {
+      sceneData: {
+        version: 2,
+        assets: [
+          { type: 'ply' },
+        ],
+      },
+    }),
+    /Unsupported scene data format/,
+  );
 });
 
 test('saveWorkspaceSnapshot writes temp manifest before scene.json commit', async () => {

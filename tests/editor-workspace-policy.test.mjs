@@ -82,6 +82,37 @@ test('local scene loading first opens a local folder and only prompts for worksp
   assert.match(body, /resetAgentConversation\(\);/);
 });
 
+test('scene loading restores saved canvas camera pose after model and timeline restoration', async () => {
+  const source = await readEditorSource();
+  const localBody = getFunctionBody(source, 'async function loadScene()');
+  const snapshotStart = source.indexOf('async function loadSceneFromSnapshot(raw, options = {})');
+  const snapshotEnd = source.indexOf('async function openServerProject', snapshotStart);
+  assert.ok(snapshotStart >= 0, 'expected to find loadSceneFromSnapshot');
+  assert.ok(snapshotEnd > snapshotStart, 'expected to find loadSceneFromSnapshot source range');
+  const snapshotBody = source.slice(snapshotStart, snapshotEnd);
+
+  const localModelLoadIndex = localBody.indexOf('const loadedModel = await app.loadModel');
+  const localTimelineIndex = localBody.indexOf('const loadedTimeline = applySceneTimelineSnapshot');
+  const localRestoreIndex = localBody.indexOf('restoreSavedCameraPose(raw?.env)');
+  assert.ok(localModelLoadIndex >= 0, 'expected local scene load to load models');
+  assert.ok(localTimelineIndex >= 0, 'expected local scene load to apply timeline');
+  assert.ok(localRestoreIndex > localModelLoadIndex, 'local scene load must restore camera pose after model auto-framing');
+  assert.ok(localRestoreIndex > localTimelineIndex, 'local scene load must restore camera pose after timeline state');
+  assert.doesNotMatch(
+    localBody.slice(0, localModelLoadIndex),
+    /restoreSavedCameraPose/,
+    'local scene load must not restore camera pose before model loading'
+  );
+
+  const snapshotLoadIndex = snapshotBody.indexOf('const loadResult = await sceneFs.loadScene');
+  const snapshotTimelineIndex = snapshotBody.indexOf('applySceneTimelineSnapshot(timeline)');
+  const snapshotRestoreIndex = snapshotBody.indexOf('restoreSavedCameraPose(raw?.env)');
+  assert.ok(snapshotLoadIndex >= 0, 'expected snapshot scene load to delegate to SceneFS');
+  assert.ok(snapshotTimelineIndex >= 0, 'expected snapshot scene load to apply timeline');
+  assert.ok(snapshotRestoreIndex > snapshotLoadIndex, 'snapshot scene load must restore camera pose after model auto-framing');
+  assert.ok(snapshotRestoreIndex > snapshotTimelineIndex, 'snapshot scene load must restore camera pose after timeline state');
+});
+
 test('editor exposes a lightweight workspace status indicator in the toolbar', async () => {
   const [html, css, js] = await Promise.all([
     readFile(new URL('../public/editor.html', import.meta.url), 'utf8'),
@@ -96,7 +127,10 @@ test('editor exposes a lightweight workspace status indicator in the toolbar', a
   assert.match(css, /\.workspace-status-dot/);
   assert.match(js, /function updateWorkspaceStatusIndicator\(\)/);
   assert.match(js, /function isServerProjectSessionActive\(\)/);
+  assert.match(js, /function isDraftWorkspaceMode\(\)/);
   assert.match(js, /function isLocalWorkspaceSyncMode\(\)/);
+  assert.match(js, /return !isServerProjectSessionActive\(\) && !isDraftWorkspaceMode\(\);/);
+  assert.match(js, /if \(isDraftWorkspaceMode\(\)\) \{[\s\S]*label: combinedDirty \? t\('workspaceStatus\.unsavedDraft'\) : t\('workspaceStatus\.noLocalWorkspace'\),[\s\S]*detail: t\('workspaceStatus\.deletedProjectDraft'\),/);
   assert.match(js, /navigator\.onLine/);
   assert.match(js, /lastSavedAt/);
   assert.match(js, /workspace\.name \? t\('workspaceStatus\.localOnly'\) : t\('workspaceStatus\.noLocalWorkspace'\)/);
@@ -168,6 +202,22 @@ test('workspace asset materialization progress uses a non-blocking loading overl
   assert.match(source, /t\('loading\.savingAssets', \{ current: i \+ 1, total: models\.length \}\),[\s\S]*\{ passive: true \}/);
   assert.match(css, /\.loading-overlay\.loading-overlay-passive/);
   assert.match(css, /pointer-events:\s*none;/);
+});
+
+test('startup loading overlay shows the current initialization step', async () => {
+  const [html, css, source] = await Promise.all([
+    readFile(new URL('../public/editor.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/editor.css', import.meta.url), 'utf8'),
+    readEditorSource(),
+  ]);
+
+  assert.match(html, /id="bootLoadingOverlay"[\s\S]*class="loading-detail" data-i18n="loading\.bootPreparing"/);
+  assert.match(css, /\.loading-detail/);
+  assert.match(source, /function setBootLoadingStatus\(detail = t\('loading\.bootPreparing'\)\)/);
+  assert.match(source, /setBootLoadingStatus\(t\('loading\.bootLoadingEditorApp'\)\)/);
+  assert.match(source, /setBootLoadingStatus\(t\('loading\.bootInitializingWebGpu'\)\)/);
+  assert.match(source, /setBootLoadingStatus\(t\('loading\.bootConnectingEditor'\)\)/);
+  assert.match(source, /setSelectionSafeElementText\(loadingDetail, options\?\.detail \|\| ''\);/);
 });
 
 test('workspace and server save flows emit debug logs for file-level progress', async () => {

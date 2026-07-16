@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { clone as cloneSkeletonAwareObject } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { resolveAgentPreviewInstanceAction } from './agent-preview-sync-policy.js';
 
 type AgentViewer3DBlock = {
@@ -31,10 +32,19 @@ type ViewerInstance = {
   resizeObserver: ResizeObserver;
   frameHandle: number;
   object: THREE.Object3D | null;
+  currentAssetCacheKey: string | null;
   grid: THREE.Object3D | null;
   currentAssetUrl: string | null;
   homePosition: THREE.Vector3;
   homeTarget: THREE.Vector3;
+};
+
+type CachedViewerAsset = {
+  key: string;
+  assetUrl: string;
+  promise: Promise<THREE.Object3D>;
+  template: THREE.Object3D | null;
+  refCount: number;
 };
 
 function fitCameraToObject(camera: THREE.PerspectiveCamera, controls: OrbitControls, object: THREE.Object3D): {
@@ -60,9 +70,47 @@ function fitCameraToObject(camera: THREE.PerspectiveCamera, controls: OrbitContr
   };
 }
 
+function getCanonicalViewerAssetCacheKey(assetUrl: string): string {
+  const rawUrl = String(assetUrl || '').trim();
+  if (!rawUrl) return '';
+  try {
+    const parsed = new URL(rawUrl, window.location.href);
+    const decodedPath = decodeURIComponent(parsed.pathname || '');
+    const canonicalMatch = decodedPath.match(/(?:^|\/)(assets\/[a-f0-9]{64}\.[^/?#]+)/i);
+    if (canonicalMatch?.[1]) {
+      return canonicalMatch[1].toLowerCase();
+    }
+  } catch (_) {
+    const canonicalMatch = rawUrl.match(/(?:^|\/)(assets\/[a-f0-9]{64}\.[^/?#]+)/i);
+    if (canonicalMatch?.[1]) {
+      return canonicalMatch[1].toLowerCase();
+    }
+  }
+  return rawUrl;
+}
+
+function cloneCachedViewerAsset(template: THREE.Object3D): THREE.Object3D {
+  return cloneSkeletonAwareObject(template) as THREE.Object3D;
+}
+
+function disposeViewerObjectResources(object: THREE.Object3D | null): void {
+  if (!object) return;
+  object.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      child.geometry?.dispose?.();
+      if (Array.isArray(child.material)) {
+        child.material.forEach((material) => material.dispose?.());
+      } else {
+        child.material?.dispose?.();
+      }
+    }
+  });
+}
+
 export class AgentPreviewManager {
   private readonly loader = new GLTFLoader();
   private readonly instances = new Map<string, ViewerInstance>();
+  private readonly assetCache = new Map<string, CachedViewerAsset>();
 
   sync(entries: SyncEntry[]): void {
     const nextIds = new Set(entries.map((entry) => entry.block.id));
@@ -85,9 +133,10 @@ export class AgentPreviewManager {
   }
 
   disposeAll(): void {
-    for (const [id, instance] of this.instances) {
+    for (const [id, instance] of Array.from(this.instances)) {
       this.disposeInstance(id, instance);
     }
+    this.disposeCachedAssets();
   }
 
   private ensureInstance(entry: SyncEntry): void {
@@ -163,6 +212,7 @@ export class AgentPreviewManager {
       resizeObserver,
       frameHandle: requestAnimationFrame(renderFrame),
       object: null,
+      currentAssetCacheKey: null,
       grid,
       currentAssetUrl: null,
       homePosition: camera.position.clone(),
@@ -212,18 +262,23 @@ export class AgentPreviewManager {
     }
 
     instance.currentAssetUrl = block.assetUrl;
+    const assetCacheKey = getCanonicalViewerAssetCacheKey(block.assetUrl);
     if (instance.grid) {
       instance.grid.visible = false;
     }
 
-    this.loader.load(
-      block.assetUrl,
-      (gltf) => {
+    this.getOrCreateCachedAsset(assetCacheKey, block.assetUrl).promise
+      .then((template) => {
         if (instance.currentAssetUrl !== block.assetUrl) return;
         this.clearLoadedObject(instance);
-        const object = gltf.scene;
+        const cachedAsset = this.assetCache.get(assetCacheKey);
+        if (cachedAsset) {
+          cachedAsset.refCount += 1;
+        }
+        const object = cloneCachedViewerAsset(template);
         instance.scene.add(object);
         instance.object = object;
+        instance.currentAssetCacheKey = assetCacheKey;
         if (instance.grid) {
           instance.grid.visible = true;
         }
@@ -234,32 +289,63 @@ export class AgentPreviewManager {
         instance.homePosition.copy(home.position);
         instance.homeTarget.copy(home.target);
         instance.controls.saveState();
-      },
-      undefined,
-      () => {
+      })
+      .catch(() => {
         if (instance.currentAssetUrl !== block.assetUrl) return;
         this.clearLoadedObject(instance);
         if (instance.grid) {
           instance.grid.visible = false;
         }
-      }
-    );
+      });
+  }
+
+  private getOrCreateCachedAsset(key: string, assetUrl: string): CachedViewerAsset {
+    const existing = this.assetCache.get(key);
+    if (existing) return existing;
+
+    const entry: CachedViewerAsset = {
+      key,
+      assetUrl,
+      template: null,
+      refCount: 0,
+      promise: Promise.resolve(new THREE.Object3D()),
+    };
+    entry.promise = new Promise((resolve, reject) => {
+      this.loader.load(
+        assetUrl,
+        (gltf) => {
+          entry.template = gltf.scene;
+          resolve(gltf.scene);
+        },
+        undefined,
+        (error) => {
+          this.assetCache.delete(key);
+          reject(error);
+        }
+      );
+    });
+    this.assetCache.set(key, entry);
+    return entry;
+  }
+
+  private releaseCachedAssetReference(key: string | null): void {
+    if (!key) return;
+    const cachedAsset = this.assetCache.get(key);
+    if (!cachedAsset) return;
+    cachedAsset.refCount = Math.max(0, cachedAsset.refCount - 1);
   }
 
   private clearLoadedObject(instance: ViewerInstance): void {
     if (!instance.object) return;
+    const cacheKey = instance.currentAssetCacheKey;
     instance.scene.remove(instance.object);
-    instance.object.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.geometry?.dispose?.();
-        if (Array.isArray(child.material)) {
-          child.material.forEach((material) => material.dispose?.());
-        } else {
-          child.material?.dispose?.();
-        }
-      }
-    });
+    if (cacheKey) {
+      this.releaseCachedAssetReference(cacheKey);
+    } else {
+      disposeViewerObjectResources(instance.object);
+    }
     instance.object = null;
+    instance.currentAssetCacheKey = null;
   }
 
   private disposeInstance(id: string, instance: ViewerInstance): void {
@@ -273,5 +359,13 @@ export class AgentPreviewManager {
     instance.renderer.dispose();
     instance.host.replaceChildren();
     this.instances.delete(id);
+  }
+
+  private disposeCachedAssets(): void {
+    for (const [key, cachedAsset] of Array.from(this.assetCache)) {
+      if (cachedAsset.refCount > 0) continue;
+      disposeViewerObjectResources(cachedAsset.template);
+      this.assetCache.delete(key);
+    }
   }
 }

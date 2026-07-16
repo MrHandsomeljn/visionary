@@ -10,6 +10,7 @@
     <div id="bootLoadingOverlay" class="boot-loading-overlay" aria-live="polite" aria-busy="true">
         <div class="spinner"></div>
         <div class="loading-text" data-i18n="canvas.loading">Loading...</div>
+        <div class="loading-detail" data-i18n="loading.bootPreparing">Preparing editor shell...</div>
     </div>
     <div id="app">
         <div id="editor-shell">
@@ -21,6 +22,7 @@
             <div id="loadingOverlay" class="loading-overlay hidden">
                 <div class="spinner"></div>
                 <div class="loading-text" data-i18n="canvas.loading">Loading...</div>
+                <div class="loading-detail"></div>
                 <div class="loading-progress">
                     <div class="progress-bar">
                         <div class="progress-fill" style="width: 0%"></div>
@@ -50,47 +52,24 @@
                 <div id="agent-workbench-shell">
                     <aside id="agent-workbench" aria-label="Agent 工作台" data-i18n-attrs="aria-label:agent.workbench">
                         <div class="agent-workbench-topbar">
-                            <div id="agentWorkflowTabs" class="agent-workflow-tabs" aria-label="Agent 流程" data-i18n-attrs="aria-label:agent.workflowTabs">
-                                <button type="button" class="agent-workflow-tab active" data-workflow="scene-build" title="场景构建" aria-label="场景构建" data-i18n-attrs="title:agent.workflows.scene-build.title;aria-label:agent.workflows.scene-build.title">
-                                    <span class="agent-workflow-icon" aria-hidden="true">
+                            <div id="agentWorkbenchModeTabs" class="agent-workbench-mode-tabs" aria-label="工作台模式">
+                                <button type="button" class="agent-workbench-mode-tab active" data-mode="conversation" aria-pressed="true" title="对话" aria-label="对话">
+                                    <span class="agent-workbench-mode-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24">
-                                            <path d="M4 18h16" />
-                                            <path d="M6 18V9l6-3 6 3v9" />
-                                            <path d="M12 6V4" />
+                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v6A2.5 2.5 0 0 1 16.5 16H11l-4 3v-3H7.5A2.5 2.5 0 0 1 5 13.5z" />
                                         </svg>
                                     </span>
-                                    <span class="agent-workflow-label" data-i18n="agent.workflows.scene-build.short">场景</span>
+                                    <span class="agent-workbench-mode-label">对话</span>
                                 </button>
-                                <button type="button" class="agent-workflow-tab" data-workflow="object-insert" title="物体插入" aria-label="物体插入" data-i18n-attrs="title:agent.workflows.object-insert.title;aria-label:agent.workflows.object-insert.title">
-                                    <span class="agent-workflow-icon" aria-hidden="true">
+                                <button type="button" class="agent-workbench-mode-tab" data-mode="asset-library" aria-pressed="false" title="资产库" aria-label="资产库">
+                                    <span class="agent-workbench-mode-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24">
-                                            <path d="M12 3 5 7v10l7 4 7-4V7l-7-4Z" />
-                                            <path d="M5 7l7 4 7-4" />
-                                            <path d="M12 11v10" />
+                                            <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" />
+                                            <path d="M8 9.5h8" />
+                                            <path d="M8 13h8" />
                                         </svg>
                                     </span>
-                                    <span class="agent-workflow-label" data-i18n="agent.workflows.object-insert.short">物体</span>
-                                </button>
-                                <button type="button" class="agent-workflow-tab" data-workflow="character-create" title="人物创造" aria-label="人物创造" data-i18n-attrs="title:agent.workflows.character-create.title;aria-label:agent.workflows.character-create.title">
-                                    <span class="agent-workflow-icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24">
-                                            <circle cx="12" cy="7" r="3" />
-                                            <path d="M12 10v7" />
-                                            <path d="M8 14l4-2 4 2" />
-                                            <path d="M9 21l3-4 3 4" />
-                                        </svg>
-                                    </span>
-                                    <span class="agent-workflow-label" data-i18n="agent.workflows.character-create.short">人物</span>
-                                </button>
-                                <button type="button" class="agent-workflow-tab" data-workflow="camera-direct" title="运镜生成" aria-label="运镜生成" data-i18n-attrs="title:agent.workflows.camera-direct.title;aria-label:agent.workflows.camera-direct.title">
-                                    <span class="agent-workflow-icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24">
-                                            <rect x="4" y="7" width="11" height="10" rx="2" />
-                                            <path d="m15 10 5-2v8l-5-2" />
-                                            <path d="M7 5h5" />
-                                        </svg>
-                                    </span>
-                                    <span class="agent-workflow-label" data-i18n="agent.workflows.camera-direct.short">运镜</span>
+                                    <span class="agent-workbench-mode-label">资产库</span>
                                 </button>
                             </div>
                             <button
@@ -106,24 +85,112 @@
                             </button>
                         </div>
                         <div class="agent-workbench-body">
-                            <div class="agent-message-pane">
-                                <div class="agent-message-scroll" aria-label="对话记录" data-i18n-attrs="aria-label:agent.messageHistory">
-                                    <div id="agentMessageList" class="agent-message-list"></div>
+                            <section class="agent-workbench-panel agent-workbench-panel-conversation" data-mode-panel="conversation">
+                                <div id="agentWorkflowTabs" class="agent-workflow-tabs" aria-label="Agent 流程" data-i18n-attrs="aria-label:agent.workflowTabs">
+                                    <button type="button" class="agent-workflow-tab active" data-workflow="scene-build" title="场景构建" aria-label="场景构建" data-i18n-attrs="title:agent.workflows.scene-build.title;aria-label:agent.workflows.scene-build.title">
+                                        <span class="agent-workflow-icon" aria-hidden="true">
+                                            <svg viewBox="0 0 24 24">
+                                                <path d="M4 18h16" />
+                                                <path d="M6 18V9l6-3 6 3v9" />
+                                                <path d="M12 6V4" />
+                                            </svg>
+                                        </span>
+                                        <span class="agent-workflow-label" data-i18n="agent.workflows.scene-build.short">场景</span>
+                                    </button>
+                                    <button type="button" class="agent-workflow-tab" data-workflow="object-insert" title="物体插入" aria-label="物体插入" data-i18n-attrs="title:agent.workflows.object-insert.title;aria-label:agent.workflows.object-insert.title">
+                                        <span class="agent-workflow-icon" aria-hidden="true">
+                                            <svg viewBox="0 0 24 24">
+                                                <path d="M12 3 5 7v10l7 4 7-4V7l-7-4Z" />
+                                                <path d="M5 7l7 4 7-4" />
+                                                <path d="M12 11v10" />
+                                            </svg>
+                                        </span>
+                                        <span class="agent-workflow-label" data-i18n="agent.workflows.object-insert.short">物体</span>
+                                    </button>
+                                    <button type="button" class="agent-workflow-tab" data-workflow="character-create" title="人物创造" aria-label="人物创造" data-i18n-attrs="title:agent.workflows.character-create.title;aria-label:agent.workflows.character-create.title">
+                                        <span class="agent-workflow-icon" aria-hidden="true">
+                                            <svg viewBox="0 0 24 24">
+                                                <circle cx="12" cy="7" r="3" />
+                                                <path d="M12 10v7" />
+                                                <path d="M8 14l4-2 4 2" />
+                                                <path d="M9 21l3-4 3 4" />
+                                            </svg>
+                                        </span>
+                                        <span class="agent-workflow-label" data-i18n="agent.workflows.character-create.short">人物</span>
+                                    </button>
+                                    <button type="button" class="agent-workflow-tab" data-workflow="camera-direct" title="运镜生成" aria-label="运镜生成" data-i18n-attrs="title:agent.workflows.camera-direct.title;aria-label:agent.workflows.camera-direct.title">
+                                        <span class="agent-workflow-icon" aria-hidden="true">
+                                            <svg viewBox="0 0 24 24">
+                                                <rect x="4" y="7" width="11" height="10" rx="2" />
+                                                <path d="m15 10 5-2v8l-5-2" />
+                                                <path d="M7 5h5" />
+                                            </svg>
+                                        </span>
+                                        <span class="agent-workflow-label" data-i18n="agent.workflows.camera-direct.short">运镜</span>
+                                    </button>
                                 </div>
-                                <div id="agentMessageScrollbar" class="agent-message-scrollbar" aria-hidden="true">
-                                    <div id="agentMessageScrollbarThumb" class="agent-message-scrollbar-thumb"></div>
+                                <div class="agent-message-pane">
+                                    <div class="agent-message-scroll" aria-label="对话记录" data-i18n-attrs="aria-label:agent.messageHistory">
+                                        <div id="agentMessageList" class="agent-message-list"></div>
+                                    </div>
+                                    <div id="agentMessageScrollbar" class="agent-message-scrollbar" aria-hidden="true">
+                                        <div id="agentMessageScrollbarThumb" class="agent-message-scrollbar-thumb"></div>
+                                    </div>
                                 </div>
-                            </div>
+                            </section>
+                            <section class="agent-workbench-panel agent-workbench-panel-asset-library hidden" data-mode-panel="asset-library">
+                                <div id="assetLibraryTabs" class="asset-library-tabs" aria-label="资产库分类">
+                                    <button type="button" class="asset-library-tab active" data-asset-tab="scene">场景</button>
+                                    <button type="button" class="asset-library-tab" data-asset-tab="object">物体</button>
+                                    <button type="button" class="asset-library-tab" data-asset-tab="character">人物</button>
+                                    <button type="button" class="asset-library-tab" data-asset-tab="camera">运镜</button>
+                                </div>
+                                <div class="asset-library-panel-body">
+                                    <div class="asset-library-empty-state" data-asset-panel="scene">
+                                        <h3>场景历史资产库</h3>
+                                        <p>这里将展示历史生成的场景资产。</p>
+                                        <p>当前阶段先完成切换结构，对接真实数据后续接入。</p>
+                                    </div>
+                                    <div class="asset-library-empty-state hidden" data-asset-panel="object">
+                                        <h3>物体历史资产库</h3>
+                                        <p>这里将展示历史生成的物体资产。</p>
+                                        <p>当前阶段先完成切换结构，对接真实数据后续接入。</p>
+                                    </div>
+                                    <div class="asset-library-empty-state hidden" data-asset-panel="character">
+                                        <h3>人物历史资产库</h3>
+                                        <p>这里将展示历史生成的人物资产。</p>
+                                        <p>当前阶段先完成切换结构，对接真实数据后续接入。</p>
+                                    </div>
+                                    <div class="asset-library-empty-state hidden" data-asset-panel="camera">
+                                        <h3>运镜历史资产库</h3>
+                                        <p>这里将展示历史生成的运镜资产。</p>
+                                        <p>当前阶段先完成切换结构，对接真实数据后续接入。</p>
+                                    </div>
+                                </div>
+                            </section>
                             <div id="agentComposerDock" class="agent-composer-dock">
                                 <form id="agentComposer" class="agent-composer">
                                     <div id="agentComposerAttachments" class="agent-composer-attachments hidden" aria-label="待发送图片" data-i18n-attrs="aria-label:agent.pendingImages"></div>
+                                    <div id="agentComposerSkillToolbar" class="agent-composer-skill-toolbar" aria-label="Agent 技能" data-i18n-attrs="aria-label:agent.skillToolbar">
+                                        <button type="button" class="agent-composer-skill-btn" data-agent-skill-insert="scene" data-i18n="agent.skills.scene">场景</button>
+                                        <button type="button" class="agent-composer-skill-btn" data-agent-skill-insert="object" data-i18n="agent.skills.object">物体</button>
+                                        <button type="button" class="agent-composer-skill-btn" data-agent-skill-insert="character" data-i18n="agent.skills.character">人物</button>
+                                        <button type="button" class="agent-composer-skill-btn" data-agent-skill-insert="camera" data-i18n="agent.skills.camera">相机</button>
+                                    </div>
                                     <input type="file" id="agentImageInput" accept="image/*" multiple hidden>
-                                    <textarea
-                                        id="agentComposerInput"
-                                        rows="3"
-                                        placeholder="输入一句自然语言，触发当前流程的占位 Agent 响应"
-                                        data-i18n-placeholder="agent.inputPlaceholder"
-                                    ></textarea>
+                                    <div class="agent-composer-prompt-surface">
+                                        <div
+                                            id="agentComposerInput"
+                                            class="agent-composer-input is-empty"
+                                            contenteditable="plaintext-only"
+                                            role="textbox"
+                                            aria-multiline="true"
+                                            aria-label="输入一句自然语言，或使用技能标签发起 Agent 任务"
+                                            data-placeholder="输入一句自然语言，或使用技能标签发起 Agent 任务"
+                                            data-i18n-placeholder="agent.inputPlaceholder"
+                                            data-i18n-attrs="aria-label:agent.inputPlaceholder"
+                                        ><span id="agentComposerSkillTokens" class="agent-composer-skill-tokens" contenteditable="false" hidden></span></div>
+                                    </div>
                                     <div class="agent-composer-actions">
                                         <button type="button" id="btnUserSession" class="agent-user-avatar-btn" data-role="user-session" title="用户" aria-label="用户" data-i18n-attrs="title:common.user;aria-label:common.user">
                                             <span class="agent-user-avatar-icon" aria-hidden="true">
@@ -147,6 +214,45 @@
                             </div>
                         </div>
                     </aside>
+
+                    <div
+                        id="agentWorkbenchCollapsedControls"
+                        class="agent-workbench-collapsed-controls"
+                        aria-label="工作台快速入口"
+                        hidden
+                    >
+                        <div id="agentWorkbenchCollapsedModeTabs" class="agent-workbench-collapsed-mode-tabs" aria-label="工作台模式">
+                            <button type="button" class="agent-workbench-mode-tab active" data-mode="conversation" aria-pressed="true" title="对话" aria-label="对话">
+                                <span class="agent-workbench-mode-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24">
+                                        <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v6A2.5 2.5 0 0 1 16.5 16H11l-4 3v-3H7.5A2.5 2.5 0 0 1 5 13.5z" />
+                                    </svg>
+                                </span>
+                                <span class="agent-workbench-mode-label">对话</span>
+                            </button>
+                            <button type="button" class="agent-workbench-mode-tab" data-mode="asset-library" aria-pressed="false" title="资产库" aria-label="资产库">
+                                <span class="agent-workbench-mode-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24">
+                                        <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" />
+                                        <path d="M8 9.5h8" />
+                                        <path d="M8 13h8" />
+                                    </svg>
+                                </span>
+                                <span class="agent-workbench-mode-label">资产库</span>
+                            </button>
+                        </div>
+                        <div class="agent-workbench-collapsed-controls-bottom">
+                            <button type="button" id="btnCollapsedUserSession" class="agent-user-avatar-btn agent-user-avatar-btn-collapsed" data-role="user-session" title="用户" aria-label="用户" data-i18n-attrs="title:common.user;aria-label:common.user">
+                                <span class="agent-user-avatar-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24">
+                                        <circle cx="12" cy="8" r="3.5"></circle>
+                                        <path d="M5 20c0-3.3 3.1-6 7-6s7 2.7 7 6"></path>
+                                    </svg>
+                                </span>
+                                <span class="agent-user-avatar-text" aria-hidden="true"></span>
+                            </button>
+                        </div>
+                    </div>
 
                     <div
                         id="agent-workbench-resizer"
@@ -761,21 +867,235 @@
                     </button>
                 </div>
                 <div class="modal-body project-session-modal-body">
-                    <div id="projectBrowserUserSummary" class="project-session-summary"></div>
-                    <div id="projectBrowserProjectGrid" class="project-browser-project-grid"></div>
-                    <div id="projectBrowserSaveAsPanel" class="project-browser-saveas-panel hidden">
-                        <label class="project-session-label" for="projectBrowserSaveAsName" data-i18n="projectSession.saveAsLabel">另存为项目名</label>
-                        <div id="projectBrowserSaveAsNameError" class="project-session-inline-error hidden" role="alert"></div>
-                        <input id="projectBrowserSaveAsName" class="project-session-input" type="text" maxlength="96" placeholder="Untitled Project">
-                        <div class="project-browser-saveas-actions">
-                            <button id="btnProjectBrowserSaveAsCancel" class="button button-secondary" data-i18n="common.cancel">取消</button>
-                            <button id="btnProjectBrowserSaveAsConfirm" class="button button-primary" data-i18n="projectSession.saveAction">保存</button>
-                        </div>
+                    <div class="project-browser-summary-row">
+                        <div id="projectBrowserUserSummary" class="project-session-summary"></div>
                     </div>
+                    <div class="project-browser-tabs" role="tablist" aria-label="项目与 API">
+                        <button id="projectBrowserProjectsTab" type="button" class="project-browser-tab is-active" role="tab" aria-selected="true" aria-controls="projectBrowserProjectsPanel" data-project-browser-tab="projects" data-i18n="projectSession.browserProjectsTab">我的项目</button>
+                        <button id="projectBrowserApiTab" type="button" class="project-browser-tab" role="tab" aria-selected="false" aria-controls="projectBrowserApiPanel" data-project-browser-tab="api" data-i18n="projectSession.apiManagementTab">API 管理</button>
+                    </div>
+                    <section id="projectBrowserProjectsPanel" class="project-browser-panel" role="tabpanel" aria-labelledby="projectBrowserProjectsTab" data-project-browser-panel="projects">
+                        <div id="projectBrowserProjectGrid" class="project-browser-project-grid"></div>
+                        <div id="projectBrowserSaveAsPanel" class="project-browser-saveas-panel hidden">
+                            <label class="project-session-label" for="projectBrowserSaveAsName" data-i18n="projectSession.saveAsLabel">另存为项目名</label>
+                            <div id="projectBrowserSaveAsNameError" class="project-session-inline-error hidden" role="alert"></div>
+                            <input id="projectBrowserSaveAsName" class="project-session-input" type="text" maxlength="96" placeholder="Untitled Project">
+                            <div class="project-browser-saveas-actions">
+                                <button id="btnProjectBrowserSaveAsCancel" class="button button-secondary" data-i18n="common.cancel">取消</button>
+                                <button id="btnProjectBrowserSaveAsConfirm" class="button button-primary" data-i18n="projectSession.saveAction">保存</button>
+                            </div>
+                        </div>
+                    </section>
+                    <section id="projectBrowserApiPanel" class="project-browser-panel project-browser-api-panel" role="tabpanel" aria-labelledby="projectBrowserApiTab" data-project-browser-panel="api" hidden>
+                        <div class="project-browser-api-heading">
+                            <h4 data-i18n="projectSession.apiManagementTitle">API 管理</h4>
+                            <p data-i18n="projectSession.apiManagementDescription">集中配置 Codex、3D 生成和 Pipeline 对话所需的密钥。</p>
+                        </div>
+                        <div class="project-browser-api-grid">
+                            <section class="project-browser-api-provider">
+                                <div class="project-browser-api-provider-header">
+                                    <div class="project-browser-api-provider-copy">
+                                        <h5 data-i18n="projectSession.codexAuthTitle">Codex Auth</h5>
+                                        <p data-i18n="projectSession.codexAuthDescription">用于后台 Codex Agent 的项目内对话与任务执行。</p>
+                                    </div>
+                                </div>
+                                <div id="projectBrowserCodexAuthInline" class="project-browser-auth-inline">
+                                    <span class="project-browser-auth-label" data-i18n="projectSession.codexAuthTitle">Codex Auth:</span>
+                                    <span id="projectBrowserCodexAuthStatus" class="project-browser-auth-status"></span>
+                                    <span id="projectBrowserAgentRuntimeStatus" class="project-browser-agent-runtime-status" title="Agent: Demo">Agent: Demo</span>
+                                    <button id="btnProjectBrowserEditCodexAuth" type="button" class="project-browser-auth-icon-btn" title="编辑 Codex Auth" aria-label="编辑 Codex Auth" data-i18n-attrs="title:projectSession.codexAuthEditAction;aria-label:projectSession.codexAuthEditAction">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                                            <path d="M12 20h9" />
+                                            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                        </svg>
+                                    </button>
+                                    <input id="projectBrowserCodexAuthKey" class="project-browser-auth-inline-input" type="password" autocomplete="off" placeholder="CODEX_API_KEY" data-i18n-placeholder="projectSession.codexAuthPlaceholder" hidden>
+                                    <button id="btnProjectBrowserSaveCodexAuth" type="button" class="project-browser-auth-submit-btn" title="提交 Codex Auth" aria-label="提交 Codex Auth" data-i18n-attrs="title:projectSession.codexAuthSubmitAction;aria-label:projectSession.codexAuthSubmitAction" hidden>
+                                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                                            <path d="M20 6 9 17l-5-5" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </section>
+                            <section class="project-browser-api-provider">
+                                <div class="project-browser-api-provider-header">
+                                    <div class="project-browser-api-provider-copy">
+                                        <h5 data-i18n="projectSession.apiProvider3DTitle">3D 生成 API</h5>
+                                        <p data-i18n="projectSession.apiProvider3DDescription">用于从对话生成 Mesh、3DGS 或 4DGS 资产。</p>
+                                    </div>
+                                    <span id="projectBrowserComponents3DStatus" class="project-browser-api-provider-status" data-i18n="projectSession.apiConfigNotSaved">未保存</span>
+                                </div>
+                                <div id="projectBrowserComponents3DProvider" class="project-browser-provider-segmented" role="radiogroup" aria-label="3D 生成 Provider">
+                                    <button id="btnComponents3DProviderMocked" type="button" class="project-browser-provider-option is-active" data-components3d-provider="mocked" data-i18n="projectSession.components3DProviderMocked">Mocked</button>
+                                    <button id="btnComponents3DProviderHunyuan" type="button" class="project-browser-provider-option" data-components3d-provider="hunyuan" data-i18n="projectSession.components3DProviderHunyuan">Hunyuan</button>
+                                    <button id="btnComponents3DProviderTrellis2" type="button" class="project-browser-provider-option" data-components3d-provider="trellis.2" data-i18n="projectSession.components3DProviderTrellis2">私有部署</button>
+                                </div>
+                                <div id="components3DMockedPanel" class="project-browser-provider-panel">
+                                    <span class="project-browser-api-help" data-i18n="projectSession.components3DMockedHint">使用本地 demo GLB，不会调用外部 3D 生成服务。</span>
+                                </div>
+                                <div id="components3DTrellisPanel" class="project-browser-provider-panel" hidden>
+                                    <div class="project-browser-api-field-grid">
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldBaseUrl">Base URL</span>
+                                            <input id="components3DTrellisBaseUrl" class="project-browser-api-input" type="url" placeholder="http://127.0.0.1:25367">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldHost">Host/IP</span>
+                                            <input id="components3DTrellisHost" class="project-browser-api-input" type="text" placeholder="127.0.0.1">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldPort">端口</span>
+                                            <input id="components3DTrellisPort" class="project-browser-api-input" type="number" min="1" max="65535" step="1" placeholder="25367">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldModel">模型</span>
+                                            <input id="components3DTrellisModel" class="project-browser-api-input" type="text" list="components3DTrellisModelOptions" placeholder="TRELLIS.2-1024">
+                                            <datalist id="components3DTrellisModelOptions">
+                                                <option value="TRELLIS.2-512"></option>
+                                                <option value="TRELLIS.2-1024"></option>
+                                                <option value="TRELLIS.2-1536"></option>
+                                            </datalist>
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldPollInterval">轮询间隔（秒）</span>
+                                            <input id="components3DTrellisPollInterval" class="project-browser-api-input" type="number" min="0.2" max="3600" step="0.5" placeholder="5">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldMaxWait">最长等待（秒）</span>
+                                            <input id="components3DTrellisMaxWait" class="project-browser-api-input" type="number" min="1" max="86400" step="1" placeholder="1800">
+                                        </label>
+                                    </div>
+                                    <input id="components3DTrellisCallbackUrl" type="hidden">
+                                    <input id="components3DTrellisDownloadBaseUrl" type="hidden">
+                                    <div id="components3DTrellisStatusPanel" class="project-browser-api-status-panel" hidden>
+                                        <div class="project-browser-api-status-header">
+                                            <span data-i18n="projectSession.components3DTrellisStatusTitle">TRELLIS 状态</span>
+                                            <div class="project-browser-api-status-controls">
+                                                <button id="btnComponents3DTrellisStatusRefresh" class="project-browser-api-status-refresh" type="button" data-i18n-attrs="title:projectSession.components3DTrellisStatusRefresh;aria-label:projectSession.components3DTrellisStatusRefresh">
+                                                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                                        <path d="M20 11a8 8 0 0 0-15.5-2M4 4v5h5"></path>
+                                                        <path d="M4 13a8 8 0 0 0 15.5 2M20 20v-5h-5"></path>
+                                                    </svg>
+                                                </button>
+                                                <span id="components3DTrellisStatusBadge" class="project-browser-api-status-badge" data-i18n="projectSession.components3DTrellisStatusUnknown">未检查</span>
+                                            </div>
+                                        </div>
+                                        <div id="components3DTrellisStatusBody" class="project-browser-api-status-body"></div>
+                                    </div>
+                                </div>
+                                <div id="components3DHunyuanPanel" class="project-browser-provider-panel" hidden>
+                                    <div class="project-browser-api-field-grid">
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldEndpoint">Endpoint</span>
+                                            <input id="components3DHunyuanBaseUrl" class="project-browser-api-input" type="url" placeholder="https://ai3d.tencentcloudapi.com">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldSecretKey">Secret Key</span>
+                                            <input id="components3DHunyuanSecretKey" class="project-browser-api-input" type="password" autocomplete="off" placeholder="留空保持已保存密钥" data-i18n-placeholder="projectSession.apiProviderSecretKeyPlaceholder">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldSecretId">Secret ID</span>
+                                            <input id="components3DHunyuanSecretId" class="project-browser-api-input" type="text" autocomplete="off" placeholder="AKID...">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldRegion">地域</span>
+                                            <input id="components3DHunyuanRegion" class="project-browser-api-input" type="text" placeholder="ap-guangzhou">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldVersion">版本</span>
+                                            <input id="components3DHunyuanVersion" class="project-browser-api-input" type="text" placeholder="2025-05-13">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldModel">模型</span>
+                                            <input id="components3DHunyuanModel" class="project-browser-api-input" type="text" placeholder="3.1">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldPollInterval">轮询间隔（秒）</span>
+                                            <input id="components3DHunyuanPollInterval" class="project-browser-api-input" type="number" min="0.2" max="3600" step="0.5" placeholder="15">
+                                        </label>
+                                        <label>
+                                            <span data-i18n="projectSession.apiFieldMaxWait">最长等待（秒）</span>
+                                            <input id="components3DHunyuanMaxWait" class="project-browser-api-input" type="number" min="1" max="86400" step="1" placeholder="600">
+                                        </label>
+                                    </div>
+                                    <input id="components3DHunyuanHost" type="hidden">
+                                    <input id="components3DHunyuanPort" type="hidden">
+                                    <input id="components3DHunyuanCallbackUrl" type="hidden">
+                                    <input id="components3DHunyuanDownloadBaseUrl" type="hidden">
+                                </div>
+                                <div class="project-browser-api-actions">
+                                    <button id="btnProjectBrowserSaveComponents3DConfig" type="button" class="button button-primary" data-i18n="projectSession.apiConfigSaveAction" disabled>保存 API 配置</button>
+                                </div>
+                            </section>
+                            <section class="project-browser-api-provider">
+                                <div class="project-browser-api-provider-header">
+                                    <div class="project-browser-api-provider-copy">
+                                        <h5 data-i18n="projectSession.apiProviderPipelineTitle">Pipeline API</h5>
+                                        <p data-i18n="projectSession.apiProviderPipelineDescription">用于 Pipeline 内部主图、VLM 和相机轨迹调用的模型服务配置。</p>
+                                    </div>
+                                    <span id="projectBrowserPipelineApiStatus" class="project-browser-api-provider-status" data-i18n="projectSession.apiConfigNotSaved">未保存</span>
+                                </div>
+                                <div class="project-browser-api-field-grid">
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldApiBase">API Base</span>
+                                        <input id="pipelineApiBase" class="project-browser-api-input" type="url" placeholder="https://api.apiyi.com">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldApiKey">API Key</span>
+                                        <input id="pipelineApiKey" class="project-browser-api-input" type="password" autocomplete="off" placeholder="留空保持已保存密钥" data-i18n-placeholder="projectSession.apiProviderKeyPlaceholder">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldProvider">Provider</span>
+                                        <input id="pipelineApiProvider" class="project-browser-api-input" type="text" placeholder="gemini">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldDialogueModel">对话模型</span>
+                                        <input id="pipelineApiModelName" class="project-browser-api-input" type="text" placeholder="gemini-3.1-pro-preview">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldImageUrl">主图 URL</span>
+                                        <input id="pipelineApiImageUrl" class="project-browser-api-input" type="url" placeholder="https://api.apiyi.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldImageModel">主图模型</span>
+                                        <input id="pipelineApiImageModel" class="project-browser-api-input" type="text" placeholder="gemini-3.1-flash-image-preview">
+                                    </label>
+                                    <label>
+                                        <span data-i18n="projectSession.apiFieldImageTimeout">主图超时（秒）</span>
+                                        <input id="pipelineApiImageTimeoutSeconds" class="project-browser-api-input" type="number" min="1" max="86400" step="1" placeholder="300">
+                                    </label>
+                                </div>
+                                <div class="project-browser-api-actions">
+                                    <button id="btnProjectBrowserSavePipelineApiConfig" type="button" class="button button-primary" data-i18n="projectSession.apiConfigSaveAction" disabled>保存 API 配置</button>
+                                </div>
+                            </section>
+                        </div>
+                    </section>
                 </div>
                 <div class="modal-footer project-session-modal-footer">
+                    <button id="btnProjectBrowserCreateNew" class="button button-primary" data-i18n="projectSession.createNewProjectAction">创建新项目</button>
                     <button id="btnProjectBrowserSaveAs" class="button button-primary" data-i18n="projectSession.saveCurrentAsAction">当前项目另存为</button>
                     <button id="btnProjectBrowserLogout" class="button button-secondary" data-i18n="projectSession.logoutAction">退出登录</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="projectCreateModal" class="modal hidden">
+            <div class="modal-content project-session-modal-content">
+                <div class="modal-panel-header">
+                    <h3 id="projectCreateTitle" data-i18n="projectSession.createNewProjectAction">创建新项目</h3>
+                    <button id="btnProjectCreateClose" class="close-editor-btn floating-panel-close" title="关闭" aria-label="关闭" data-i18n-attrs="title:common.close;aria-label:common.close">
+                        <span>×</span>
+                    </button>
+                </div>
+                <div class="modal-body project-session-modal-body">
+                    <label class="project-session-label" for="projectCreateName" data-i18n="projectSession.createProjectNameLabel">新项目名称</label>
+                    <div id="projectCreateNameError" class="project-session-inline-error hidden" role="alert"></div>
+                    <input id="projectCreateName" class="project-session-input" type="text" maxlength="96" placeholder="Untitled Project">
+                </div>
+                <div class="modal-footer project-session-modal-footer">
+                    <button id="btnProjectCreateCancel" class="button button-secondary" data-i18n="common.cancel">取消</button>
+                    <button id="btnProjectCreateConfirm" class="button button-primary" data-i18n="projectSession.createAction">创建</button>
                 </div>
             </div>
         </div>
@@ -872,6 +1192,12 @@
                             <li><kbd>Shift</kbd><span data-i18n="modal.helpItems.speedUp">加速移动</span></li>
                         </ul>
                     </div>
+                    <div class="help-section">
+                        <h4 data-i18n="modal.helpSections.codex">后台 Codex</h4>
+                        <ul class="help-list">
+                            <li><kbd>resume</kbd><span data-i18n="modal.helpItems.codexResume">进项目目录，用 CODEX_HOME=$PWD/codex_home codex exec --json resume &lt;threadId&gt; "继续"</span></li>
+                        </ul>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button id="helpTipsConfirm" class="button button-primary" data-i18n="modal.gotIt">知道了</button>
@@ -880,6 +1206,7 @@
         </div>
     </div>
 
+    <script src="./editor-module-load-guard.js"></script>
     <script type="module" src="./editor.js"></script>
 </body>
 </html>

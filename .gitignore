@@ -8,6 +8,8 @@ public/scenes
 *.model
 !teaser.png
 node_modules/
+.cache/
+*.tsbuildinfo
 *.exr
 *.DS_Store# Ignore docs and TestModel 
 TestModel/ 
@@ -31,6 +33,7 @@ public/ort/
 dist/
 docs/*
 !docs/index.md
+!docs/trellis-parallel-generation-progress-design.zh.md
 !docs/guide/
 !docs/guide/**
 !docs/zh/
@@ -49,6 +52,11 @@ certs/*.pem
 certs/*.key
 .env.local
 .visionary-projects/
+agent_history/
+
+# User-local API credentials/config
+api_config.json
+codex_auth.json
 
 # models/
 模型/

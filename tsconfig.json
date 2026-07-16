@@ -9,6 +9,9 @@
     "allowImportingTsExtensions": true,
     "allowJs": true,
     "resolveJsonModule": true,
+    // Cache semantic graph state so repeated `tsc --noEmit` checks only revisit changed files.
+    "incremental": true,
+    "tsBuildInfoFile": ".cache/tsconfig.typecheck.tsbuildinfo",
     "isolatedModules": true,
     "noEmit": true,
     "declaration": true,

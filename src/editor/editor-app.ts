@@ -6,6 +6,7 @@
 import * as THREE from "three/webgpu";
 import { LineSegments2 } from "three/examples/jsm/lines/webgpu/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
+import { clone as cloneSkeletonAwareObject } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { vec3, quat } from "gl-matrix";
 import { GaussianRenderer } from "../renderer/gaussian_renderer";
 import { GaussianModel } from "../app/GaussianModel";
@@ -31,6 +32,7 @@ import { initWebGPU_onnx, WebGPUContext, DEFAULT_DUMMY_MODEL_URL } from "../app/
 import { initOrtEnvironment, getDefaultOrtWasmPaths } from "../config/ort-config";
 import { PointCloud, DynamicPointCloud } from "../point_cloud";
 import { lookAtW2C } from "../controls/orbit";
+import { coreCameraW2CToTimelineW2C, timelineW2CToCoreCameraW2C } from "../camera/camera-pose-conventions";
 import { FBXModelWrapper } from "../models/fbx-model-wrapper";
 import { GLTFModelWrapper } from "../models/gltf-model-wrapper";
 import { GizmoManager } from "../gizmo/gizmo-manager";
@@ -40,6 +42,17 @@ import {
   createEditorMeshAnimationController,
   getEditorModelAnimationController,
 } from "./model-animation-controller";
+import {
+  normalizeEmbeddedMeshTranslation,
+  type EmbeddedTransformNormalizationResult,
+} from "./embedded-transform-normalizer";
+import {
+  VisionaryFrameRenderer,
+  renderVisionaryFrame,
+  type VisionaryRenderFrameContext,
+  type VisionaryRenderFrameOptions,
+  type VisionaryRenderFrameResult,
+} from "../exportMedia/renderFrame";
 
 const MAX_MODELS = 10000;
 const CAMERA_KEY_CODES = new Set([
@@ -81,6 +94,12 @@ const SCENE_SKY_PRESETS: SceneSkyPreset[] = [
 type EditorRenderMode = "color" | "normal" | "depth";
 type EditorRawDepthSource = "mesh" | "gaussian" | "combined";
 
+type EditorLoadModelOptions = {
+  sourcePath?: string;
+  suppressLoadingOverlay?: boolean;
+  normalizeEmbeddedTransform?: boolean;
+};
+
 const RENDER_MODE_INDEX: Record<EditorRenderMode, number> = {
   color: 0,
   normal: 1,
@@ -97,6 +116,8 @@ const EDITOR_DEPTH_BASE_EXTENT_KEY = "__editorDepthBaseExtent";
 const EDITOR_CAMERA_SEQUENCE_HELPER_KEY = "__visionaryEditorHelper";
 const EDITOR_CAMERA_SEQUENCE_CURRENT_KEY = "__visionaryEditorCurrentCameraHelper";
 const EDITOR_MODEL_PICK_ID_KEY = "__visionaryEditorModelId";
+const EDITOR_VIEWPORT_HELPER_LAYER = 1;
+const CANONICAL_EDITOR_MESH_ASSET_PATH_RE = /^assets\/[a-f0-9]{64}\.(?:glb|gltf)$/i;
 const CAMERA_SEQUENCE_FRUSTUM_COLOR = 0x22c55e;
 const CAMERA_SEQUENCE_PATH_COLOR = 0x4a90d9;
 const CAMERA_SEQUENCE_CURRENT_COLOR = 0xf59e0b;
@@ -123,11 +144,22 @@ interface EditorModel {
   fbxAnimation?: FBXModelWrapper;
   sourceFile?: File;
   sourcePath?: string;
+  sharedMeshResourceKey?: string;
+  embeddedTransformNormalization?: EmbeddedTransformNormalizationResult;
   animDuration?: number;
   animSpeed?: number;
   animStartTime?: number;
   animEndTime?: number;
   animLoop?: boolean;
+}
+
+interface CachedMeshTemplate {
+  key: string;
+  object3D: THREE.Object3D;
+  animationClips: THREE.AnimationClip[];
+  pointCount: number;
+  refCount: number;
+  embeddedTransformNormalization?: EmbeddedTransformNormalizationResult;
 }
 
 interface EditorCameraPose {
@@ -162,6 +194,10 @@ type CameraSequenceHelperTarget = {
   object: THREE.Object3D;
   hitProxy: THREE.Object3D;
 };
+
+type ViewportObjectPick =
+  | { kind: "model"; modelId: string; point: THREE.Vector3; distance: number }
+  | { kind: "camera"; frame: number; point: THREE.Vector3; distance: number };
 
 /**
  * Editor Application
@@ -215,6 +251,7 @@ export class EditorApp {
 
   // Editor state
   private editorModels: Map<string, EditorModel> = new Map();
+  private meshModelTemplateCache: Map<string, CachedMeshTemplate> = new Map();
   private onModelsChangedCallback: ((models: EditorModel[]) => void) | null = null;
   private sceneBackgroundColor: [number, number, number, number] = [112 / 255, 112 / 255, 112 / 255, 1.0];
   private sceneSkyPresetId: string = "night";
@@ -448,15 +485,15 @@ export class EditorApp {
 
     this.canvas.addEventListener('dblclick', (e) => {
       if (this.isEditingText()) return;
-      void this.lookAtScenePointFromClient(e.clientX, e.clientY);
+      if (e.button !== 0) return;
+      void this.handleViewportDoubleClick(e.clientX, e.clientY).catch((error) => {
+        console.warn("[EditorApp] viewport double-click handling failed:", error);
+      });
+      e.preventDefault();
     });
 
     this.canvas.addEventListener('click', (e) => {
       if (this.isEditingText()) return;
-      if (this.cameraSequenceEditEnabled && this.pickCameraSequenceKeyframeFromClient(e.clientX, e.clientY)) {
-        e.preventDefault();
-        return;
-      }
     });
 
     // Keyboard events
@@ -479,6 +516,7 @@ export class EditorApp {
     this.editorHelperOverlayScene = new THREE.Scene();
     this.meshCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000);
     this.meshCamera.matrixAutoUpdate = true;
+    this.meshCamera.layers.enable(EDITOR_VIEWPORT_HELPER_LAYER);
 
     const ambient = new THREE.AmbientLight(0xffffff, 0.55);
     this.meshScene.add(ambient);
@@ -580,13 +618,12 @@ export class EditorApp {
           this.syncGaussianRendererModelTimelineState(this.fusedRenderer);
 
           await this.fusedRenderer.updateDynamicModels(this.meshCamera, (now - this.fusionStartTime) / 500.0);
-          this.renderViewportOverlayWithFusedRenderer();
           this.fusedRenderer.onBeforeRender(this.meshRenderer, this.meshScene, this.meshCamera);
           this.fusedRenderer.renderThreeScene(this.meshCamera);
+          this.renderViewportOverlayWithFusedRenderer();
           const drew = this.fusedRenderer.drawSplats(this.meshRenderer, this.meshScene, this.meshCamera);
-          if (!drew && this.renderMode !== "depth") {
-            this.meshRenderer.render(this.meshScene, this.meshCamera);
-            this.renderViewportOverlayDirect();
+          if (!drew) {
+            this.fusedRenderer.compositeOverlayToCurrentCanvas();
           }
         } else {
           this.meshRenderer.render(this.meshScene, this.meshCamera);
@@ -733,12 +770,12 @@ export class EditorApp {
       const gaussianModelEntries = Array.from(this.editorModels.values())
         .map((model) => model.gaussianModel)
         .filter((model): model is GaussianModel => Boolean(model));
-      if (gaussianModelEntries.length > 0) {
-        this.cameraPreviewFusedRenderer = new GaussianThreeJSRenderer(renderer, this.meshScene, gaussianModelEntries);
-        await this.cameraPreviewFusedRenderer.init();
-        this.cameraPreviewFusedRenderer.setDepthRangeScale(this.sceneDepthRangeScale);
-        this.cameraPreviewFusedRenderer.setPreviewMode(this.renderMode);
-      }
+      // Keep the preview on the same fused path as the main viewport, even for mesh-only scenes.
+      // Depth preview is produced by GaussianThreeJSRenderer.renderThreeScene(), not by direct Three rendering.
+      this.cameraPreviewFusedRenderer = new GaussianThreeJSRenderer(renderer, this.meshScene, gaussianModelEntries);
+      await this.cameraPreviewFusedRenderer.init();
+      this.cameraPreviewFusedRenderer.setDepthRangeScale(this.sceneDepthRangeScale);
+      this.cameraPreviewFusedRenderer.setPreviewMode(this.renderMode);
       this.cameraPreviewGaussianSignature = gaussianModels;
 
       this.syncCameraPreviewCanvasSize();
@@ -818,7 +855,10 @@ export class EditorApp {
       Number(pose.rotation.w) || 1
     );
     const c2w = w2c.clone().invert();
-    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(c2w);
+    // Camera preview receives the same W2C timeline pose as export/playback.
+    // Three.js cameras face local -Z, matching Blender/Trajectory_gen; local +Z is
+    // the camera back. Keep preview, export, and helpers on -Z to preserve lookAt orbits.
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(c2w);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(c2w);
     this.cameraPreviewCamera.position.set(
       Number(pose.position.x) || 0,
@@ -961,12 +1001,23 @@ export class EditorApp {
     return count;
   }
 
-  private removeMeshObject(model: EditorModel): void {
-    const object3D = model.object3D;
-    if (!object3D || !this.meshScene) return;
-    this.applyRenderModeToMeshObject(object3D, "color");
-    this.meshScene.remove(object3D);
-    object3D.traverse((child) => {
+  private getCanonicalMeshTemplateCacheKey(sourcePath = ""): string {
+    const normalized = String(sourcePath || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+    return CANONICAL_EDITOR_MESH_ASSET_PATH_RE.test(normalized) ? normalized.toLowerCase() : "";
+  }
+
+  private getMeshTemplateCacheKey(sourcePath = "", normalizeEmbeddedTransform = false): string {
+    const canonicalKey = this.getCanonicalMeshTemplateCacheKey(sourcePath);
+    if (!canonicalKey) return "";
+    return normalizeEmbeddedTransform ? `${canonicalKey}::embedded-transform-normalized` : canonicalKey;
+  }
+
+  private cloneMeshTemplate(root: THREE.Object3D): THREE.Object3D {
+    return cloneSkeletonAwareObject(root) as THREE.Object3D;
+  }
+
+  private disposeMeshObjectResources(root: THREE.Object3D): void {
+    root.traverse((child) => {
       const mesh = child as THREE.Mesh;
       if (!mesh || !("isMesh" in mesh) || !(mesh as any).isMesh) return;
       (mesh.geometry as THREE.BufferGeometry | undefined)?.dispose();
@@ -977,6 +1028,32 @@ export class EditorApp {
         material?.dispose?.();
       }
     });
+  }
+
+  private releaseMeshTemplateReference(key?: string): void {
+    if (!key) return;
+    const cached = this.meshModelTemplateCache.get(key);
+    if (!cached) return;
+    cached.refCount = Math.max(0, cached.refCount - 1);
+  }
+
+  private disposeMeshTemplateCache(): void {
+    for (const cached of this.meshModelTemplateCache.values()) {
+      this.disposeMeshObjectResources(cached.object3D);
+    }
+    this.meshModelTemplateCache.clear();
+  }
+
+  private removeMeshObject(model: EditorModel): void {
+    const object3D = model.object3D;
+    if (!object3D || !this.meshScene) return;
+    this.applyRenderModeToMeshObject(object3D, "color");
+    this.meshScene.remove(object3D);
+    if (model.sharedMeshResourceKey) {
+      this.releaseMeshTemplateReference(model.sharedMeshResourceKey);
+      return;
+    }
+    this.disposeMeshObjectResources(object3D);
   }
 
   private createMeshDepthPreviewMaterial(userData: Record<string, unknown>): THREE.MeshDepthMaterial {
@@ -1101,11 +1178,172 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     });
   }
 
+  private getEditorModelIdFromObject(object: THREE.Object3D | null | undefined): string | null {
+    let current: THREE.Object3D | null = object ?? null;
+    while (current) {
+      const modelId = current.userData?.[EDITOR_MODEL_PICK_ID_KEY];
+      if (typeof modelId === "string" && this.editorModels.has(modelId)) {
+        return modelId;
+      }
+      current = current.parent;
+    }
+    return null;
+  }
+
+  private getCanvasPointerFromClient(clientX: number, clientY: number): THREE.Vector2 | null {
+    if (!this.canvas) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -(((clientY - rect.top) / rect.height) * 2 - 1)
+    );
+  }
+
+  private getEditorModelPickFromClient(clientX: number, clientY: number): {
+    modelId: string;
+    point: THREE.Vector3;
+    distance: number;
+  } | null {
+    if (!this.meshCamera) return null;
+    if (this.editorModels.size === 0) return null;
+
+    const targets: THREE.Object3D[] = [];
+    for (const model of this.editorModels.values()) {
+      if (!model.visible) continue;
+      const target = this.getEditorModelTransformTarget(model);
+      if (!target?.visible) continue;
+      targets.push(target);
+    }
+    if (targets.length === 0) return null;
+
+    const pointer = this.getCanvasPointerFromClient(clientX, clientY);
+    if (!pointer) return null;
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(pointer, this.meshCamera);
+
+    const hits = raycaster.intersectObjects(targets, true);
+    for (const hit of hits) {
+      const modelId = this.getEditorModelIdFromObject(hit.object);
+      if (modelId) {
+        return { modelId, point: hit.point.clone(), distance: hit.distance };
+      }
+    }
+    return null;
+  }
+
+  private pickEditorModelFromClient(clientX: number, clientY: number): boolean {
+    const pick = this.getEditorModelPickFromClient(clientX, clientY);
+    return Boolean(pick && this.setSelectedModel(pick.modelId));
+  }
+
+  private async getDepthModelPickFromClient(clientX: number, clientY: number): Promise<{
+    modelId: string;
+    point: THREE.Vector3;
+    distance: number;
+  } | null> {
+    if (!this.meshCamera) return null;
+    const picked = await this.pickScenePointAtClient(clientX, clientY);
+    if (!picked?.world) return null;
+    const point = new THREE.Vector3(picked.world.x, picked.world.y, picked.world.z);
+    const modelId = this.getEditorModelIdFromWorldPoint(point);
+    if (!modelId) return null;
+    return {
+      modelId,
+      point,
+      distance: this.meshCamera.position.distanceTo(point),
+    };
+  }
+
+  private getEditorModelIdFromWorldPoint(point: THREE.Vector3): string | null {
+    let best: { modelId: string; centerDistance: number } | null = null;
+    for (const model of this.editorModels.values()) {
+      if (!model.visible) continue;
+      const bounds = this.getEditorModelWorldBounds(model);
+      if (!bounds) continue;
+      const size = bounds.max.clone().sub(bounds.min);
+      const margin = Math.max(0.05, size.length() * 0.02);
+      if (
+        point.x < bounds.min.x - margin || point.x > bounds.max.x + margin ||
+        point.y < bounds.min.y - margin || point.y > bounds.max.y + margin ||
+        point.z < bounds.min.z - margin || point.z > bounds.max.z + margin
+      ) {
+        continue;
+      }
+      const centerDistance = bounds.min.clone().add(bounds.max).multiplyScalar(0.5).distanceTo(point);
+      if (!best || centerDistance < best.centerDistance) {
+        best = { modelId: model.id, centerDistance };
+      }
+    }
+    return best?.modelId ?? null;
+  }
+
+  private getEditorModelWorldBounds(model: EditorModel): { min: THREE.Vector3; max: THREE.Vector3 } | null {
+    if (model.gaussianModel) {
+      const aabb = model.gaussianModel.getWorldAABB();
+      if (aabb) {
+        return {
+          min: new THREE.Vector3(aabb.min[0], aabb.min[1], aabb.min[2]),
+          max: new THREE.Vector3(aabb.max[0], aabb.max[1], aabb.max[2]),
+        };
+      }
+    }
+    if (model.object3D) {
+      const box = new THREE.Box3().setFromObject(model.object3D);
+      if (!box.isEmpty()) {
+        return { min: box.min.clone(), max: box.max.clone() };
+      }
+    }
+    return null;
+  }
+
+  private async getViewportObjectPickFromClient(clientX: number, clientY: number): Promise<ViewportObjectPick | null> {
+    const modelPick = this.getEditorModelPickFromClient(clientX, clientY);
+    const cameraPick = this.getCameraSequencePickFromClient(clientX, clientY);
+    const depthModelPick = await this.getDepthModelPickFromClient(clientX, clientY);
+    const picks: ViewportObjectPick[] = [];
+    if (modelPick) picks.push({ kind: "model", ...modelPick });
+    if (cameraPick) picks.push({ kind: "camera", ...cameraPick });
+    if (depthModelPick) picks.push({ kind: "model", ...depthModelPick });
+    picks.sort((a, b) => a.distance - b.distance);
+    return picks[0] ?? null;
+  }
+
+  private isViewportGizmoHitFromClient(clientX: number, clientY: number): boolean {
+    if (!this.viewportGizmoEnabled || !this.gizmoManager || !this.meshCamera) return false;
+    const controls = this.gizmoManager.getTransformControls?.();
+    const helper = controls?.getHelper?.() as THREE.Object3D | undefined;
+    if (!helper?.visible) return false;
+    const pointer = this.getCanvasPointerFromClient(clientX, clientY);
+    if (!pointer) return false;
+    helper.updateMatrixWorld(true);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(pointer, this.meshCamera);
+    return raycaster.intersectObject(helper, true).length > 0;
+  }
+
+  private async handleViewportDoubleClick(clientX: number, clientY: number): Promise<boolean> {
+    if (this.isViewportGizmoHitFromClient(clientX, clientY)) return true;
+    const pick = await this.getViewportObjectPickFromClient(clientX, clientY);
+    if (!pick) return false;
+
+    this.lookAtWorldPoint(vec3.fromValues(pick.point.x, pick.point.y, pick.point.z));
+
+    if (this.viewportGizmoEnabled) {
+      if (pick.kind === "model") {
+        this.setSelectedModel(pick.modelId);
+      } else if (this.viewportGizmoMode !== "scale") {
+        this.setSelectedCameraSequenceFrame(pick.frame);
+      }
+    }
+    return true;
+  }
+
   private getViewportGizmoSelectionKind(): "none" | "model" | "camera" {
     if (this.selectedModelId && this.editorModels.has(this.selectedModelId)) {
       return "model";
     }
-    if (this.cameraSequenceEditEnabled && this.selectedCameraSequenceFrame !== null) {
+    if (this.selectedCameraSequenceFrame !== null) {
       return "camera";
     }
     return "none";
@@ -1145,6 +1383,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       if (cameraTarget && this.viewportGizmoEnabled && cameraModeAllowed) {
         this.gizmoManager.setMode(this.viewportGizmoMode);
       }
+      this.maybeLogViewportGizmoDebug("sync-camera-target");
       return;
     }
     const model = this.selectedModelId ? this.editorModels.get(this.selectedModelId) : null;
@@ -1159,6 +1398,86 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     if (target && this.viewportGizmoEnabled) {
       this.gizmoManager.setMode(this.viewportGizmoMode);
     }
+    this.maybeLogViewportGizmoDebug("sync-model-target");
+  }
+
+  private shouldLogViewportGizmoDebug(): boolean {
+    try {
+      const globalDebug = (globalThis as any).__VISIONARY_GIZMO_DEBUG__ ?? (globalThis as any).VISIONARY_GIZMO_DEBUG;
+      const storageDebug = (globalThis as any).localStorage?.getItem?.("visionary:gizmo-debug");
+      return globalDebug === true || globalDebug === "1" || storageDebug === "1" || storageDebug === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  private vectorToDebugArray(vector: THREE.Vector3 | null | undefined): number[] | null {
+    if (!vector) return null;
+    return [vector.x, vector.y, vector.z].map((value) => Number(value.toFixed(6)));
+  }
+
+  private objectToGizmoDebugState(object: THREE.Object3D | null | undefined): Record<string, unknown> | null {
+    if (!object) return null;
+    object.updateMatrixWorld(true);
+    const worldPosition = object.getWorldPosition(new THREE.Vector3());
+    return {
+      name: object.name || object.type || "(unnamed)",
+      type: object.type,
+      visible: object.visible,
+      parent: object.parent?.name || object.parent?.type || null,
+      position: this.vectorToDebugArray(object.position),
+      worldPosition: this.vectorToDebugArray(worldPosition),
+    };
+  }
+
+  debugViewportGizmoState(reason = "manual"): Record<string, unknown> {
+    const selectionKind = this.getViewportGizmoSelectionKind();
+    const model = this.selectedModelId ? this.editorModels.get(this.selectedModelId) : null;
+    const target = selectionKind === "camera"
+      ? this.getSelectedCameraSequenceTarget()
+      : this.getEditorModelTransformTarget(model);
+    const focusPoint = model ? this.getModelFocusPoint(model) : null;
+    const controls = this.gizmoManager?.getTransformControls?.();
+    const controlsObject = controls?.object as THREE.Object3D | undefined;
+    const controlsHelper = controls?.getHelper?.() as THREE.Object3D | undefined;
+    const state = {
+      reason,
+      selectionKind,
+      selectedModelId: this.selectedModelId,
+      selectedCameraSequenceFrame: this.selectedCameraSequenceFrame,
+      viewportGizmoMode: this.viewportGizmoMode,
+      viewportGizmoEnabled: this.viewportGizmoEnabled,
+      renderMode: this.renderMode,
+      hasFusedRenderer: Boolean(this.fusedRenderer),
+      target: this.objectToGizmoDebugState(target),
+      modelFocusPoint: focusPoint ? Array.from(focusPoint).map((value) => Number(value.toFixed(6))) : null,
+      manager: this.gizmoManager ? {
+        enabled: this.gizmoManager.getEnabled(),
+        mode: this.gizmoManager.getMode(),
+        space: this.gizmoManager.getSpace(),
+        pivot: this.vectorToDebugArray(this.gizmoManager.getPivot()),
+      } : null,
+      controls: controls ? {
+        enabled: Boolean(controls.enabled),
+        mode: controls.mode,
+        space: controls.space,
+        attachedObject: this.objectToGizmoDebugState(controlsObject),
+        helperVisible: Boolean(controlsHelper?.visible),
+        helperParent: controlsHelper?.parent?.name || controlsHelper?.parent?.type || null,
+        helperChildren: controlsHelper?.children?.length ?? 0,
+      } : null,
+      overlays: {
+        gizmoSceneChildren: this.gizmoOverlayScene?.children.length ?? 0,
+        helperSceneChildren: this.editorHelperOverlayScene?.children.length ?? 0,
+      },
+    };
+    console.log("[EditorApp:gizmo]", state);
+    return state;
+  }
+
+  private maybeLogViewportGizmoDebug(reason: string): void {
+    if (!this.shouldLogViewportGizmoDebug()) return;
+    this.debugViewportGizmoState(reason);
   }
 
   private handleViewportGizmoObjectChange(): void {
@@ -1280,7 +1599,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   /**
    * Load a model file
    */
-  async loadModel(file: File, options: { sourcePath?: string; suppressLoadingOverlay?: boolean } = {}): Promise<EditorModel | null> {
+  async loadModel(file: File, options: EditorLoadModelOptions = {}): Promise<EditorModel | null> {
     console.log(`[EditorApp ${this.VERSION}] ===== loadModel START =====`);
     console.log(`[EditorApp ${this.VERSION}] File:`, file.name, file.size, 'bytes', file.type);
 
@@ -1308,6 +1627,8 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       let position = { x: 0, y: 0, z: 0 };
       let rotation = { x: 0, y: 0, z: 0 };
       let scale = 1;
+      let sharedMeshResourceKey = "";
+      let embeddedTransformNormalization: EmbeddedTransformNormalizationResult | undefined;
 
       if (lowerName.endsWith('.onnx')) {
         // Load ONNX model
@@ -1334,19 +1655,55 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         isDynamic = Boolean(modelEntry.isDynamic);
         pointCount = Number(modelEntry.pointCount ?? 0);
       } else if (this.isMeshFilename(lowerName)) {
-        const loaded = await defaultLoader.loadFile(file, {
-          isGaussian: false,
-          onProgress: (progress) => {
-            if (shouldManageLoadingOverlay) {
-              this.showLoading(true, progress.stage, Math.round(progress.progress * 100));
+        const normalizeEmbeddedTransform = options.normalizeEmbeddedTransform === true;
+        const meshTemplateCacheKey = this.getMeshTemplateCacheKey(options.sourcePath || file.name, normalizeEmbeddedTransform);
+        let animationClips: THREE.AnimationClip[] = [];
+        const cachedTemplate = meshTemplateCacheKey ? this.meshModelTemplateCache.get(meshTemplateCacheKey) : undefined;
+        if (cachedTemplate) {
+          meshObject = this.cloneMeshTemplate(cachedTemplate.object3D);
+          animationClips = cachedTemplate.animationClips;
+          pointCount = cachedTemplate.pointCount;
+          embeddedTransformNormalization = cachedTemplate.embeddedTransformNormalization;
+          cachedTemplate.refCount += 1;
+          sharedMeshResourceKey = cachedTemplate.key;
+        } else {
+          const loaded = await defaultLoader.loadFile(file, {
+            isGaussian: false,
+            onProgress: (progress) => {
+              if (shouldManageLoadingOverlay) {
+                this.showLoading(true, progress.stage, Math.round(progress.progress * 100));
+              }
+            }
+          });
+          if (!isThreeJSDataSource(loaded)) {
+            throw new Error(`File loaded but not recognized as mesh: ${file.name}`);
+          }
+          const templateObject = loaded.object3D() as THREE.Object3D;
+          animationClips = loaded.animationClips?.() ?? [];
+          if (normalizeEmbeddedTransform) {
+            const normalization = normalizeEmbeddedMeshTranslation(templateObject);
+            if (normalization.applied) {
+              embeddedTransformNormalization = normalization;
             }
           }
-        });
-        if (!isThreeJSDataSource(loaded)) {
-          throw new Error(`File loaded but not recognized as mesh: ${file.name}`);
+          const templatePointCount = this.countMeshVertices(templateObject);
+          if (meshTemplateCacheKey) {
+            this.meshModelTemplateCache.set(meshTemplateCacheKey, {
+              key: meshTemplateCacheKey,
+              object3D: templateObject,
+              animationClips,
+              pointCount: templatePointCount,
+              refCount: 1,
+              embeddedTransformNormalization,
+            });
+            meshObject = this.cloneMeshTemplate(templateObject);
+            pointCount = templatePointCount;
+            sharedMeshResourceKey = meshTemplateCacheKey;
+          } else {
+            meshObject = templateObject;
+            pointCount = templatePointCount;
+          }
         }
-        meshObject = loaded.object3D() as THREE.Object3D;
-        const animationClips = loaded.animationClips?.() ?? [];
         const meshAnimation = createEditorMeshAnimationController({
           fileName: lowerName,
           object3D: meshObject,
@@ -1360,7 +1717,9 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
           isDynamic = true;
         }
         this.addMeshObjectToScene(meshObject);
-        pointCount = this.countMeshVertices(meshObject);
+        if (!Number.isFinite(pointCount) || pointCount <= 0) {
+          pointCount = this.countMeshVertices(meshObject);
+        }
         position = { x: meshObject.position.x, y: meshObject.position.y, z: meshObject.position.z };
         rotation = { x: meshObject.rotation.x, y: meshObject.rotation.y, z: meshObject.rotation.z };
         scale = Number(meshObject.scale.x || 1);
@@ -1423,6 +1782,8 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         gaussianModel: gaussianModel || undefined,
         sourceFile: file,
         sourcePath: options.sourcePath || file.name,
+        sharedMeshResourceKey: sharedMeshResourceKey || undefined,
+        embeddedTransformNormalization,
         animDuration: Number.isFinite(Number(modelEntry?.animDuration))
           ? Number(modelEntry?.animDuration)
           : (meshAnimationController && Number.isFinite(meshAnimationController.getDuration()) && meshAnimationController.getDuration() > 0
@@ -1975,6 +2336,24 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     return true;
   }
 
+  private lookAtWorldPoint(target: vec3): boolean {
+    const camera = this.cameraManager.getCamera();
+    if (!camera) return false;
+
+    const forward = vec3.subtract(vec3.create(), target, camera.positionV);
+    if (vec3.length(forward) <= 1e-6) {
+      return false;
+    }
+
+    vec3.normalize(forward, forward);
+    const worldUp = vec3.fromValues(0, 1, 0);
+    camera.rotationQ = lookAtW2C(forward, worldUp);
+    this.cameraManager.syncOrbitAfterExternalLookAt(target, worldUp);
+    this.syncMeshCameraFromCoreCamera();
+    this.notifyCameraInteraction("keyboard");
+    return true;
+  }
+
   async pickScenePointAtClient(clientX: number, clientY: number): Promise<{
     pixelX: number;
     pixelY: number;
@@ -1997,21 +2376,8 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
       return false;
     }
 
-    const camera = this.cameraManager.getCamera();
-    if (!camera) return false;
-
     const target = vec3.fromValues(result.world.x, result.world.y, result.world.z);
-    const forward = vec3.subtract(vec3.create(), target, camera.positionV);
-    if (vec3.length(forward) <= 1e-6) {
-      return false;
-    }
-
-    vec3.normalize(forward, forward);
-    const worldUp = vec3.fromValues(0, 1, 0);
-    camera.rotationQ = lookAtW2C(forward, worldUp);
-    this.cameraManager.syncOrbitAfterExternalLookAt(target, worldUp);
-    this.syncMeshCameraFromCoreCamera();
-    this.notifyCameraInteraction("keyboard");
+    if (!this.lookAtWorldPoint(target)) return false;
     console.log("[EditorApp] Look-at scene point:", result);
     return true;
   }
@@ -2413,8 +2779,21 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   getCameraPose(): EditorCameraPose | null {
     const camera = this.getCamera();
     if (!camera) return null;
+    const coreRotation = quat.fromValues(
+      Number(camera.rotation.x) || 0,
+      Number(camera.rotation.y) || 0,
+      Number(camera.rotation.z) || 0,
+      Number(camera.rotation.w) || 1
+    );
+    const timelineRotation = coreCameraW2CToTimelineW2C(coreRotation);
     return {
-      ...camera,
+      position: { ...camera.position },
+      rotation: {
+        x: timelineRotation[0],
+        y: timelineRotation[1],
+        z: timelineRotation[2],
+        w: timelineRotation[3],
+      },
       fovDegrees: this.getSceneCameraFovDegrees(),
     };
   }
@@ -2426,7 +2805,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   /**
    * Set camera pose from timeline keyframe.
    */
-  setCameraPose(pose: Partial<EditorCameraPose> | null | undefined): boolean {
+  private applyCameraPoseToCoreCamera(
+    pose: Partial<EditorCameraPose> | null | undefined,
+    rotationConvention: "core-plus-z" | "timeline-minus-z"
+  ): boolean {
     if (!pose?.position || !pose?.rotation) return false;
 
     const px = Number(pose.position.x);
@@ -2442,7 +2824,10 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     }
 
     const pos = vec3.fromValues(px, py, pz);
-    const rot = quat.fromValues(qx, qy, qz, qw);
+    const sourceRot = quat.fromValues(qx, qy, qz, qw);
+    const rot = rotationConvention === "timeline-minus-z"
+      ? timelineW2CToCoreCameraW2C(sourceRot)
+      : sourceRot;
     const ok = this.cameraManager.setCameraPose(pos, rot);
     if (!ok) return false;
 
@@ -2451,6 +2836,17 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     }
 
     return true;
+  }
+
+  setCoreCameraPose(pose: Partial<EditorCameraPose> | null | undefined): boolean {
+    return this.applyCameraPoseToCoreCamera(pose, "core-plus-z");
+  }
+
+  /**
+   * Set camera pose from timeline keyframe.
+   */
+  setCameraPose(pose: Partial<EditorCameraPose> | null | undefined): boolean {
+    return this.applyCameraPoseToCoreCamera(pose, "timeline-minus-z");
   }
 
   /**
@@ -2543,6 +2939,37 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
    */
   getFusedRenderer(): GaussianThreeJSRenderer | null {
     return this.fusedRenderer;
+  }
+
+  /**
+   * Get the current render context for offscreen frame rendering.
+   */
+  getRenderFrameContext(): VisionaryRenderFrameContext | null {
+    if (!this.meshRenderer || !this.meshScene) return null;
+    return {
+      renderer: this.meshRenderer,
+      scene: this.meshScene,
+      gaussianModels: this.fusedRenderer?.getGaussianModels?.() || [],
+    };
+  }
+
+  /**
+   * Create a reusable offscreen frame renderer for repeated trajectory evaluation.
+   */
+  createFrameRenderer(id?: string): VisionaryFrameRenderer | null {
+    const context = this.getRenderFrameContext();
+    return context ? new VisionaryFrameRenderer(context, id) : null;
+  }
+
+  /**
+   * Render one frame from explicit camera parameters without writing files.
+   */
+  async renderFrame(options: VisionaryRenderFrameOptions): Promise<VisionaryRenderFrameResult> {
+    const context = this.getRenderFrameContext();
+    if (!context) {
+      throw new Error("Editor render context is unavailable");
+    }
+    return renderVisionaryFrame(context, options);
   }
 
   /**
@@ -2660,7 +3087,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     selectedFrame?: number | null,
     sampledTrajectory?: EditorCameraTrajectoryPoint[]
   ): boolean {
-    if (!this.editorHelperOverlayScene) return false;
+    if (!this.meshScene) return false;
     const group = this.ensureCameraSequenceGroup();
     if (!group) return false;
     group.visible = this.cameraSequenceVisible;
@@ -2741,6 +3168,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
         depthWrite: true,
       })
     );
+    this.assignViewportHelperLayer(marker);
     marker.renderOrder = 0;
     marker.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
     marker.userData[EDITOR_CAMERA_SEQUENCE_CURRENT_KEY] = true;
@@ -2789,8 +3217,8 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
   }
 
   private ensureCameraSequenceGroup(): THREE.Group | null {
-    if (!this.editorHelperOverlayScene) return null;
-    if (this.cameraSequenceGroup && this.cameraSequenceGroup.parent === this.editorHelperOverlayScene) {
+    if (!this.meshScene) return null;
+    if (this.cameraSequenceGroup && this.cameraSequenceGroup.parent === this.meshScene) {
       return this.cameraSequenceGroup;
     }
 
@@ -2802,9 +3230,16 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     group.name = "EditorCameraSequence";
     group.visible = this.cameraSequenceVisible;
     group.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
-    this.editorHelperOverlayScene.add(group);
+    this.assignViewportHelperLayer(group);
+    this.meshScene.add(group);
     this.cameraSequenceGroup = group;
     return group;
+  }
+
+  private assignViewportHelperLayer(root: THREE.Object3D): void {
+    root.traverse((node) => {
+      node.layers.set(EDITOR_VIEWPORT_HELPER_LAYER);
+    });
   }
 
   private clearCameraSequenceGroupContents(): void {
@@ -2920,10 +3355,12 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     const halfWidth = halfHeight * safeAspect;
 
     const center = new THREE.Vector3(0, 0, 0);
-    const tl = new THREE.Vector3(-halfWidth, halfHeight, safeLength);
-    const tr = new THREE.Vector3(halfWidth, halfHeight, safeLength);
-    const bl = new THREE.Vector3(-halfWidth, -halfHeight, safeLength);
-    const br = new THREE.Vector3(halfWidth, -halfHeight, safeLength);
+    // Draw the helper frustum along local -Z. This mirrors Three/Blender camera
+    // forward and keeps the viewport gizmo aligned with actual timeline playback.
+    const tl = new THREE.Vector3(-halfWidth, halfHeight, -safeLength);
+    const tr = new THREE.Vector3(halfWidth, halfHeight, -safeLength);
+    const bl = new THREE.Vector3(-halfWidth, -halfHeight, -safeLength);
+    const br = new THREE.Vector3(halfWidth, -halfHeight, -safeLength);
 
     const edges: Array<[THREE.Vector3, THREE.Vector3]> = [
       [center, tl],
@@ -2961,6 +3398,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     hitProxy.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
     hitProxy.userData.cameraKeyframeFrame = frame;
     root.add(hitProxy);
+    this.assignViewportHelperLayer(root);
 
     this.cameraSequenceHelperTargets.set(frame, {
       frame,
@@ -2970,29 +3408,44 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     return root;
   }
 
-  private pickCameraSequenceKeyframeFromClient(clientX: number, clientY: number): boolean {
-    if (!this.canvas || !this.meshCamera) return false;
-    if (this.cameraSequenceHelperTargets.size === 0 && !this.cameraSequenceCurrentMarker?.visible) return false;
-    const rect = this.canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
+  private getCameraSequencePickFromClient(clientX: number, clientY: number): {
+    frame: number;
+    point: THREE.Vector3;
+    distance: number;
+  } | null {
+    if (!this.cameraSequenceVisible || !this.meshCamera) return null;
+    if (this.cameraSequenceHelperTargets.size === 0 && !this.cameraSequenceCurrentMarker?.visible) return null;
 
-    const pointer = new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -(((clientY - rect.top) / rect.height) * 2 - 1)
-    );
+    const pointer = this.getCanvasPointerFromClient(clientX, clientY);
+    if (!pointer) return null;
     const raycaster = new THREE.Raycaster();
+    raycaster.layers.enable(EDITOR_VIEWPORT_HELPER_LAYER);
     raycaster.setFromCamera(pointer, this.meshCamera);
     const targets = Array.from(this.cameraSequenceHelperTargets.values()).map((item) => item.hitProxy);
     if (this.cameraSequenceCurrentMarker?.visible) {
       targets.push(this.cameraSequenceCurrentMarker);
     }
     const hits = raycaster.intersectObjects(targets, false);
-    if (hits[0]?.object?.userData?.[EDITOR_CAMERA_SEQUENCE_CURRENT_KEY]) {
-      return this.setSelectedCameraSequenceFrame(this.globalTimelineFrame);
+    const hit = hits[0];
+    if (!hit) return null;
+    if (hit.object?.userData?.[EDITOR_CAMERA_SEQUENCE_CURRENT_KEY]) {
+      const point = this.cameraSequenceCurrentMarker?.getWorldPosition(new THREE.Vector3());
+      if (!point) return null;
+      return { frame: this.globalTimelineFrame, point, distance: hit.distance };
     }
-    const frame = hits[0]?.object?.userData?.cameraKeyframeFrame;
-    if (!Number.isFinite(Number(frame))) return false;
-    return this.setSelectedCameraSequenceFrame(Math.round(Number(frame)));
+    const frame = hit.object?.userData?.cameraKeyframeFrame;
+    if (!Number.isFinite(Number(frame))) return null;
+    const normalizedFrame = Math.round(Number(frame));
+    const helperTarget = this.cameraSequenceHelperTargets.get(normalizedFrame)?.object ?? null;
+    if (!helperTarget) return null;
+    const point = helperTarget.getWorldPosition(new THREE.Vector3());
+    return { frame: normalizedFrame, point, distance: hit.distance };
+  }
+
+  private pickCameraSequenceKeyframeFromClient(clientX: number, clientY: number): boolean {
+    const pick = this.getCameraSequencePickFromClient(clientX, clientY);
+    if (!pick) return false;
+    return this.setSelectedCameraSequenceFrame(pick.frame);
   }
 
   private buildCameraPoseFromHelperTarget(target: THREE.Object3D): EditorCameraPose | null {
@@ -3049,6 +3502,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     material.depthWrite = true;
 
     const line = new LineSegments2(geometry, material);
+    this.assignViewportHelperLayer(line);
     line.renderOrder = 0;
     line.userData[EDITOR_CAMERA_SEQUENCE_HELPER_KEY] = true;
     line.frustumCulled = false;
@@ -3291,6 +3745,7 @@ gl_FragColor = vec4(vec3(1.0 - depth01), opacity);`;
     this.renderLoop.stop();
     this.stopMeshRenderLoop();
     this.clearAllModels();
+    this.disposeMeshTemplateCache();
     this.clearCameraSequenceGroupContents();
     if (this.cameraSequenceGroup?.parent) {
       this.cameraSequenceGroup.parent.remove(this.cameraSequenceGroup);

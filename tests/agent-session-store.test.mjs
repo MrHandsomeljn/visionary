@@ -6,6 +6,15 @@ import { AgentSessionStore } from '../src/editor/agent-session-store.js';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+const HASH_A = 'a'.repeat(64);
+const CANONICAL_IMAGE_REF = {
+    assetId: `sha256:${HASH_A}`,
+    hash: HASH_A,
+    path: `assets/${HASH_A}.png`,
+    mimeType: 'image/png',
+    bytes: 123,
+    kind: 'image',
+};
 
 class MockWritable {
     constructor(target) {
@@ -100,6 +109,48 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
     const snapshot = {
         version: 2,
         savedAt: '2026-04-12T00:00:00.000Z',
+        stepStates: {
+            'session-1:attempt-1:main-image': {
+                sessionId: 'session-1',
+                attemptId: 'attempt-1',
+                blockId: 'progress-1',
+                stepKey: 'main-image',
+                images: [
+                    {
+                        id: 'main-image-1',
+                        title: '主图 1',
+                        assetPath: 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png',
+                        relativePath: 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png',
+                        mimeType: 'image/png',
+                        bytes: 123,
+                        metadata: {
+                            canonicalAssetReference: CANONICAL_IMAGE_REF,
+                            assetReferences: [CANONICAL_IMAGE_REF],
+                        },
+                    },
+                ],
+                selectedIndex: 0,
+                applied: true,
+                actions: [],
+                isCurrent: false,
+                expanded: true,
+            },
+        },
+        pipelineStates: {
+            'session-1:attempt-1': {
+                kind: 'scene-skill',
+                sessionId: 'session-1',
+                attemptId: 'attempt-1',
+                status: 'ready',
+                currentStepKey: 'top-view',
+                lastAppliedStepKey: 'main-image',
+                autoContinue: true,
+                steps: {
+                    'main-image': { status: 'applied' },
+                    'top-view': { status: 'ready' },
+                },
+            },
+        },
         workflows: [
             {
                 workflow: 'scene-build',
@@ -136,10 +187,27 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
                                 status: 'complete',
                                 createdAt: '2026-04-12T00:00:02.000Z',
                                 updatedAt: '2026-04-12T00:00:03.000Z',
+                                sceneBranch: {
+                                    version: 1,
+                                    revision: 1,
+                                    candidatesById: {
+                                        'candidate-main': {
+                                            id: 'candidate-main',
+                                            stepKey: 'main-image',
+                                            parentCandidateIds: [],
+                                            context: {
+                                                canonicalAssetReferences: [CANONICAL_IMAGE_REF],
+                                            },
+                                        },
+                                    },
+                                    candidateIdsByStep: { 'main-image': ['candidate-main'] },
+                                    activeCandidateByStep: { 'main-image': 'candidate-main' },
+                                },
                                 blocks: [
                                     {
                                         id: 'progress-1',
                                         type: 'progress',
+                                        stepKey: 'main-image',
                                         title: '场景构建中',
                                         status: 'complete',
                                         statusText: '已完成',
@@ -152,6 +220,34 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
                                         status: 'ready',
                                         alt: '场景草图预览',
                                         src: 'data:image/png;base64,V29ybGQ=',
+                                    },
+                                ],
+                                steps: [
+                                    {
+                                        id: 'progress-1',
+                                        type: 'progress',
+                                        stepKey: 'main-image',
+                                        title: '主图生成',
+                                        statusText: '已完成',
+                                        value: 1,
+                                        applied: true,
+                                        isCurrent: false,
+                                        expanded: true,
+                                        images: [
+                                            {
+                                                id: 'main-image-1',
+                                                title: '主图 1',
+                                                assetPath: 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png',
+                                                relativePath: 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png',
+                                                src: 'mock://runtime-url',
+                                                mimeType: 'image/png',
+                                                bytes: 123,
+                                                metadata: {
+                                                    canonicalAssetReference: CANONICAL_IMAGE_REF,
+                                                    assetReferences: [CANONICAL_IMAGE_REF],
+                                                },
+                                            },
+                                        ],
                                     },
                                 ],
                             },
@@ -181,10 +277,20 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
     assert.equal(persisted.schema, 'visionary.agent_history');
     assert.equal(persisted.storageMode, 'workspace');
     assert.equal(persisted.assetRoot, 'agent_history');
+    assert.deepEqual(persisted.stepStates?.['session-1:attempt-1:main-image'], snapshot.stepStates['session-1:attempt-1:main-image']);
+    assert.deepEqual(persisted.pipelineStates?.['session-1:attempt-1'], snapshot.pipelineStates['session-1:attempt-1']);
     assert.equal(Array.isArray(persisted.references?.links), true);
     assert.equal(persisted.workflows.length, 1);
     assert.equal(persisted.workflows[0].workflow, 'scene-build');
+    assert.equal(persisted.workflows[0].items[1].attempts[0].sceneBranch.version, 1);
+    assert.ok(persisted.asset_index.some((item) => item.assetId === CANONICAL_IMAGE_REF.assetId));
     assert.equal(persisted.workflows[0].label, '场景');
+    const persistedSteps = persisted.workflows[0].items[1].attempts[0].steps;
+    assert.equal(persistedSteps.length, 1);
+    assert.equal(persistedSteps[0].stepKey, 'main-image');
+    assert.equal(persistedSteps[0].images[0].src, undefined);
+    assert.equal(persistedSteps[0].images[0].assetPath, 'agent_history/assets/new_pipeline/manual/run/main_images/image_001.png');
+    assert.deepEqual(persistedSteps[0].images[0].metadata.canonicalAssetReference, CANONICAL_IMAGE_REF);
 
     const openaiMessages = persisted.openai_conversation?.data || [];
     assert.equal(openaiMessages.length, 2);
@@ -195,12 +301,17 @@ test('AgentSessionStore persists workspace agent history as a single json plus h
     assert.equal(openaiMessages[1].content.some((item) => item.type === 'visionary_output_image'), true);
 
     const assetIndex = persisted.asset_index || [];
-    assert.equal(assetIndex.length, 2);
-    assert.equal(assetIndex.every((entry) => String(entry.path || '').startsWith('agent_history/')), true);
+    assert.equal(assetIndex.length, 3);
+    assert.equal(assetIndex.filter((entry) => String(entry.path || '').startsWith('agent_history/')).length, 2);
+    const canonicalEntry = assetIndex.find((entry) => entry.path === CANONICAL_IMAGE_REF.path);
+    assert.equal(canonicalEntry?.canonical, true);
+    assert.equal(canonicalEntry?.assetId, CANONICAL_IMAGE_REF.assetId);
+    assert.equal(canonicalEntry?.hash, CANONICAL_IMAGE_REF.hash);
 
-    for (const entry of assetIndex) {
+    for (const entry of assetIndex.filter((entry) => String(entry.path || '').startsWith('agent_history/'))) {
         assert.ok(workspaceRoot.getFileContent(entry.path) !== null, `asset should exist: ${entry.path}`);
     }
+    assert.equal(workspaceRoot.getFileContent(CANONICAL_IMAGE_REF.path), null);
 });
 
 test('AgentSessionStore exportSnapshot can emit uploadable agent_history asset payloads without bound workspace', async () => {

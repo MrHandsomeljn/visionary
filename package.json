@@ -26,11 +26,13 @@
   ],
   "scripts": {
     "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-node-tests.mjs",
     "router:ip": "python scripts/get-router-ip.py",
     "dev:https:check": "node scripts/check-dev-https.mjs",
     "dev:https:setup": "node scripts/setup-dev-https.mjs",
     "build": "vite build && npm run build:types",
-    "build:types": "tsc --declaration --emitDeclarationOnly --outDir dist",
+    "build:types": "tsc -p tsconfig.build.json",
     "preview": "vite preview",
     "fix_onnx": "node scripts/fix_onnx.mjs",
     "fix_onnx_src": "node scripts/fix_onnx.mjs src/ort",
@@ -54,10 +56,12 @@
     "vite": "^7.1.3"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "claude": "^0.1.1",
     "gl-matrix": "^3.4.3",
     "mp4-muxer": "^5.2.2",
     "onnxruntime-web": "1.22.0",
-    "three": "^0.171.0"
+    "three": "^0.171.0",
+    "zod": "^4.4.3"
   }
 }

@@ -2,9 +2,9 @@
 // Compatible with the existing WebGaussianJS architecture
 
 import { vec2, vec3, quat } from "gl-matrix";
-import { PerspectiveCamera } from '../camera';
-import { IController } from './base-controller';
-import { lookAtW2C, WORLD_UP } from './orbit';
+import { PerspectiveCamera } from '../camera/perspective.ts';
+import type { IController } from './base-controller.ts';
+import { lookAtW2C, WORLD_UP } from './orbit.ts';
 
 // ---- Constants ----
 const DEFAULT_MOVEMENT_SPEED = 1.0;

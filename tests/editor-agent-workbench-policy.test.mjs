@@ -23,47 +23,111 @@ test('agent workbench resize is coalesced per frame and persisted only after dra
 
 test('agent scrollbar sync is coalesced instead of queueing duplicate rAF callbacks', () => {
     const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
 
     assert.match(source, /let agentMessageScrollbarSyncRaf = 0;/);
+    assert.match(source, /let agentMessageScrollbarScheduledMeasure = false;/);
+    assert.match(source, /let agentMessageScrollbarMeasureDirty = true;/);
+    assert.match(source, /let agentMessageScrollbarMetricsCache = null;/);
+    assert.match(source, /function invalidateAgentMessageScrollbarMetrics\(\) \{[\s\S]*agentMessageScrollbarMeasureDirty = true;[\s\S]*\}/);
     assert.match(
         source,
-        /function scheduleAgentMessageScrollbarSync\(\) \{[\s\S]*if \(agentMessageScrollbarSyncRaf !== 0\) return;[\s\S]*agentMessageScrollbarSyncRaf = requestAnimationFrame\(\(\) => \{[\s\S]*agentMessageScrollbarSyncRaf = 0;[\s\S]*syncAgentMessageScrollbar\(\);[\s\S]*\}\);[\s\S]*\}/
+        /function getAgentMessageScrollbarMetrics\(\{ measure = false \} = \{\}\) \{[\s\S]*if \(measure \|\| agentMessageScrollbarMeasureDirty \|\| !agentMessageScrollbarMetricsCache\) \{[\s\S]*return measureAgentMessageScrollbarMetrics\(\);[\s\S]*\}[\s\S]*return agentMessageScrollbarMetricsCache;[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /function updateAgentMessageScrollbarThumb\(metrics = agentMessageScrollbarMetricsCache\) \{[\s\S]*dom\.agentMessageScroll\.scrollTop[\s\S]*translate3d\(0, \$\{Math\.max\(0, thumbTop\)\}px, 0\)/
+    );
+    assert.match(
+        source,
+        /function scheduleAgentMessageScrollbarSync\(\{ measure = true \} = \{\}\) \{[\s\S]*agentMessageScrollbarScheduledMeasure = agentMessageScrollbarScheduledMeasure \|\| Boolean\(measure\);[\s\S]*if \(measure\) \{[\s\S]*invalidateAgentMessageScrollbarMetrics\(\);[\s\S]*\}[\s\S]*if \(agentMessageScrollbarSyncRaf !== 0\) return;[\s\S]*agentMessageScrollbarSyncRaf = requestAnimationFrame\(\(\) => \{[\s\S]*const shouldMeasure = agentMessageScrollbarScheduledMeasure;[\s\S]*agentMessageScrollbarScheduledMeasure = false;[\s\S]*syncAgentMessageScrollbar\(\{ measure: shouldMeasure \}\);[\s\S]*\}\);[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /dom\.agentMessageScroll\?\.addEventListener\('scroll', \(\) => \{[\s\S]*scheduleAgentMessageScrollbarSync\(\{ measure: false \}\);[\s\S]*\}, \{ passive: true \}\);/
     );
     assert.doesNotMatch(source, /requestAnimationFrame\(syncAgentMessageScrollbar\)/);
+    assert.doesNotMatch(source, /addEventListener\('scroll', syncAgentMessageScrollbar\)/);
+    assert.match(
+        css,
+        /\.agent-message-scrollbar-thumb\s*\{[\s\S]*contain:\s*strict;[\s\S]*will-change:\s*transform;[\s\S]*\}/
+    );
 });
 
-test('agent collapse defers layout-heavy sync outside the click frame', () => {
+test('agent 3d viewer reuses canonical GLB templates instead of reloading each block', () => {
+    const source = readFileSync(new URL('../src/editor/agent-preview-manager.ts', import.meta.url), 'utf8');
+
+    assert.match(source, /type CachedViewerAsset = \{/);
+    assert.match(source, /private readonly assetCache = new Map<string, CachedViewerAsset>\(\);/);
+    assert.match(source, /function getCanonicalViewerAssetCacheKey\(assetUrl: string\): string/);
+    assert.match(source, /assets\\\/\[a-f0-9\]\{64\}\\\.\[\^\/\?#\]\+/);
+    assert.match(source, /function cloneCachedViewerAsset\(template: THREE\.Object3D\): THREE\.Object3D/);
+    assert.match(source, /cloneSkeletonAwareObject\(template\)/);
+    assert.match(source, /this\.getOrCreateCachedAsset\(assetCacheKey, block\.assetUrl\)\.promise/);
+    assert.match(source, /cachedAsset\.refCount \+= 1;/);
+    assert.match(source, /this\.releaseCachedAssetReference\(cacheKey\);/);
+    assert.match(source, /disposeCachedAssets\(\);/);
+    assert.doesNotMatch(source, /const object = gltf\.scene;[\s\S]*instance\.scene\.add\(object\);/);
+});
+
+test('agent collapse animates while syncing canvas only once at animation start', () => {
     const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
     const scheduleStart = source.indexOf('function scheduleAgentWorkbenchCollapseLayoutSync');
     const applyStart = source.indexOf('function applyAgentWorkbenchWidth', scheduleStart);
     const scheduleBody = source.slice(scheduleStart, applyStart);
     const setStart = source.indexOf('function setAgentWorkbenchCollapsed');
-    const workflowStart = source.indexOf('function setAgentWorkflow', setStart);
+    const workflowStart = source.indexOf('function setAgentWorkbenchMode', setStart);
     const setBody = source.slice(setStart, workflowStart);
+    const togglingRuleStart = css.indexOf('body.agent-workbench-toggling #agent-workbench');
+    const togglingRuleEnd = css.indexOf('}', togglingRuleStart);
+    const togglingRule = css.slice(togglingRuleStart, togglingRuleEnd + 1);
 
     assert.match(source, /let agentWorkbenchCollapseSyncRaf = 0;/);
     assert.match(source, /let agentWorkbenchTogglingTimer = 0;/);
+    assert.match(source, /let agentWorkbenchCollapseAnimationToken = 0;/);
+    assert.match(source, /const AGENT_WORKBENCH_COLLAPSE_ANIMATION_MS = 220;/);
     assert.ok(scheduleStart >= 0, 'expected collapse sync scheduler');
+    assert.match(scheduleBody, /const token = \+\+agentWorkbenchCollapseAnimationToken;/);
+    assert.match(scheduleBody, /cancelAnimationFrame\(agentWorkbenchCollapseSyncRaf\);/);
+    assert.match(scheduleBody, /clearTimeout\(agentWorkbenchTogglingTimer\);/);
     assert.match(scheduleBody, /document\.body\.classList\.add\('agent-workbench-toggling'\);/);
-    assert.match(scheduleBody, /if \(agentWorkbenchCollapseSyncRaf !== 0\) \{[\s\S]*return;[\s\S]*\}/);
     assert.equal(
         (scheduleBody.match(/agentWorkbenchCollapseSyncRaf = requestAnimationFrame\(\(\) => \{/g) || []).length,
-        2
+        0
     );
-    assert.match(scheduleBody, /syncCanvasContainerToViewport\(\);/);
+    assert.equal(
+        (scheduleBody.match(/requestAnimationFrame\(\(\) => \{/g) || []).length,
+        1
+    );
+    assert.equal(
+        (scheduleBody.match(/syncCanvasContainerToViewport\(\);/g) || []).length,
+        1
+    );
     assert.match(scheduleBody, /scheduleAgentMessageScrollbarSync\(\);/);
+    assert.match(scheduleBody, /if \(token !== agentWorkbenchCollapseAnimationToken\) return;/);
+    assert.match(scheduleBody, /AGENT_WORKBENCH_COLLAPSE_ANIMATION_MS \+ 40/);
     assert.match(scheduleBody, /document\.body\.classList\.remove\('agent-workbench-toggling'\);/);
-    assert.match(setBody, /state\.agentWorkbenchCollapsed = Boolean\(collapsed\);/);
+    assert.match(scheduleBody, /localStorage\.setItem\(AGENT_WORKBENCH_COLLAPSED_STORAGE_KEY, String\(state\.agentWorkbenchCollapsed\)\);/);
+    assert.match(setBody, /const nextCollapsed = Boolean\(collapsed\);/);
+    assert.match(setBody, /if \(state\.agentWorkbenchCollapsed === nextCollapsed\) \{[\s\S]*return;[\s\S]*\}/);
+    assert.match(setBody, /state\.agentWorkbenchCollapsed = nextCollapsed;/);
     assert.match(setBody, /syncAgentWorkbenchCollapsedState\(\);/);
     assert.match(setBody, /scheduleAgentWorkbenchCollapseLayoutSync\(\{ persist \}\);/);
     assert.doesNotMatch(setBody, /syncCanvasContainerToViewport\(\);/);
+    assert.ok(togglingRuleStart >= 0, 'expected agent workbench toggling rule');
     assert.match(css, /body\.agent-workbench-resizing #agent-workbench\s*\{[\s\S]*will-change:\s*width;[\s\S]*backdrop-filter:\s*none;[\s\S]*-webkit-backdrop-filter:\s*none;[\s\S]*\}/);
-    assert.doesNotMatch(css, /body\.agent-workbench-toggling #agent-workbench\s*\{[\s\S]*backdrop-filter:\s*none/);
+    assert.match(css, /#agent-workbench\s*\{[\s\S]*transition:\s*[\s\S]*width 0\.22s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\),[\s\S]*min-width 0\.22s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\),[\s\S]*max-width 0\.22s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\)/);
+    assert.match(css, /body\.agent-workbench-resizing #agent-workbench\s*\{[\s\S]*transition:\s*none;/);
+    assert.match(togglingRule, /will-change:\s*width, min-width, max-width;/);
+    assert.match(css, /\.agent-workbench-collapsed-controls\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*translateX\(-8px\);[\s\S]*transition:\s*opacity 0\.16s ease, transform 0\.22s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\);[\s\S]*\}/);
+    assert.match(css, /#agent-workbench-shell\.is-collapsed \.agent-workbench-collapsed-controls:not\(\[hidden\]\)\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*translateX\(0\);[\s\S]*\}/);
+    assert.doesNotMatch(togglingRule, /backdrop-filter:\s*none/);
 });
 
-test('agent workflow tabs keep a fixed width and resize mode disables expensive workbench filters', () => {
+test('agent workbench layout tokens and message column sizing remain pinned', () => {
     const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
 
     assert.match(css, /--agent-workflow-tab-width:\s*44px;/);
     assert.match(css, /--agent-workflow-tab-gap:\s*16px;/);
@@ -73,11 +137,6 @@ test('agent workflow tabs keep a fixed width and resize mode disables expensive 
     assert.match(css, /--agent-workbench-topbar-gap:\s*8px;/);
     assert.match(css, /--agent-output-right-gap:\s*18px;/);
     assert.match(css, /--agent-output-asset-max-width:\s*320px;/);
-    assert.match(
-        css,
-        /body\.agent-workbench-resizing #agent-workbench\s*\{[\s\S]*will-change:\s*width;[\s\S]*backdrop-filter:\s*none;[\s\S]*-webkit-backdrop-filter:\s*none;[\s\S]*\}/
-    );
-    assert.doesNotMatch(css, /body\.agent-workbench-toggling #agent-workbench\s*\{[\s\S]*backdrop-filter:\s*none/);
     assert.match(
         css,
         /\.agent-workflow-tabs\s*\{[\s\S]*flex:\s*1 1 auto;[\s\S]*display:\s*flex;[\s\S]*justify-content:\s*flex-start;[\s\S]*gap:\s*var\(--agent-workflow-tab-gap\);[\s\S]*margin-right:\s*var\(--agent-output-right-gap\);[\s\S]*order:\s*1;[\s\S]*\}/
@@ -97,6 +156,14 @@ test('agent workflow tabs keep a fixed width and resize mode disables expensive 
     assert.match(
         css,
         /\.agent-workbench-toggle:hover::before\s*\{[\s\S]*border-color:\s*var\(--accent\);[\s\S]*background:\s*color-mix\(in srgb, var\(--panel-bg\) 80%, transparent\);[\s\S]*box-shadow:\s*inset 0 0 0 1px color-mix\(in srgb, var\(--accent\) 50%, transparent\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-resizer\s*\{[\s\S]*right:\s*-4px;[\s\S]*width:\s*8px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-resizer::before\s*\{[\s\S]*left:\s*3px;[\s\S]*width:\s*1px;[\s\S]*\}/
     );
     assert.match(
         css,
@@ -128,6 +195,34 @@ test('agent workflow tabs keep a fixed width and resize mode disables expensive 
     );
     assert.match(
         css,
+        /\.agent-session-step-toggle\s*\{[\s\S]*width:\s*22px;[\s\S]*height:\s*22px;[\s\S]*flex:\s*0 0 22px;[\s\S]*display:\s*inline-flex;[\s\S]*align-items:\s*center;[\s\S]*justify-content:\s*center;[\s\S]*border-radius:\s*999px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle-icon\s*\{[\s\S]*width:\s*16px;[\s\S]*height:\s*16px;[\s\S]*overflow:\s*visible;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle-line\s*\{[\s\S]*stroke:\s*currentColor;[\s\S]*stroke-width:\s*8;[\s\S]*stroke-linecap:\s*round;[\s\S]*fill:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle-shape\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);[\s\S]*transform-box:\s*fill-box;[\s\S]*transform-origin:\s*center;[\s\S]*transition:\s*opacity 0\.16s ease, transform 0\.22s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle-shape\.is-arrow\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(0\.72\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle\.is-collapsed \.agent-session-step-toggle-shape\.is-menu\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(0\.72\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-session-step-toggle\.is-collapsed \.agent-session-step-toggle-shape\.is-arrow\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
         /\.agent-session-pager\s*\{[\s\S]*justify-content:\s*flex-end;[\s\S]*width:\s*100%;[\s\S]*max-width:\s*100%;[\s\S]*align-self:\s*stretch;[\s\S]*\}/
     );
     assert.match(
@@ -144,43 +239,127 @@ test('agent workflow tabs keep a fixed width and resize mode disables expensive 
     );
     assert.match(
         css,
+        /\.agent-image-frame\.is-ready\s*\{[\s\S]*min-height:\s*0;[\s\S]*aspect-ratio:\s*var\(--agent-image-aspect-ratio, auto\);[\s\S]*display:\s*block;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-image-frame img\s*\{[\s\S]*display:\s*block;[\s\S]*width:\s*100%;[\s\S]*height:\s*auto;[\s\S]*object-fit:\s*contain;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-gallery-main\s*\{[\s\S]*display:\s*block;[\s\S]*width:\s*100%;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-gallery \.agent-image-frame,[\s\S]*\.agent-step-gallery \.agent-viewer-frame\s*\{[\s\S]*position:\s*relative;[\s\S]*width:\s*100%;[\s\S]*max-width:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-viewer-frame\s*\{[\s\S]*min-height:\s*240px;[\s\S]*\}/
+    );
+    assert.doesNotMatch(css, /\.agent-step-viewer-thumb\s*\{/);
+    assert.doesNotMatch(css, /\.agent-step-viewer-thumb img\s*\{/);
+    assert.match(
+        css,
+        /\.agent-step-gallery-nav\s*\{[\s\S]*position:\s*absolute;[\s\S]*top:\s*50%;[\s\S]*transform:\s*translateY\(-50%\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-gallery-count\s*\{[\s\S]*position:\s*absolute;[\s\S]*right:\s*8px;[\s\S]*top:\s*8px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-candidate-pager\s*\{[\s\S]*display:\s*flex;[\s\S]*justify-content:\s*center;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-actions\s*\{[\s\S]*width:\s*100%;[\s\S]*max-width:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-actions\s*\{[\s\S]*justify-content:\s*flex-end;[\s\S]*gap:\s*8px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\s*\{[\s\S]*padding:\s*0;[\s\S]*gap:\s*0;[\s\S]*overflow:\s*hidden;[\s\S]*transition:\s*height 0\.2s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\)[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\.is-current:not\(\.is-applied\)\s*\{[\s\S]*border-color:\s*#3b82f6;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\.is-animating\s*\{[\s\S]*will-change:\s*height;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\.is-deferred-hidden\[hidden\]\s*\{[\s\S]*display:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-summary\s*\{[\s\S]*display:\s*flex;[\s\S]*min-height:\s*34px;[\s\S]*max-height:\s*34px;[\s\S]*box-sizing:\s*border-box;[\s\S]*padding:\s*8px 10px;[\s\S]*border-radius:\s*999px;[\s\S]*align-items:\s*center;[\s\S]*justify-content:\s*flex-start;[\s\S]*gap:\s*6px;[\s\S]*\}/
+    );
+    assert.doesNotMatch(css, /\.agent-step-summary::before\s*\{/);
+    assert.match(
+        css,
+        /\.agent-step-summary-thumb\s*\{[\s\S]*width:\s*30px;[\s\S]*height:\s*30px;[\s\S]*flex:\s*0 0 30px;[\s\S]*border-radius:\s*999px;[\s\S]*overflow:\s*hidden;[\s\S]*transition:\s*opacity 0\.16s ease, transform 0\.2s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\)[\s\S]*will-change:\s*transform, opacity;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\[open\] \.agent-step-summary-thumb\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(0\.72\);[\s\S]*pointer-events:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\.is-closing \.agent-step-summary-thumb\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-summary \.agent-block-title\s*\{[\s\S]*position:\s*absolute;[\s\S]*left:\s*50%;[\s\S]*transform:\s*translate\(-50%, -50%\);[\s\S]*text-align:\s*center;[\s\S]*line-height:\s*18px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-summary-meta\s*\{[\s\S]*position:\s*absolute;[\s\S]*right:\s*10px;[\s\S]*top:\s*50%;[\s\S]*transform:\s*translateY\(-50%\);[\s\S]*\}/
+    );
+    assert.doesNotMatch(css, /\.agent-step-current-tag\s*\{/);
+    assert.match(
+        css,
+        /\.agent-step-body\s*\{[\s\S]*overflow:\s*hidden;[\s\S]*opacity:\s*0;[\s\S]*transform:\s*translateY\(-8px\) scale\(0\.985\);[\s\S]*transition:\s*opacity 0\.16s ease, transform 0\.2s cubic-bezier\(0\.2, 0\.8, 0\.2, 1\);[\s\S]*will-change:\s*transform, opacity;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\[open\] \.agent-step-body\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*translateY\(0\) scale\(1\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-step-block\.is-opening \.agent-step-gallery \.agent-image-frame,[\s\S]*\.agent-step-block\.is-closing \.agent-step-gallery \.agent-image-frame,[\s\S]*\.agent-step-block\.is-opening \.agent-step-gallery \.agent-viewer-frame,[\s\S]*\.agent-step-block\.is-closing \.agent-step-gallery \.agent-viewer-frame\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*translateY\(-34px\) scale\(0\.18\);[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /function animateAgentStepBlockToggle\(details, expand\) \{[\s\S]*details\.classList\.add\('is-animating', expand \? 'is-opening' : 'is-closing'\);[\s\S]*details\.style\.height = `\$\{startHeight\}px`;[\s\S]*details\.style\.height = `\$\{endHeight\}px`;[\s\S]*details\.open = Boolean\(expand\);[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /function animateAgentStepBlockToggle\(details, expand\) \{[\s\S]*const wasPinnedToBottom = shouldForceAgentMessageBottomAfterRender\([\s\S]*details\.style\.height = `\$\{endHeight\}px`;[\s\S]*if \(wasPinnedToBottom\) \{[\s\S]*scheduleAgentMessageBottomPinForDuration\(AGENT_STEP_ANIMATION_MS \+ 40\);[\s\S]*scheduleAgentMessageBottomPin\(2\);/
+    );
+    assert.match(
+        source,
+        /function runAgentMessageLayoutAnimation\(animation\) \{[\s\S]*if \(animation\.expand\) \{[\s\S]*element\.classList\.remove\('is-opening'\);[\s\S]*\}[\s\S]*element\.style\.height = `\$\{endHeight\}px`;[\s\S]*scheduleAgentMessageBottomPinForDuration\(AGENT_STEP_ANIMATION_MS \+ 40\);/
+    );
+    assert.match(
+        source,
+        /function handleAgentStepSummaryToggle\(event, summary\) \{[\s\S]*event\.preventDefault\(\);[\s\S]*return animateAgentStepBlockToggle\(details, !details\.open\);[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /const stepSummary = event\.target\.closest\('\.agent-step-summary'\);[\s\S]*handleAgentStepSummaryToggle\(event, stepSummary\)/
+    );
+    assert.match(
+        css,
         /\.agent-block\.agent-block-image \.agent-block-header,[\s\S]*\.agent-block\.agent-block-image \.agent-block-status,[\s\S]*\.agent-block\.agent-block-viewer3d \.agent-block-header,[\s\S]*\.agent-block\.agent-block-viewer3d \.agent-block-status\s*\{[\s\S]*padding-left:\s*10px;[\s\S]*padding-right:\s*10px;[\s\S]*\}/
     );
     assert.match(
         css,
         /\.agent-composer-dock\s*\{[\s\S]*padding:\s*10px var\(--agent-workbench-content-inset-x\) 12px;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-workbench-toggle\s*\{[\s\S]*width:\s*var\(--agent-control-slot-width\);[\s\S]*height:\s*var\(--agent-control-slot-height\);[\s\S]*margin-bottom:\s*10px;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-workbench-topbar\s*\{[\s\S]*align-items:\s*flex-start;[\s\S]*padding:\s*10px var\(--agent-workbench-content-inset-x\);[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-workflow-tabs\s*\{[\s\S]*width:\s*auto;[\s\S]*align-items:\s*flex-start;[\s\S]*gap:\s*10px;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-workflow-tab\s*\{[\s\S]*flex:\s*0 0 var\(--agent-workflow-tab-width\);[\s\S]*width:\s*var\(--agent-workflow-tab-width\);[\s\S]*height:\s*var\(--agent-workflow-tab-width\);[\s\S]*aspect-ratio:\s*1 \/ 1;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-workbench-body\s*\{[\s\S]*display:\s*flex;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-message-pane,[\s\S]*#agent-workbench\.is-collapsed #btnAgentSend\s*\{[\s\S]*display:\s*none;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-composer-dock\s*\{[\s\S]*margin-top:\s*auto;[\s\S]*padding:\s*10px var\(--agent-workbench-content-inset-x\) 12px;[\s\S]*\}/
-    );
-    assert.match(
-        css,
-        /#agent-workbench\.is-collapsed \.agent-composer-actions\s*\{[\s\S]*justify-content:\s*flex-start;[\s\S]*\}/
     );
 });
 
@@ -195,7 +374,84 @@ test('left sidebar shares the bottom timeline panel surface treatment', () => {
     assert.doesNotMatch(css, /--left-sidebar-bg|--scene-canvas-bg-color/);
 });
 
-test('project session button renders as a composer avatar with dynamic gradients', () => {
+test('agent workbench keeps composer docked at bottom, collapses to three floating entry points, and expands from collapsed mode clicks', () => {
+    const html = readFileSync(new URL('../public/editor.html', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(
+        html,
+        /<div class="agent-workbench-topbar">[\s\S]*id="agentWorkbenchModeTabs"[\s\S]*agent-workbench-mode-icon[\s\S]*agent-workbench-mode-label[\s\S]*id="btnToggleAgentWorkbench"[\s\S]*<div class="agent-workbench-body">[\s\S]*data-mode-panel="conversation"[\s\S]*data-mode-panel="asset-library"[\s\S]*<div id="agentComposerDock" class="agent-composer-dock">/
+    );
+    assert.doesNotMatch(html, /agent-composer-dock-topbar/);
+    assert.match(
+        css,
+        /\.agent-workbench-body\s*\{[\s\S]*flex:\s*1 1 auto;[\s\S]*display:\s*flex;[\s\S]*flex-direction:\s*column;[\s\S]*overflow:\s*hidden;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench\.is-collapsed\s*\{[\s\S]*background:\s*transparent;[\s\S]*box-shadow:\s*none;[\s\S]*backdrop-filter:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench\.is-collapsed \.agent-workbench-toggle\s*\{[\s\S]*display:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench\.is-collapsed \.agent-workbench-topbar,[\s\S]*#agent-workbench\.is-collapsed \.agent-workbench-body\s*\{[\s\S]*display:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-collapsed-controls\s*\{[\s\S]*position:\s*absolute;[\s\S]*inset:\s*0;[\s\S]*display:\s*none;[\s\S]*flex-direction:\s*column;[\s\S]*justify-content:\s*flex-start;[\s\S]*pointer-events:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-collapsed-controls\[hidden\]\s*\{[\s\S]*display:\s*none !important;[\s\S]*pointer-events:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench-shell\.is-collapsed \.agent-workbench-collapsed-controls:not\(\[hidden\]\)\s*\{[\s\S]*display:\s*flex;[\s\S]*pointer-events:\s*auto;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-collapsed-mode-tabs\s*\{[\s\S]*width:\s*100%;[\s\S]*display:\s*flex;[\s\S]*flex-direction:\s*column;[\s\S]*align-items:\s*center;[\s\S]*gap:\s*10px;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench-shell\.is-collapsed \.agent-workbench-collapsed-controls \.agent-workbench-mode-tab\s*\{[\s\S]*width:\s*var\(--agent-control-slot-width\);[\s\S]*height:\s*var\(--agent-control-slot-height\);[\s\S]*background:\s*color-mix\(in srgb, var\(--panel-bg\) 22%, transparent\);[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench-shell\.is-collapsed \.agent-workbench-collapsed-controls \.agent-user-avatar-btn\s*\{[\s\S]*width:\s*var\(--agent-control-slot-width\);[\s\S]*height:\s*var\(--agent-control-slot-height\);[\s\S]*flex:\s*0 0 var\(--agent-control-slot-height\);[\s\S]*margin-right:\s*0;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench-shell\.is-collapsed \.agent-workbench-collapsed-controls \.agent-workbench-mode-label\s*\{[\s\S]*display:\s*none;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /\.agent-workbench-collapsed-controls-bottom\s*\{[\s\S]*margin-top:\s*auto;[\s\S]*\}/
+    );
+    assert.match(
+        css,
+        /#agent-workbench-shell\.is-collapsed \.agent-workbench-resizer\s*\{[\s\S]*pointer-events:\s*none;[\s\S]*opacity:\s*0;[\s\S]*\}/
+    );
+    assert.match(
+        html,
+        /id="agentWorkbenchCollapsedControls"[\s\S]*id="agentWorkbenchCollapsedModeTabs"[\s\S]*data-mode="conversation"[\s\S]*data-mode="asset-library"[\s\S]*id="btnCollapsedUserSession"/
+    );
+    assert.doesNotMatch(html, /id="btnExpandAgentWorkbench"/);
+    assert.match(
+        source,
+        /function handleAgentWorkbenchModeClick\(event\) \{[\s\S]*if \(state\.agentWorkbenchCollapsed\) \{[\s\S]*setAgentWorkbenchCollapsed\(false\);[\s\S]*\}[\s\S]*setAgentWorkbenchMode\(mode\);[\s\S]*\}/
+    );
+    assert.match(
+        source,
+        /function syncAgentWorkbenchCollapsedState\(\) \{[\s\S]*dom\.agentWorkbenchShell\?\.classList\.toggle\('is-collapsed', collapsed\);[\s\S]*dom\.agentWorkbench\?\.classList\.toggle\('is-collapsed', collapsed\);[\s\S]*\}/
+    );
+});
+
+test('project session button stays in the composer action row with dynamic gradients', () => {
     const html = readFileSync(new URL('../public/editor.html', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
     const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
@@ -206,7 +462,7 @@ test('project session button renders as a composer avatar with dynamic gradients
     );
     assert.match(
         css,
-        /\.agent-user-avatar-btn\s*\{[\s\S]*width:\s*var\(--agent-control-slot-width\);[\s\S]*height:\s*var\(--agent-control-slot-height\);[\s\S]*margin-right:\s*auto;[\s\S]*border:\s*0;[\s\S]*background:\s*transparent;[\s\S]*\}/
+        /\.agent-user-avatar-btn\s*\{[\s\S]*width:\s*var\(--agent-control-slot-width\);[\s\S]*height:\s*var\(--agent-control-slot-height\);[\s\S]*margin-right:\s*auto;[\s\S]*border:\s*0;[\s\S]*background:\s*transparent;[\s\S]*flex:\s*0 0 var\(--agent-control-slot-width\);[\s\S]*\}/
     );
     assert.match(
         css,
@@ -228,4 +484,113 @@ test('project session button renders as a composer avatar with dynamic gradients
         source,
         /function syncProjectSessionButton\(\) \{[\s\S]*style\.setProperty\('--agent-user-avatar-start', gradient\.start\);[\s\S]*style\.setProperty\('--agent-user-avatar-end', gradient\.end\);[\s\S]*querySelector\('\.agent-user-avatar-text'\)[\s\S]*\}/
     );
+});
+
+test('agent composer exposes single-select skill chips above the prompt input', () => {
+    const html = readFileSync(new URL('../public/editor.html', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../public/editor.css', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+
+    assert.match(html, /id="agentComposerSkillToolbar"[^>]+class="agent-composer-skill-toolbar"[^>]+data-i18n-attrs="aria-label:agent\.skillToolbar"/);
+    assert.match(html, /data-agent-skill-insert="scene"[^>]+data-i18n="agent\.skills\.scene"/);
+    assert.match(html, /data-agent-skill-insert="object"[^>]+data-i18n="agent\.skills\.object"/);
+    assert.match(html, /data-agent-skill-insert="character"[^>]+data-i18n="agent\.skills\.character"/);
+    assert.match(html, /data-agent-skill-insert="camera"[^>]+data-i18n="agent\.skills\.camera"/);
+    assert.match(html, /<div class="agent-composer-prompt-surface">[\s\S]*id="agentComposerInput"[\s\S]*contenteditable="plaintext-only"[\s\S]*data-i18n-placeholder="agent\.inputPlaceholder"[\s\S]*id="agentComposerSkillTokens" class="agent-composer-skill-tokens" contenteditable="false" hidden/);
+
+    assert.match(source, /const AGENT_COMPOSER_SKILL_DEFS = \[[\s\S]*value:\s*'\$scene-skill'[\s\S]*workflow:\s*'scene-build'[\s\S]*value:\s*'\$object-skill'[\s\S]*workflow:\s*'object-insert'[\s\S]*value:\s*'\$character-skill'[\s\S]*workflow:\s*'character-create'[\s\S]*value:\s*'\$camera-skill'[\s\S]*workflow:\s*'camera-direct'/);
+    assert.match(source, /const CAMERA_PIPELINE_STEP_DEFS = \[[\s\S]*key:\s*'camera-scene-info'[\s\S]*key:\s*'camera-initial-views'[\s\S]*key:\s*'camera-director'[\s\S]*key:\s*'camera-trajectory'[\s\S]*key:\s*'camera-eval'/);
+    assert.doesNotMatch(source, /key:\s*'camera-apply'/);
+    assert.match(source, /aliases:\s*\['\$camera-skill', 'camera-skill'\]/);
+    assert.match(source, /agentComposerSkillId:\s*'',/);
+    assert.match(source, /function extractAgentComposerSkillText\(text\)/);
+    assert.match(source, /function parseAgentComposerSkillText\(text\)/);
+    assert.match(source, /function isAgentComposerSkillTokenMounted\(\)/);
+    assert.match(source, /function getAgentComposerInputText\(\)/);
+    assert.match(source, /function setAgentComposerInputText\(text, \{ focus = true \} = \{\}\)/);
+    assert.match(source, /function renderAgentComposerSkillControls\(\)/);
+    assert.match(source, /button\.disabled = hasSkill;/);
+    assert.match(source, /button\.classList\.toggle\('is-active', isActive\);/);
+    assert.match(source, /const tokenWasRemoved = Boolean\(previousSkillId\) && !isAgentComposerSkillTokenMounted\(\);/);
+    assert.match(source, /if \(result\.skill\) \{\s*state\.agentComposerSkillId = result\.skill\.id;\s*\} else if \(tokenWasRemoved\) \{\s*state\.agentComposerSkillId = '';\s*\}/);
+    assert.match(source, /function buildAgentComposerPromptText\(rawPrompt\)[\s\S]*return `\$\{skill\.value\} \$\{prompt\}`;/);
+    assert.match(source, /function getAgentWorkflowForPrompt\(prompt, fallbackWorkflowId = state\.agentWorkflow\)/);
+    assert.match(source, /const workflowId = parsed\.skill\?\.workflow \|\| '';/);
+    assert.match(source, /return AGENT_WORKFLOW_DEFS\[workflowId\] \? workflowId : fallbackWorkflowId;/);
+    assert.match(source, /const CAMERA_PIPELINE_STAGE_PLAN = \[[\s\S]*'camera_scene_info_export'[\s\S]*'camera_trajectory_eval_render'[\s\S]*\]/);
+    assert.match(source, /const AGENT_PIPELINE_STATUS_DEFS = \{[\s\S]*running:[\s\S]*queuing:[\s\S]*rendering:[\s\S]*done:[\s\S]*TLE:[\s\S]*pending:[\s\S]*\};/);
+    assert.match(source, /queuing: '排队中'/);
+    assert.match(source, /queuing: 'Queuing'/);
+    assert.match(source, /TLE: '超时'/);
+    assert.match(source, /TLE: 'TLE'/);
+    assert.match(source, /skipped:\s*\{[\s\S]*labelKey: 'agent\.pipelineSteps\.pipelineStatuses\.skipped'[\s\S]*className: 'is-skipped'/);
+    assert.match(source, /function shouldShowAgentStepProgressTrack\(statusId, block = \{\}\) \{[\s\S]*normalized === 'running' \|\| normalized === 'rendering' \|\| normalized === 'queuing'[\s\S]*normalized === 'failed' \|\| normalized === 'TLE'[\s\S]*block\?\.indeterminate/);
+    assert.match(source, /function isAgentProgressBlockActive\(block = \{\}\)[\s\S]*statusId === 'queuing'/);
+    assert.match(source, /function isAgentProgressBlockTerminal\(block = \{\}\)[\s\S]*statusId === 'TLE'/);
+    assert.match(source, /const showProgressTrack = !isStepBlock \|\| \([\s\S]*shouldShowAgentStepProgressTrack\(statusId, block\)[\s\S]*!isApplied[\s\S]*!isCanceledStep[\s\S]*!isInterruptedAttempt/);
+    assert.match(source, /block\.stepKey === 'components-3d'[\s\S]*String\(assetProgress\?\.provider \|\| ''\)\.trim\(\)\.toLowerCase\(\) === 'trellis\.2'[\s\S]*statusText = '';/);
+    assert.doesNotMatch(source, /block\.stepKey === 'components-3d'[\s\S]*statusText = '';[\s\S]*String\(assetProgress\?\.provider/);
+    assert.match(source, /function createCameraPipelineSteps\(\{[\s\S]*const taskEvents = Array\.isArray\(task\?\.events\) \? task\.events : \[\];[\s\S]*\.map\(\(event\) => getAgentTaskEventPayload\(event\)\)[\s\S]*const payloadInputs = eventPayloads\.length > 0[\s\S]*coalesceAgentTaskStepPayloads\(payloadInputs\)[\s\S]*payloads\.map/);
+    assert.match(source, /function getCameraTaskPipelineStages\(payloads = \[\]\)[\s\S]*const stages = \[\];[\s\S]*CAMERA_PIPELINE_STAGE_PLAN\.forEach\(\(stage\) => \{[\s\S]*payload\?\.pipelineStages[\s\S]*return stages;/);
+    assert.match(source, /const plannedStages = getCameraTaskPipelineStages\(payloads\);[\s\S]*plannedStages\.forEach\(\(stage\) => \{[\s\S]*progress:\s*0,[\s\S]*planned:\s*true/);
+    assert.match(source, /const images = normalizeAgentTaskPayloadImages\(payload\.images\);[\s\S]*const artifacts = getPayloadArtifactsForStage\(payload, stage\);[\s\S]*images,[\s\S]*artifacts,[\s\S]*galleryLocked: false,/);
+    assert.match(source, /function coalesceAgentTaskStepPayloads\(payloads = \[\]\)[\s\S]*byKey\.set\(key,[\s\S]*return orderCameraTaskPayloads\(byKey, plannedStages\);/);
+    assert.match(source, /function orderCameraTaskPayloads\(byKey, plannedStages = \[\]\)[\s\S]*plannedStages[\s\S]*ordered\.push\(payload\);[\s\S]*byKey\.forEach/);
+    assert.match(source, /function distributeCameraTaskPayloadArtifacts\(byKey, payload = \{\}\)[\s\S]*payload\.initialViewImages[\s\S]*'camera_initial_view_prepare'[\s\S]*payload\.directorIntentText[\s\S]*'camera_director_analysis'/);
+    assert.match(source, /function getCameraTaskPayloadStage\(payload = \{\}\)[\s\S]*getCameraPipelineStageForStatusText\(getAgentTaskEventStatusText\(payload\)\)[\s\S]*getCameraPipelineStageForTitle\(payload\?\.title\)/);
+    assert.match(source, /function getCameraTaskStageStatuses\(task = \{\}, plannedStages = \[\], payloads = \[\]\)[\s\S]*pipelineStageStatuses[\s\S]*currentStage[\s\S]*'camera_trajectory_eval_render'[\s\S]*'pending'/);
+    assert.match(source, /function applyCameraPipelineImplicitHandoffStatuses\(task = \{\}, statuses = \{\}\)[\s\S]*currentStage === 'camera_scene_info_export'[\s\S]*camera_initial_view_prepare: 'running'/);
+    assert.match(source, /return applyCameraPipelineImplicitHandoffStatuses\(task, statuses\);/);
+    assert.match(source, /function getPayloadArtifactsForStage\(payload = \{\}, stage = ''\)[\s\S]*targetStage === normalizedStage[\s\S]*payloadStage === normalizedStage/);
+    assert.match(source, /function getCameraTaskPayloadStatusId\(payload = \{\}\)[\s\S]*return 'running';[\s\S]*return 'rendering';[\s\S]*return 'done';[\s\S]*return 'skipped';[\s\S]*return 'canceled';[\s\S]*return 'pending';/);
+    assert.match(source, /function dedupeAgentTaskArtifacts\(artifacts = \[\]\)[\s\S]*artifact\?\.text \|\| artifact\?\.content/);
+    assert.match(source, /function getCameraPipelineStageForTitle\(title\)[\s\S]*'相机场景信息导出', 'camera_scene_info_export'[\s\S]*'相机轨迹生成', 'camera_trajectory_generation'/);
+    assert.match(source, /function getAgentTaskEventPayload\(event\)[\s\S]*item\.arguments[\s\S]*parseAgentTaskEventJsonObject\(candidate\)[\s\S]*payload\.visionaryTask/);
+    assert.match(source, /function getCameraPipelineStepDefinitionForStage\(stage\)[\s\S]*normalizedStage === 'camera_scene_info_export'[\s\S]*normalizedStage === 'camera_trajectory_eval_render'/);
+    assert.match(source, /function renderAgentBlockArtifacts\(artifacts = \[\]\)[\s\S]*agent-step-artifacts[\s\S]*agent-step-artifact-text/);
+    assert.match(source, /function getAgentProgressBlockRenderState\(block, context = \{\}\)[\s\S]*getAgentPipelineStatusLabel\(statusId\)[\s\S]*getAgentPipelineStatusClass\(statusId\)/);
+    assert.match(source, /function renderAgentProgressBlock\(block, context = \{\}\)[\s\S]*getAgentProgressBlockRenderState\(block, context\)/);
+    assert.doesNotMatch(source, /completedCount = progress >= 1 \? CAMERA_PIPELINE_STEP_DEFS\.length/);
+    assert.doesNotMatch(source, /text:\s*task\.statusText/);
+    assert.match(source, /function applyAgentCameraTrajectoryTimeline\(source\)[\s\S]*agentCameraTrajectoryPreview[\s\S]*state\.keyframes = nextKeyframes[\s\S]*markWorkspaceDirty\('agent-camera-trajectory'\)/);
+    assert.match(source, /function resetAgentCameraTrajectoryPreviewForRetry\(\)[\s\S]*restoreCameraTrajectoryTimeline\(preview\.backup\)[\s\S]*agentCameraTrajectoryPreview = \{[\s\S]*\.\.\.preview[\s\S]*source: null/);
+    assert.match(source, /let agentCameraRenderJob = null;/);
+    assert.match(source, /function cancelAgentCameraRenderJob\(\)[\s\S]*status: 'canceled'/);
+    assert.match(source, /async function renderAgentCameraRequests\(job, requests, stage\)[\s\S]*renderVisionaryFrame\(context,[\s\S]*outputs: \['blob'\][\s\S]*projectApi\.writeAsset\(\{/);
+    assert.match(source, /async function continueAgentCameraTrajectoryAfterHostRender\(job, result, finalText\)[\s\S]*projectApi\.continueCameraTrajectory\(\{[\s\S]*needsEvalRender[\s\S]*projectApi\.optimizeCameraTrajectory\(\{/);
+    assert.match(source, /job\.initialViewImages = initialImages;[\s\S]*job\.stage = 'camera_director_analysis';[\s\S]*projectApi\.continueCameraTrajectory/);
+    assert.match(source, /statusId: 'rendering',[\s\S]*message: t\('agent\.pipelineSteps\.cameraEval'\)[\s\S]*projectApi\.optimizeCameraTrajectory/);
+    assert.match(source, /async function completeCameraDirectResultWithHostRender\(\{ sessionId, attemptId, prompt, result \}\)[\s\S]*hasCameraTrajectoryHostRenderRequest[\s\S]*completeServerCodexAgentSessionAttempt\(\{/);
+    assert.match(source, /function markCameraAttemptCanceled\(attempt = \{\}\)[\s\S]*getCanceledCameraPipelineStageStatuses[\s\S]*statusId: stageStatuses\[payload\.stage\] \|\| 'canceled'/);
+    assert.match(source, /workflowId === 'camera-direct'[\s\S]*applyAgentCameraTrajectoryTimeline\(result\?\.task\)/);
+    assert.match(source, /if \(workflowId === 'camera-direct'\) \{[\s\S]*createAgentGenerationAttempt\(\{[\s\S]*blocks:\s*\[\],[\s\S]*steps:\s*\[\],[\s\S]*status:\s*'running'/);
+    assert.doesNotMatch(source, /createCameraPipelineSteps\(\{ pending: true \}\)/);
+    assert.match(source, /const effectivePrompt = prompt \? rawPrompt\.trimStart\(\) : attachmentFallback;/);
+    assert.match(source, /dom\.agentComposerInput\?\.addEventListener\('input', handleAgentComposerInput\);/);
+    assert.match(source, /dom\.agentComposerSkillToolbar\?\.addEventListener\('click', handleAgentComposerSkillToolbarClick\);/);
+    assert.match(source, /event\.key === 'Backspace'[\s\S]*clearAgentComposerSkill\(\);/);
+
+    assert.match(css, /\.agent-composer-skill-toolbar\s*\{[\s\S]*grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\);/);
+    assert.match(css, /\.agent-composer-skill-btn\.is-active\s*\{[\s\S]*border-color:\s*var\(--accent\);/);
+    assert.match(css, /\.agent-composer-skill-btn:disabled:not\(\.is-active\)\s*\{[\s\S]*opacity:\s*0\.36;/);
+    assert.match(css, /\.agent-composer-input\s*\{[\s\S]*white-space:\s*pre-wrap;[\s\S]*word-break:\s*break-word;/);
+    assert.match(css, /\.agent-composer-skill-tokens\s*\{[\s\S]*display:\s*inline-flex;[\s\S]*align-items:\s*center;[\s\S]*height:\s*18px;/);
+    assert.match(css, /\.agent-composer-skill-token\s*\{[\s\S]*height:\s*18px;[\s\S]*min-height:\s*0;[\s\S]*border-radius:\s*999px;[\s\S]*vertical-align:\s*baseline;/);
+});
+
+test('server project snapshots restore persisted camera timeline on open', () => {
+    const source = readFileSync(new URL('../public/editor.js', import.meta.url), 'utf8');
+    const loadSnapshotStart = source.indexOf('async function loadSceneFromSnapshot');
+    const openProjectStart = source.indexOf('async function openServerProject');
+    assert.notEqual(loadSnapshotStart, -1);
+    assert.notEqual(openProjectStart, -1);
+    const loadSnapshotSource = source.slice(loadSnapshotStart, openProjectStart);
+
+    assert.match(source, /function applySceneTimelineSnapshot\(timeline,[\s\S]*state\.keyframes = demoSceneActive \? \[\] : loadedTimelineKeyframes;[\s\S]*state\.cameraFovKeyframes = demoSceneActive \? \[\] : loadedTimelineFovKeyframes;[\s\S]*syncCameraSequenceVisualization\(\);/);
+    assert.match(source, /const loadedTimeline = applySceneTimelineSnapshot\(timeline, \{ demoSceneActive \}\);[\s\S]*buildDemoKeyframeRevealQueue\(loadedTimeline\.keyframes\)/);
+    assert.match(loadSnapshotSource, /const timeline = parseSceneTimeline\(raw\);/);
+    assert.match(loadSnapshotSource, /setCameraSequenceVisibility\(raw\.env\.cameraSequenceVisible, true\);/);
+    assert.match(loadSnapshotSource, /else if \(Array\.isArray\(timeline\?\.keyframes\) && timeline\.keyframes\.length > 0\) \{[\s\S]*setCameraSequenceVisibility\(true, true\);/);
+    assert.match(loadSnapshotSource, /applySceneTimelineSnapshot\(timeline\);/);
+    assert.ok(loadSnapshotSource.indexOf('const loadResult = await sceneFs.loadScene') < loadSnapshotSource.indexOf('applySceneTimelineSnapshot(timeline);'));
 });

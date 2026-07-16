@@ -10,6 +10,8 @@ const OPENAI_CONVERSATION_REFERENCE_LINKS = [
     'https://platform.openai.com/docs/guides/images-vision',
 ];
 
+const CANONICAL_ASSET_PATH_RE = /^assets\/([a-f0-9]{64})\.[^/]+$/i;
+
 function sanitizeWorkflowId(workflowId) {
     return String(workflowId || 'unknown')
         .trim()
@@ -121,6 +123,19 @@ function createPersistableAttachment(attachment, assetPath = '') {
 
 function clonePersistableBlock(block, assetPath = '') {
     const base = { ...block };
+    if (block?.type === 'progress' && Array.isArray(block.images)) {
+        base.images = block.images.map((image) => {
+            const nextImage = { ...image };
+            delete nextImage.src;
+            if (!nextImage.assetPath && nextImage.relativePath) {
+                nextImage.assetPath = nextImage.relativePath;
+            }
+            if (!nextImage.relativePath && nextImage.assetPath) {
+                nextImage.relativePath = nextImage.assetPath;
+            }
+            return nextImage;
+        });
+    }
     if (block?.type === 'image') {
         delete base.src;
         if (assetPath) base.assetPath = assetPath;
@@ -130,6 +145,13 @@ function clonePersistableBlock(block, assetPath = '') {
         if (assetPath) base.assetPath = assetPath;
     }
     return base;
+}
+
+function getAttemptStepBlocks(attempt) {
+    if (Array.isArray(attempt?.steps) && attempt.steps.length > 0) {
+        return attempt.steps;
+    }
+    return Array.isArray(attempt?.blocks) ? attempt.blocks : [];
 }
 
 function toUnixSeconds(isoString) {
@@ -149,6 +171,90 @@ function deriveOutputTextType(role) {
 
 function cloneArray(items = []) {
     return Array.isArray(items) ? items.map((item) => ({ ...item })) : [];
+}
+
+function readRecord(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function normalizeProjectRelativePath(value = '') {
+    const normalized = String(value || '').trim().replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!normalized || normalized.includes('\0')) return '';
+    if (normalized.startsWith('/') || /^[a-z]:\//i.test(normalized)) return '';
+    if (normalized.split('/').some((part) => part === '' || part === '..')) return '';
+    return normalized;
+}
+
+function hashFromCanonicalAssetPath(value = '') {
+    const match = normalizeProjectRelativePath(value).match(CANONICAL_ASSET_PATH_RE);
+    return match?.[1]?.toLowerCase() || '';
+}
+
+function normalizeCanonicalAssetReference(value) {
+    const outer = readRecord(value);
+    const record = Object.keys(readRecord(outer.assetReference)).length > 0
+        ? readRecord(outer.assetReference)
+        : (Object.keys(readRecord(outer.canonicalAssetReference)).length > 0
+            ? readRecord(outer.canonicalAssetReference)
+            : outer);
+    const relativePath = normalizeProjectRelativePath(
+        record.path
+        || record.canonicalPath
+        || record.relativePath
+        || record.assetPath
+        || record.modelPath
+    );
+    const hash = hashFromCanonicalAssetPath(relativePath);
+    if (!hash) return null;
+    const explicitHash = String(record.hash || '').trim().toLowerCase();
+    if (explicitHash && explicitHash !== hash) return null;
+    const assetId = String(record.assetId || '').trim() || `sha256:${hash}`;
+    if (assetId.startsWith('sha256:') && assetId.slice('sha256:'.length).toLowerCase() !== hash) return null;
+    const bytes = Number(record.bytes);
+    return {
+        assetId,
+        hash,
+        path: relativePath,
+        ...(record.mimeType || record.mime_type ? { mimeType: String(record.mimeType || record.mime_type) } : {}),
+        ...(Number.isFinite(bytes) && bytes >= 0 ? { bytes } : {}),
+        ...(record.kind ? { kind: String(record.kind) } : {}),
+        ...(Object.keys(readRecord(record.provenance)).length > 0 ? { provenance: readRecord(record.provenance) } : {}),
+    };
+}
+
+function collectCanonicalAssetReferences(value, output = new Map(), seen = new WeakSet()) {
+    const normalized = normalizeCanonicalAssetReference(value);
+    if (normalized) {
+        output.set(normalized.assetId, normalized);
+    }
+    if (!value || typeof value !== 'object') return output;
+    if (seen.has(value)) return output;
+    seen.add(value);
+    if (Array.isArray(value)) {
+        value.forEach((item) => collectCanonicalAssetReferences(item, output, seen));
+        return output;
+    }
+    const record = readRecord(value);
+    [
+        'assetReference',
+        'canonicalAssetReference',
+        'assetReferences',
+        'canonicalAssetReferences',
+        'metadata',
+        'images',
+        'items',
+        'blocks',
+        'steps',
+        'attempts',
+        'workflows',
+        'sceneInsertPlan',
+        'sceneBranch',
+        'candidatesById',
+        'context',
+    ].forEach((key) => {
+        collectCanonicalAssetReferences(record[key], output, seen);
+    });
+    return output;
 }
 
 function withAgentHistoryRoot(relativePath = '') {
@@ -299,6 +405,12 @@ export class AgentSessionStore {
             serializedWorkflows.push(serialized);
             openaiMessages.push(...serialized.openaiMessages);
         }
+        this.recordCanonicalAssetReferences(snapshot?.stepStates, context, {
+            kind: 'step-state',
+        });
+        this.recordCanonicalAssetReferences(snapshot?.pipelineStates, context, {
+            kind: 'pipeline-state',
+        });
 
         return {
             schema: 'visionary.agent_history',
@@ -306,6 +418,12 @@ export class AgentSessionStore {
             savedAt: new Date().toISOString(),
             storageMode: this.storageMode || 'detached',
             assetRoot: AGENT_HISTORY_ASSET_DIR,
+            stepStates: snapshot?.stepStates && typeof snapshot.stepStates === 'object'
+                ? JSON.parse(JSON.stringify(snapshot.stepStates))
+                : {},
+            pipelineStates: snapshot?.pipelineStates && typeof snapshot.pipelineStates === 'object'
+                ? JSON.parse(JSON.stringify(snapshot.pipelineStates))
+                : {},
             references: {
                 style: 'openai-responses-message-envelope-with-visionary-content-extensions',
                 links: [...OPENAI_CONVERSATION_REFERENCE_LINKS],
@@ -328,11 +446,31 @@ export class AgentSessionStore {
         };
     }
 
+    recordCanonicalAssetReferences(value, context, metadata = {}) {
+        if (!(context?.assetIndex instanceof Map)) return;
+        for (const reference of collectCanonicalAssetReferences(value).values()) {
+            context.assetIndex.set(`canonical:${reference.assetId}`, {
+                hash: reference.hash,
+                path: reference.path,
+                assetId: reference.assetId,
+                canonical: true,
+                mime_type: reference.mimeType || '',
+                bytes: Number.isFinite(Number(reference.bytes)) ? Number(reference.bytes) : 0,
+                kind: reference.kind || metadata.kind || 'canonical-asset-reference',
+                ...(Object.keys(readRecord(reference.provenance)).length > 0 ? { provenance: reference.provenance } : {}),
+                ...metadata,
+            });
+        }
+    }
+
     async serializeWorkflowSnapshot(workflowSnapshot, context) {
         const items = Array.isArray(workflowSnapshot?.items) ? workflowSnapshot.items : [];
         const serializedItems = [];
         const openaiMessages = [];
         for (const item of items) {
+            this.recordCanonicalAssetReferences(item, context, {
+                workflow: workflowSnapshot?.workflow || '',
+            });
             const serialized = await this.serializeItem(item, workflowSnapshot, context);
             serializedItems.push(serialized.item);
             openaiMessages.push(...serialized.openaiMessages);
@@ -401,9 +539,15 @@ export class AgentSessionStore {
                 const assetPath = await this.persistBlockAsset(block, context);
                 blocks.push(clonePersistableBlock(block, assetPath));
             }
+            const steps = [];
+            for (const block of attempt.steps || []) {
+                const assetPath = await this.persistBlockAsset(block, context);
+                steps.push(clonePersistableBlock(block, assetPath));
+            }
             const serializedAttempt = {
                 ...attempt,
                 blocks,
+                ...(Array.isArray(attempt.steps) ? { steps } : {}),
             };
             attempts.push(serializedAttempt);
             openaiMessages.push(
@@ -549,7 +693,7 @@ export class AgentSessionStore {
                 text: attempt.text,
             });
         }
-        for (const block of cloneArray(attempt?.blocks)) {
+        for (const block of cloneArray(getAttemptStepBlocks(attempt))) {
             if (block.type === 'progress') {
                 content.push({
                     type: 'visionary_progress',
@@ -558,7 +702,22 @@ export class AgentSessionStore {
                     status: block.status || '',
                     status_text: block.statusText || '',
                     value: Number(block.value || 0),
+                    ...(block.assetProgress && typeof block.assetProgress === 'object'
+                        ? { asset_progress: block.assetProgress }
+                        : {}),
                 });
+                for (const [index, image] of cloneArray(block.images).entries()) {
+                    content.push({
+                        type: 'visionary_output_image',
+                        block_id: block.id || '',
+                        title: image.title || image.id || block.title || '',
+                        status: block.applied ? 'applied' : 'ready',
+                        asset_path: image.assetPath || image.relativePath || '',
+                        alt: image.alt || block.title || '',
+                        gallery_index: index,
+                        selected: index === (Number(block.selectedIndex) || 0),
+                    });
+                }
                 continue;
             }
             if (block.type === 'image') {

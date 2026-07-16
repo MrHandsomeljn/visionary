@@ -1,6 +1,26 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PluginOption, ViteDevServer } from 'vite';
+import { CodexAgentRuntime } from './codex-agent-runtime.ts';
+import {
+  continueCameraTrajectoryAfterEvalRender,
+  continueCameraTrajectoryAfterRender,
+  prepareCameraTrajectoryRender,
+} from './mcp/new-pipeline-camera-trajectory-server.ts';
+import {
+  cancelComponents3DExecutions,
+  cancelComponents3DTrellisJob,
+  type Components3DCancelScope,
+} from './mcp/new-pipeline-components-3d-server.ts';
 import { ProjectStorage, ProjectStorageError, resolveProjectStorageRoot } from './project-storage.ts';
+import {
+  redactUserApiConfigForClient,
+  type ClientUserApiConfig,
+  type UserApiConfig,
+} from './components-3d-config.ts';
+import {
+  queryComponents3DTrellisStatus,
+  type Components3DTrellisStatusSummary,
+} from './components-3d-status.ts';
 
 interface ProjectApiResponse {
   ok: boolean;
@@ -11,7 +31,17 @@ interface ProjectApiResponse {
   };
 }
 
+type ClientUserApiConfigResponse = ClientUserApiConfig & {
+  components3DTrellisStatus: Components3DTrellisStatusSummary | null;
+};
+
 const API_PREFIX = '/api/projects';
+const AGENT_STEP_ACTION_PREFIX = '/api/agent/step-action';
+const AGENT_STEP_ACTION_STREAM_PREFIX = `${AGENT_STEP_ACTION_PREFIX}/stream`;
+const AGENT_CANCEL_PREFIX = '/api/agent/cancel';
+const CODEX_AGENT_PREFIX = '/api/codex-agent';
+const CODEX_AUTH_PREFIX = '/api/codex-auth';
+const USER_API_CONFIG_PREFIX = '/api/user-api-config';
 const ADMIN_USERS_PREFIX = '/api/project-admin/users';
 const JSON_BODY_LIMIT_BYTES = 50 * 1024 * 1024;
 const BINARY_BODY_LIMIT_BYTES = 512 * 1024 * 1024;
@@ -48,6 +78,85 @@ function sendError(res: ServerResponse, error: unknown): void {
   });
 }
 
+async function createUserApiConfigResponse(
+  config: UserApiConfig,
+  options: { includeTrellisStatus?: boolean } = {},
+): Promise<ClientUserApiConfigResponse> {
+  const includeTrellisStatus = options.includeTrellisStatus ?? true;
+  const response = redactUserApiConfigForClient(config);
+  return {
+    ...response,
+    components3DTrellisStatus: includeTrellisStatus && config.components3D.provider === 'trellis.2'
+      ? await queryComponents3DTrellisStatus(config.components3D.trellis2)
+      : null,
+  };
+}
+
+function sendSseHeaders(res: ServerResponse): void {
+  res.statusCode = 200;
+  res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+  res.setHeader('cache-control', 'no-cache, no-transform');
+  res.setHeader('connection', 'keep-alive');
+  res.setHeader('x-accel-buffering', 'no');
+  res.flushHeaders?.();
+}
+
+function writeSse(res: ServerResponse, event: string, data: unknown): void {
+  res.write(`event: ${event}\n`);
+  const payload = JSON.stringify(data ?? null);
+  for (const line of payload.split(/\r?\n/)) {
+    res.write(`data: ${line}\n`);
+  }
+  res.write('\n');
+}
+
+function codexStepActionInputFromBody(body: Record<string, unknown>, signal?: AbortSignal) {
+  return {
+    user: getBodyString(body, 'user'),
+    projectId: getBodyString(body, 'projectId'),
+    sessionId: getBodyString(body, 'sessionId'),
+    attemptId: typeof body.attemptId === 'string' ? body.attemptId : undefined,
+    executionId: typeof body.executionId === 'string' ? body.executionId : undefined,
+    stepKey: getBodyString(body, 'stepKey'),
+    action: getBodyString(body, 'action'),
+    prompt: typeof body.prompt === 'string' ? body.prompt : undefined,
+    selectedIndex: typeof body.selectedIndex === 'number' ? body.selectedIndex : undefined,
+    images: Array.isArray(body.images) ? body.images : undefined,
+    sourceImages: Array.isArray(body.sourceImages) ? body.sourceImages : undefined,
+    branchRevision: typeof body.branchRevision === 'number' ? body.branchRevision : undefined,
+    parentCandidateIds: Array.isArray(body.parentCandidateIds) ? body.parentCandidateIds : undefined,
+    activeContext: body.activeContext && typeof body.activeContext === 'object' ? body.activeContext : undefined,
+    assetId: typeof body.assetId === 'string' ? body.assetId : undefined,
+    signal,
+  };
+}
+
+function components3DCancelScopeFromBody(body: Record<string, unknown>): Components3DCancelScope {
+  const required = (key: string): string => {
+    const value = getBodyString(body, key).trim();
+    if (!value) throw new ProjectStorageError('BAD_REQUEST', `${key} is required`);
+    return value;
+  };
+  const kind = required('kind');
+  const base = {
+    user: required('user'),
+    projectId: required('projectId'),
+    attemptId: required('attemptId'),
+  };
+  if (kind === 'workflow') return { kind, ...base };
+  const stepExecutionId = required('stepExecutionId');
+  if (kind === 'step') return { kind, ...base, stepExecutionId };
+  if (kind === 'asset') {
+    return {
+      kind,
+      ...base,
+      stepExecutionId,
+      assetExecutionId: required('assetExecutionId'),
+    };
+  }
+  throw new ProjectStorageError('BAD_REQUEST', `unsupported cancel scope: ${kind}`);
+}
+
 function getQueryString(url: URL, key: string): string {
   return String(url.searchParams.get(key) || '').trim();
 }
@@ -58,6 +167,19 @@ function decodePathPart(value: string): string {
   } catch {
     return value;
   }
+}
+
+function contentTypeForProjectFilePath(filePath: string): string {
+  const normalized = filePath.toLowerCase();
+  if (normalized.endsWith('.svg')) return 'image/svg+xml; charset=utf-8';
+  if (normalized.endsWith('.png')) return 'image/png';
+  if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) return 'image/jpeg';
+  if (normalized.endsWith('.webp')) return 'image/webp';
+  if (normalized.endsWith('.gif')) return 'image/gif';
+  if (normalized.endsWith('.glb')) return 'model/gltf-binary';
+  if (normalized.endsWith('.gltf')) return 'model/gltf+json; charset=utf-8';
+  if (normalized.endsWith('.json')) return 'application/json; charset=utf-8';
+  return 'application/octet-stream';
 }
 
 async function readRequestBuffer(req: IncomingMessage, limitBytes: number): Promise<Buffer> {
@@ -135,6 +257,7 @@ function parseProjectPath(url: URL): { projectId: string | null; action: string 
 
 async function handleProjectsRequest(
   storage: ProjectStorage,
+  codexAgent: CodexAgentRuntime,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
@@ -143,6 +266,177 @@ async function handleProjectsRequest(
   }
 
   const url = new URL(req.url, 'http://visionary.local');
+  if (url.pathname === CODEX_AUTH_PREFIX) {
+    try {
+      if ((req.method || 'GET') === 'GET') {
+        sendOk(res, await storage.getUserCodexAuthStatus(getQueryString(url, 'user')));
+        return true;
+      }
+      if ((req.method || 'GET') === 'PUT') {
+        const body = readBodyObject(await readJsonBody(req));
+        sendOk(res, await storage.saveUserCodexAuth({
+          user: getBodyString(body, 'user'),
+          apiKey: getBodyString(body, 'apiKey'),
+        }));
+        return true;
+      }
+    } catch (error) {
+      sendError(res, error);
+      return true;
+    }
+  }
+
+  if (url.pathname === USER_API_CONFIG_PREFIX) {
+    try {
+      if ((req.method || 'GET') === 'GET') {
+        sendOk(res, await createUserApiConfigResponse(await storage.getUserApiConfig(getQueryString(url, 'user'))));
+        return true;
+      }
+      if ((req.method || 'GET') === 'PUT') {
+        const body = readBodyObject(await readJsonBody(req));
+        const rawConfig = Object.prototype.hasOwnProperty.call(body, 'config') ? body.config : body;
+        const configRecord = rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)
+          ? rawConfig as Record<string, unknown>
+          : {};
+        sendOk(res, await createUserApiConfigResponse(await storage.saveUserApiConfig({
+          user: getBodyString(body, 'user'),
+          config: rawConfig,
+        }), {
+          includeTrellisStatus: Object.prototype.hasOwnProperty.call(configRecord, 'components3D'),
+        }));
+        return true;
+      }
+    } catch (error) {
+      sendError(res, error);
+      return true;
+    }
+  }
+
+  if (url.pathname === AGENT_CANCEL_PREFIX && (req.method || 'GET') === 'POST') {
+    try {
+      const body = readBodyObject(await readJsonBody(req));
+      const scope = components3DCancelScopeFromBody(body);
+      await storage.resolveProjectDir(scope.user, scope.projectId);
+      sendOk(res, cancelComponents3DExecutions(scope));
+      return true;
+    } catch (error) {
+      sendError(res, error);
+      return true;
+    }
+  }
+
+  if (url.pathname === `${CODEX_AGENT_PREFIX}/messages` && (req.method || 'GET') === 'POST') {
+    try {
+      const body = readBodyObject(await readJsonBody(req));
+      sendOk(
+        res,
+        await codexAgent.sendMessage({
+          user: getBodyString(body, 'user'),
+          projectId: getBodyString(body, 'projectId'),
+          conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
+          threadId: typeof body.threadId === 'string' ? body.threadId : undefined,
+          prompt: getBodyString(body, 'prompt'),
+          workflow: typeof body.workflow === 'string' ? body.workflow : undefined,
+        }),
+      );
+      return true;
+    } catch (error) {
+      sendError(res, error);
+      return true;
+    }
+  }
+
+  if (url.pathname === `${CODEX_AGENT_PREFIX}/messages/stream` && (req.method || 'GET') === 'POST') {
+    sendSseHeaders(res);
+    const controller = new AbortController();
+    res.once('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
+    try {
+      const body = readBodyObject(await readJsonBody(req));
+      writeSse(res, 'ready', { ok: true });
+      const result = await codexAgent.sendMessageStream({
+        user: getBodyString(body, 'user'),
+        projectId: getBodyString(body, 'projectId'),
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
+        threadId: typeof body.threadId === 'string' ? body.threadId : undefined,
+        prompt: getBodyString(body, 'prompt'),
+        workflow: typeof body.workflow === 'string' ? body.workflow : undefined,
+        signal: controller.signal,
+      }, {
+        onEvent: (event) => {
+          writeSse(res, 'codex-event', event);
+        },
+        onTask: (task) => {
+          writeSse(res, 'task', task);
+        },
+      });
+      writeSse(res, 'result', result);
+      res.end();
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? 'Unknown error');
+      const code = error instanceof ProjectStorageError ? error.code : 'INTERNAL_ERROR';
+      writeSse(res, 'error', { code, message });
+      res.end();
+      return true;
+    }
+  }
+
+  if (url.pathname === AGENT_STEP_ACTION_STREAM_PREFIX && (req.method || 'GET') === 'POST') {
+    sendSseHeaders(res);
+    const controller = new AbortController();
+    let completed = false;
+    res.once('close', () => {
+      if (!completed) controller.abort();
+    });
+    try {
+      const body = readBodyObject(await readJsonBody(req));
+      writeSse(res, 'ready', { ok: true });
+      const result = await codexAgent.handleStepAction(
+        codexStepActionInputFromBody(body, controller.signal),
+        {
+          onTask: (task) => {
+            if (!res.destroyed) writeSse(res, 'task', task);
+          },
+        },
+      );
+      if (!res.destroyed) {
+        writeSse(res, 'result', result);
+        completed = true;
+        res.end();
+      }
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? 'Unknown error');
+      const code = error instanceof ProjectStorageError ? error.code : 'INTERNAL_ERROR';
+      if (!res.destroyed) {
+        writeSse(res, 'error', { code, message });
+        completed = true;
+        res.end();
+      }
+      return true;
+    }
+  }
+
+  if (
+    (url.pathname === AGENT_STEP_ACTION_PREFIX || url.pathname === `${CODEX_AGENT_PREFIX}/step-actions`)
+    && (req.method || 'GET') === 'POST'
+  ) {
+    const controller = new AbortController();
+    res.once('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
+    try {
+      const body = readBodyObject(await readJsonBody(req));
+      sendOk(res, await codexAgent.handleStepAction(codexStepActionInputFromBody(body, controller.signal)));
+      return true;
+    } catch (error) {
+      sendError(res, error);
+      return true;
+    }
+  }
+
   if (url.pathname === ADMIN_USERS_PREFIX && (req.method || 'GET') === 'GET') {
     try {
       sendOk(res, await storage.listUsers());
@@ -179,6 +473,21 @@ async function handleProjectsRequest(
   }
 
   const method = req.method || 'GET';
+
+  if (url.pathname === `${API_PREFIX}/validate-name` && method === 'POST') {
+    try {
+      const body = readBodyObject(await readJsonBody(req));
+      sendOk(res, await storage.validateProjectNameAvailability({
+        user: getBodyString(body, 'user'),
+        name: getBodyString(body, 'name'),
+      }));
+      return true;
+    } catch (error) {
+      sendError(res, error);
+      return true;
+    }
+  }
+
   const { projectId, action, filePath } = parseProjectPath(url);
 
   try {
@@ -221,6 +530,16 @@ async function handleProjectsRequest(
       return true;
     }
 
+    if (!action && method === 'PATCH') {
+      const body = readBodyObject(await readJsonBody(req));
+      sendOk(res, await storage.renameProject({
+        user: resolveUser(url, body),
+        projectId,
+        name: getBodyString(body, 'name'),
+      }));
+      return true;
+    }
+
     if (action === 'scene' && method === 'GET') {
       const user = getQueryString(url, 'user');
       sendOk(res, await storage.readScene(user, projectId));
@@ -255,11 +574,106 @@ async function handleProjectsRequest(
       return true;
     }
 
+    if (action === 'camera-trajectory' && filePath === 'prepare' && method === 'POST') {
+      const body = readBodyObject(await readJsonBody(req));
+      const user = resolveUser(url, body);
+      const projectRoot = await storage.resolveProjectDir(user, projectId);
+      const userApiConfig = await storage.getUserApiConfig(user);
+      const pipelineApiConfig = userApiConfig.pipelineApi;
+      const projectCodexApiKey = await storage.readProjectCodexApiKey(user, projectId).catch(() => '');
+      const explicitApiKey = typeof body.apiKey === 'string' && body.apiKey.trim() ? body.apiKey : '';
+      const hasExplicitProvider = typeof body.apiProvider === 'string' && body.apiProvider.trim();
+      const hasExplicitModel = typeof body.modelName === 'string' && body.modelName.trim();
+      const hasPipelineApiKey = typeof pipelineApiConfig.apiKey === 'string' && pipelineApiConfig.apiKey.trim();
+      sendOk(res, await prepareCameraTrajectoryRender({
+        projectRoot,
+        projectId,
+        sceneInfoPath: typeof body.sceneInfoPath === 'string' ? body.sceneInfoPath : undefined,
+        humanText: typeof body.humanText === 'string' ? body.humanText : '',
+        segmentCount: typeof body.segmentCount === 'number' ? body.segmentCount : 1,
+        segmentDuration: typeof body.segmentDuration === 'number' ? body.segmentDuration : 3,
+        fps: typeof body.fps === 'number' ? body.fps : 30,
+        keyframeInterval: typeof body.keyframeInterval === 'number' ? body.keyframeInterval : 5,
+        firstFrameOnly: Boolean(body.firstFrameOnly),
+        debugEvalOnly: Boolean(body.debugEvalOnly),
+        maxOptimizationRounds: typeof body.maxOptimizationRounds === 'number' ? body.maxOptimizationRounds : 1,
+        runLabel: typeof body.runLabel === 'string' ? body.runLabel : 'camera-trajectory',
+        apiKey: explicitApiKey || (hasPipelineApiKey ? pipelineApiConfig.apiKey : '') || projectCodexApiKey || undefined,
+        apiBase: typeof body.apiBase === 'string' && body.apiBase.trim()
+          ? body.apiBase
+          : hasPipelineApiKey
+            ? pipelineApiConfig.apiBase
+            : undefined,
+        apiProvider: hasExplicitProvider
+          ? String(body.apiProvider)
+          : hasPipelineApiKey
+            ? pipelineApiConfig.apiProvider
+            : projectCodexApiKey
+            ? 'gpt'
+            : undefined,
+        modelName: hasExplicitModel
+          ? String(body.modelName)
+          : hasPipelineApiKey
+            ? pipelineApiConfig.modelName
+            : projectCodexApiKey
+            ? String(process.env.VISIONARY_CAMERA_TRAJECTORY_MODEL || process.env.LLM_MODEL_NAME || 'gpt-4o')
+            : undefined,
+        sceneBoundsScale: typeof body.sceneBoundsScale === 'number' ? body.sceneBoundsScale : 3,
+      }));
+      return true;
+    }
+
+    if (action === 'camera-trajectory' && filePath === 'continue' && method === 'POST') {
+      const body = readBodyObject(await readJsonBody(req));
+      const user = resolveUser(url, body);
+      const projectRoot = await storage.resolveProjectDir(user, projectId);
+      const generated = await continueCameraTrajectoryAfterRender({
+        projectRoot,
+        projectId,
+        preparedPath: getBodyString(body, 'preparedPath'),
+      });
+      if (generated && typeof generated === 'object' && (generated as Record<string, unknown>).needsEvalRender === true) {
+        sendOk(res, generated);
+        return true;
+      }
+      sendOk(res, generated);
+      return true;
+    }
+
+    if (action === 'camera-trajectory' && filePath === 'optimize' && method === 'POST') {
+      const body = readBodyObject(await readJsonBody(req));
+      const user = resolveUser(url, body);
+      const projectRoot = await storage.resolveProjectDir(user, projectId);
+      const generated = await continueCameraTrajectoryAfterEvalRender({
+        projectRoot,
+        projectId,
+        preparedPath: getBodyString(body, 'preparedPath'),
+      });
+      sendOk(res, generated);
+      return true;
+    }
+
+    if (action === 'components-3d' && filePath === 'cancel-job' && method === 'POST') {
+      const body = readBodyObject(await readJsonBody(req));
+      const user = resolveUser(url, body);
+      await storage.resolveProjectDir(user, projectId);
+      const config = await storage.getUserApiConfig(user);
+      if (config.components3D.provider !== 'trellis.2') {
+        throw new ProjectStorageError('BAD_REQUEST', 'TRELLIS.2 must be the active 3D generation provider');
+      }
+      sendOk(res, await cancelComponents3DTrellisJob({
+        config: config.components3D.trellis2,
+        jobId: getBodyString(body, 'jobId'),
+        reason: typeof body.reason === 'string' ? body.reason : undefined,
+      }));
+      return true;
+    }
+
     if (action === 'files' && filePath && method === 'GET') {
       const user = getQueryString(url, 'user');
       const file = await storage.readAsset(user, projectId, filePath);
       res.statusCode = 200;
-      res.setHeader('content-type', 'application/octet-stream');
+      res.setHeader('content-type', contentTypeForProjectFilePath(filePath));
       res.end(file);
       return true;
     }
@@ -285,14 +699,29 @@ async function handleProjectsRequest(
   }
 }
 
-export function createProjectApiPlugin(options?: { storage?: ProjectStorage }): PluginOption {
+export function createProjectApiPlugin(options?: {
+  storage?: ProjectStorage;
+  deletionRetentionMs?: number;
+  deletionSweepIntervalMs?: number;
+  disableDeletionSweeper?: boolean;
+}): PluginOption {
   return {
     name: 'visionary-project-api',
     apply: 'serve',
     configureServer(server: ViteDevServer) {
-      const storage = options?.storage ?? new ProjectStorage(resolveProjectStorageRoot());
+      const storage = options?.storage ?? new ProjectStorage(resolveProjectStorageRoot(), {
+        deletionRetentionMs: options?.deletionRetentionMs,
+        deletionSweepIntervalMs: options?.deletionSweepIntervalMs,
+      });
+      const codexAgent = new CodexAgentRuntime(storage);
+      const stopDeletionSweeper = options?.disableDeletionSweeper
+        ? null
+        : storage.startProjectDeletionSweeper(options?.deletionSweepIntervalMs);
+      server.httpServer?.once('close', () => {
+        stopDeletionSweeper?.();
+      });
       server.middlewares.use(async (req, res, next) => {
-        const handled = await handleProjectsRequest(storage, req, res);
+        const handled = await handleProjectsRequest(storage, codexAgent, req, res);
         if (!handled) {
           next();
         }

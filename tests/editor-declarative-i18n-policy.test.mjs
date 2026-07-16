@@ -8,9 +8,13 @@ test('editor html uses declarative i18n markers for static UI text', () => {
     assert.match(html, /data-i18n="editor\.title"/);
     assert.match(html, /data-i18n="canvas\.noWebgpuTitle"/);
     assert.match(html, /data-i18n-placeholder="agent\.inputPlaceholder"/);
+    assert.doesNotMatch(html, /输入一句自然语言，触发当前流程的占位 Agent 响应/);
     assert.match(html, /data-i18n="sidebar\.title"/);
     assert.match(html, /data-i18n="timeline\.title"/);
     assert.match(html, /data-i18n="modal\.helpTitle"/);
+    assert.match(html, /data-i18n="modal\.helpSections\.codex"/);
+    assert.match(html, /data-i18n="modal\.helpItems\.codexResume"/);
+    assert.match(html, /CODEX_HOME=\$PWD\/codex_home codex exec --json resume &lt;threadId&gt; "继续"/);
     assert.match(html, /data-i18n-attrs="title:common\.addImage;aria-label:common\.addImage"/);
     assert.match(html, /data-i18n-attrs="title:sidebar\.loadModel;aria-label:sidebar\.loadModel"/);
     assert.match(html, /data-i18n-attrs="data-tooltip:toolbar\.translate;aria-label:toolbar\.translate"/);
@@ -27,6 +31,12 @@ test('editor js provides a generic declarative i18n pass before dynamic UI updat
     assert.match(source, /root\.querySelectorAll\('\[data-i18n-placeholder\]'\)/);
     assert.match(source, /root\.querySelectorAll\('\[data-i18n-attrs\]'\)/);
     assert.match(source, /applyDeclarativeI18n\(\);/);
+    assert.match(source, /inputPlaceholder:\s*'输入一句自然语言，或使用技能标签发起 Agent 任务'/);
+    assert.match(source, /inputPlaceholder:\s*'Type a natural-language request or use a skill tag to start an agent task'/);
+    assert.doesNotMatch(source, /inputPlaceholder:\s*'[^']*占位 Agent 响应[^']*'/);
+    assert.doesNotMatch(source, /inputPlaceholder:\s*'[^']*placeholder agent[^']*'/);
+    assert.match(source, /codexResume:\s*'进项目目录，用 CODEX_HOME=\$PWD\/codex_home codex exec --json resume <threadId> "继续"',/);
+    assert.match(source, /codexResume:\s*'Enter the project folder, then run CODEX_HOME=\$PWD\/codex_home codex exec --json resume <threadId> "continue"',/);
 });
 
 test('editor js routes user-visible feedback through i18n keys', () => {

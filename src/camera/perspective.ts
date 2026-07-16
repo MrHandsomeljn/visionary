@@ -1,7 +1,8 @@
 // Perspective camera and projection classes extracted from camera.ts
 
 import { mat3, mat4, vec2, vec3, quat } from "gl-matrix";
-import { deg2rad, fov2focal, Aabb } from '../utils';
+import { deg2rad, fov2focal } from '../utils/camera-math.ts';
+import { Aabb } from '../utils/aabb.ts';
 
 export interface Camera {
   viewMatrix(): mat4;

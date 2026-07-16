@@ -24,6 +24,77 @@ async function parseApiResponse(response) {
     return payload?.data;
 }
 
+function parseSseMessage(rawMessage) {
+    const message = { event: 'message', data: '' };
+    const dataLines = [];
+    String(rawMessage || '').split(/\r?\n/).forEach((line) => {
+        if (line.startsWith('event:')) {
+            message.event = line.slice('event:'.length).trim() || 'message';
+        } else if (line.startsWith('data:')) {
+            dataLines.push(line.slice('data:'.length).replace(/^ /, ''));
+        }
+    });
+    message.data = dataLines.join('\n');
+    return message;
+}
+
+function dispatchSseMessage(rawMessage, handlers = {}) {
+    if (!String(rawMessage || '').trim()) return undefined;
+    const message = parseSseMessage(rawMessage);
+    const payload = message.data ? JSON.parse(message.data) : null;
+    handlers.onMessage?.({ event: message.event, data: payload });
+    if (message.event === 'error') {
+        const error = new Error(payload?.message || 'Streaming request failed');
+        error.code = payload?.code || 'STREAM_ERROR';
+        throw error;
+    }
+    if (message.event === 'codex-event') {
+        handlers.onEvent?.(payload);
+    } else if (message.event === 'task') {
+        handlers.onTask?.(payload);
+    } else if (message.event === 'result') {
+        return payload;
+    }
+    return undefined;
+}
+
+async function parseSseResponse(response, handlers = {}) {
+    if (!response.ok) {
+        await parseApiResponse(response);
+    }
+    if (!response.body || !window.TextDecoder) {
+        throw new Error('Streaming responses are not supported by this browser');
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result;
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split(/\r?\n\r?\n/);
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+            const maybeResult = dispatchSseMessage(part, handlers);
+            if (maybeResult !== undefined) {
+                result = maybeResult;
+            }
+        }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+        const maybeResult = dispatchSseMessage(buffer, handlers);
+        if (maybeResult !== undefined) {
+            result = maybeResult;
+        }
+    }
+    if (!result) {
+        throw new Error('Streaming request finished without a result');
+    }
+    return result;
+}
+
 export class ProjectApiClient {
     constructor(options = {}) {
         this.baseUrl = String(options.baseUrl || '/api/projects').replace(/\/+$/, '');
@@ -50,6 +121,20 @@ export class ProjectApiClient {
         return parseApiResponse(response);
     }
 
+    async validateProjectName({ user, name }) {
+        const response = await fetch(`${this.baseUrl}/validate-name`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                name,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
     async getProject(user, projectId) {
         const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}${buildQuery({ user })}`);
         return parseApiResponse(response);
@@ -58,6 +143,20 @@ export class ProjectApiClient {
     async deleteProject(user, projectId) {
         const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}${buildQuery({ user })}`, {
             method: 'DELETE',
+        });
+        return parseApiResponse(response);
+    }
+
+    async renameProject({ user, projectId, name }) {
+        const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}`, {
+            method: 'PATCH',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                name,
+            }),
         });
         return parseApiResponse(response);
     }
@@ -116,6 +215,292 @@ export class ProjectApiClient {
                 'content-type': 'application/octet-stream',
             },
             body: content,
+        });
+        return parseApiResponse(response);
+    }
+
+    async prepareCameraTrajectory({
+        user,
+        projectId,
+        sceneInfoPath,
+        humanText,
+        segmentCount,
+        segmentDuration,
+        fps,
+        keyframeInterval,
+        firstFrameOnly,
+        debugEvalOnly,
+        maxOptimizationRounds,
+        runLabel,
+        sceneBoundsScale,
+    }) {
+        const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}/camera-trajectory/prepare`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                sceneInfoPath,
+                humanText,
+                segmentCount,
+                segmentDuration,
+                fps,
+                keyframeInterval,
+                firstFrameOnly,
+                debugEvalOnly,
+                maxOptimizationRounds,
+                runLabel,
+                sceneBoundsScale,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async continueCameraTrajectory({
+        user,
+        projectId,
+        preparedPath,
+    }) {
+        const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}/camera-trajectory/continue`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                preparedPath,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async optimizeCameraTrajectory({
+        user,
+        projectId,
+        preparedPath,
+    }) {
+        const response = await fetch(`${this.baseUrl}/${encodeURIComponent(projectId)}/camera-trajectory/optimize`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                preparedPath,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async sendCodexAgentMessage({
+        user,
+        projectId,
+        conversationId,
+        threadId,
+        prompt,
+        workflow,
+    }) {
+        const response = await fetch('/api/codex-agent/messages', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                projectId,
+                conversationId,
+                threadId,
+                prompt,
+                workflow,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async sendCodexAgentMessageStream({
+        user,
+        projectId,
+        conversationId,
+        threadId,
+        prompt,
+        workflow,
+        onEvent,
+        onTask,
+        onMessage,
+        signal,
+    }) {
+        const response = await fetch('/api/codex-agent/messages/stream', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                accept: 'text/event-stream',
+            },
+            body: JSON.stringify({
+                user,
+                projectId,
+                conversationId,
+                threadId,
+                prompt,
+                workflow,
+            }),
+            signal,
+        });
+        return parseSseResponse(response, { onEvent, onTask, onMessage });
+    }
+
+    async sendCodexAgentStepAction({
+        user,
+        projectId,
+        sessionId,
+        attemptId,
+        executionId,
+        stepKey,
+        action,
+        prompt,
+        selectedIndex,
+        images,
+        sourceImages,
+        branchRevision,
+        parentCandidateIds,
+        activeContext,
+        assetId,
+        signal,
+    }) {
+        const response = await fetch('/api/agent/step-action', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                projectId,
+                sessionId,
+                attemptId,
+                executionId,
+                stepKey,
+                action,
+                prompt,
+                selectedIndex,
+                images,
+                sourceImages,
+                branchRevision,
+                parentCandidateIds,
+                activeContext,
+                assetId,
+            }),
+            signal,
+        });
+        return parseApiResponse(response);
+    }
+
+    async sendCodexAgentStepActionStream({
+        user,
+        projectId,
+        sessionId,
+        attemptId,
+        executionId,
+        stepKey,
+        action,
+        prompt,
+        selectedIndex,
+        images,
+        sourceImages,
+        branchRevision,
+        parentCandidateIds,
+        activeContext,
+        assetId,
+        onTask,
+        onMessage,
+        signal,
+    }) {
+        const response = await fetch('/api/agent/step-action/stream', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                accept: 'text/event-stream',
+            },
+            body: JSON.stringify({
+                user,
+                projectId,
+                sessionId,
+                attemptId,
+                executionId,
+                stepKey,
+                action,
+                prompt,
+                selectedIndex,
+                images,
+                sourceImages,
+                branchRevision,
+                parentCandidateIds,
+                activeContext,
+                assetId,
+            }),
+            signal,
+        });
+        return parseSseResponse(response, { onTask, onMessage });
+    }
+
+    async cancelAgentExecution({
+        user,
+        projectId,
+        kind,
+        attemptId,
+        stepExecutionId,
+        assetExecutionId,
+    }) {
+        const response = await fetch('/api/agent/cancel', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                projectId,
+                kind,
+                attemptId,
+                stepExecutionId,
+                assetExecutionId,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async getCodexAuthStatus(user) {
+        const response = await fetch(`/api/codex-auth${buildQuery({ user })}`);
+        return parseApiResponse(response);
+    }
+
+    async saveCodexAuth({ user, apiKey }) {
+        const response = await fetch('/api/codex-auth', {
+            method: 'PUT',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                apiKey,
+            }),
+        });
+        return parseApiResponse(response);
+    }
+
+    async getUserApiConfig(user) {
+        const response = await fetch(`/api/user-api-config${buildQuery({ user })}`);
+        return parseApiResponse(response);
+    }
+
+    async saveUserApiConfig({ user, config }) {
+        const response = await fetch('/api/user-api-config', {
+            method: 'PUT',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                user,
+                config,
+            }),
         });
         return parseApiResponse(response);
     }
